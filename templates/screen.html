@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Orange Pi UI</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            cursor: none; /* Скрываем курсор для красоты */
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        /* Фоновый слой логов */
+        #log-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            bottom: 20px;
+            color: #505050; /* Почти черный серый */
+            font-size: 13px;
+            line-height: 1.4;
+            z-index: 1;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+        }
+
+        /* Контейнер глаз */
+        .eyes-box {
+            display: flex;
+            gap: 70px;
+            z-index: 2;
+        }
+
+        .eye {
+            width: 110px;
+            height: 270px;
+            background-color: #ffffff;
+            border-radius: 40px; /* Закругленный прямоугольник */
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.1);
+            transition: all 0.2s ease;
+            animation: blink_anim 10s infinite;
+        }
+
+        /* Анимация моргания */
+        @keyframes blink_anim {
+            0%, 90%, 100% { transform: scaleY(1); }
+            95% { transform: scaleY(0.05); }
+        }
+
+        /* Эффект для "злого" или "грустного" взгляда (опционально) */
+        .eye.half { height: 100px; }
+    </style>
+</head>
+<body>
+
+    <div id="log-overlay"></div>
+
+    <div class="eyes-box">
+        <div class="eye"></div>
+        <div class="eye"></div>
+    </div>
+
+    <script>
+        const logOverlay = document.getElementById('log-overlay');
+        const MAX_LOGS = 30; // Сколько строк держать на экране
+
+        function fetchLogs() {
+            fetch('/get_system_data')
+                .then(res => res.json())
+                .then(data => {
+                    data.forEach(line => {
+                        const div = document.createElement('div');
+                        div.textContent = line;
+                        // Вставляем новый лог наверх
+                        logOverlay.prepend(div);
+                    });
+
+                    // Удаляем лишние старые строки
+                    while (logOverlay.childNodes.length > MAX_LOGS) {
+                        logOverlay.removeChild(logOverlay.lastChild);
+                    }
+                })
+                .catch(e => console.log("System offline"));
+        }
+
+        // Обновление логов каждые 2 секунды
+        setInterval(fetchLogs, 2000);
+        fetchLogs();
+    </script>
+</body>
+</html>
