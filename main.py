@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 """
 Chill Monitor на PySide6 с глазами, системными логами и кнопкой обновления.
@@ -19,7 +21,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QPushButton, QTextEdit, QGraphicsView,
                                QGraphicsScene, QGraphicsRectItem)
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPointF, QEasingCurve
-from PySide6.QtGui import QColor, QBrush, QPen, QFont, QPainter
+from PySide6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QTextCursor
 
 # Лог-файл для отладки самого скрипта
 LOG_FILE = "logs.txt"
@@ -76,22 +78,6 @@ def get_recent_logs(n=500):
     except Exception as e:
         log_message(f"journalctl не удался: {e}")
     return ["Нет доступа к системным логам"]
-
-
-class EyeItem(QGraphicsRectItem):
-    """Пользовательский графический элемент глаза со скруглёнными углами."""
-    def __init__(self, x, y, width, height, radius, color, parent=None):
-        super().__init__(x, y, width, height, parent)
-        self.setBrush(QBrush(color))
-        self.setPen(QPen(Qt.NoPen))
-        # Устанавливаем скруглённые углы через QPainterPath (позже, но для прямоугольника так не работает).
-        # Проще нарисовать прямоугольник со скруглёнными углами в paint().
-        # Но для упрощения будем использовать QGraphicsRectItem с закруглёнными углами? В PySide6 можно установить corner radii через QGraphicsRectItem.set... нет прямого метода.
-        # Поэтому мы будем рисовать прямоугольник со скруглёнными углами при помощи QPainterPath в paintEvent, но QGraphicsRectItem не позволяет.
-        # Альтернатива: создать кастомный QGraphicsPathItem или переопределить paint.
-        # Чтобы не усложнять, используем QGraphicsRectItem и применим стиль через QPainterPath в paint().
-        # Создадим класс-наследник с переопределённым paint.
-        pass
 
 
 class RoundedRectItem(QGraphicsRectItem):
@@ -216,7 +202,6 @@ class EyesWidget(QGraphicsView):
         self._shake_offset = offset
         if self.left_eye and self.right_eye:
             # Сохраняем базовые позиции и добавляем смещение
-            # Проще каждый раз пересчитывать базовые позиции и применять смещение
             self.center_eyes()
             self.left_eye.moveBy(offset, 0)
             self.right_eye.moveBy(offset, 0)
@@ -241,7 +226,7 @@ class ChillMonitor(QMainWindow):
 
         # Виджет глаз
         self.eyes = EyesWidget()
-        layout.addWidget(self.eyes, stretch=1)  # занимает всё доступное пространство
+        layout.addWidget(self.eyes, stretch=1)
 
         # Нижняя панель
         bottom_widget = QWidget()
@@ -324,14 +309,8 @@ class ChillMonitor(QMainWindow):
         self.update_timer.start(2000)
         self.update_logs()
 
-        # Обработка клавиши Escape
-        self.escape_action = None
-
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
-            self.showNormal()  # или просто оставляем полноэкранный? Можно выйти из фуллскрина.
-            # Для выхода из полноэкранного режима можно установить self.showNormal()
-            self.setWindowFlags(Qt.Window)
             self.showNormal()
         super().keyPressEvent(event)
 
@@ -340,9 +319,8 @@ class ChillMonitor(QMainWindow):
         logs = get_recent_logs(500)
         text = metrics + "\n\n" + "\n".join(logs)
         self.log_text.setText(text)
-        # Прокрутка вниз
         cursor = self.log_text.textCursor()
-        cursor.movePosition(cursor.End)
+        cursor.movePosition(QTextCursor.End)
         self.log_text.setTextCursor(cursor)
 
     def run_update(self):
@@ -357,7 +335,6 @@ class ChillMonitor(QMainWindow):
                 log_message("launcher.py не найден")
         except Exception as e:
             log_message(f"Ошибка запуска лаунчера: {e}")
-        # Разблокировать кнопку через 10 секунд
         QTimer.singleShot(10000, self.enable_update_button)
 
     def enable_update_button(self):
