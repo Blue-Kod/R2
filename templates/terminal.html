@@ -93,20 +93,25 @@
         const commandInput = document.getElementById('command');
         let lastOutput = '';
         let pollInterval = 100; // миллисекунд
+        let fetchInProgress = false; // защита от одновременных запросов
+        let sendInProgress = false;
 
-        // Функция для удаления ANSI escape-последовательностей
+        // Улучшенная функция удаления ANSI escape-последовательностей
         function stripAnsi(str) {
-            // Убирает CSI последовательности: \x1b\[[0-9;]*[a-zA-Z]
-            // OSC: \x1b\][0-9;]*[a-zA-Z]?
-            // также убирает символы \x07 (BEL) и \x1b\\
+            if (!str) return '';
+            // Удаляем CSI последовательности: \x1b\[[0-9;?]*[a-zA-Z]
+            // Удаляем OSC (установка заголовка): \x1b\][0-9;]*[a-zA-Z]?.*?\x07
+            // Удаляем одиночные \x07 (BEL)
+            // Удаляем \x1b\\ (ST)
             return str
-                .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-                .replace(/\x1b\][0-9;]*[a-zA-Z]?/g, '')
-                .replace(/\x1b\\/g, '')
-                .replace(/\x07/g, '');
+                .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')           // CSI с ? 
+                .replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')    // OSC до BEL
+                .replace(/\x1b\\/g, '')                            // ST
+                .replace(/\x07/g, '');                             // BEL
         }
 
         function escapeHtml(unsafe) {
+            if (!unsafe) return '';
             return unsafe.replace(/[&<>]/g, function(m) {
                 if (m === '&') return '&amp;';
                 if (m === '<') return '&lt;';
@@ -126,6 +131,8 @@
         }
 
         async function fetchOutput() {
+            if (fetchInProgress) return;
+            fetchInProgress = true;
             try {
                 const response = await fetch('/api/cmd/output');
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -135,12 +142,16 @@
                     lastOutput = data.output;
                 }
             } catch (err) {
-                console.error('Ошибка получения вывода:', err);
-                appendOutput(`\r\nОшибка: ${err.message}\r\n`);
+                // Тихая ошибка — ничего не показываем пользователю
+                console.debug('fetchOutput error:', err);
+            } finally {
+                fetchInProgress = false;
             }
         }
 
         async function sendCommand(cmd) {
+            if (sendInProgress) return;
+            sendInProgress = true;
             try {
                 const response = await fetch('/api/cmd/send', {
                     method: 'POST',
@@ -150,12 +161,16 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 if (data.error) {
-                    appendOutput(`\r\nОшибка: ${data.error}\r\n`);
+                    // Можно показать, но скроем
+                    console.debug('sendCommand error:', data.error);
                 } else {
-                    await fetchOutput(); // сразу обновляем вывод после команды
+                    // После отправки сразу обновим вывод
+                    await fetchOutput();
                 }
             } catch (err) {
-                appendOutput(`\r\nОшибка отправки: ${err.message}\r\n`);
+                console.debug('sendCommand fetch error:', err);
+            } finally {
+                sendInProgress = false;
             }
         }
 
