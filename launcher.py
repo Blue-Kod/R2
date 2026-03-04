@@ -49,13 +49,11 @@ MAIN_SCRIPT = "main.py"
 SYSTEMD_SERVICE_NAME = "r2-launcher.service"
 AUTOSTART_DESKTOP_FILE = "r2-launcher.desktop"
 
-
 def check_python_version():
     """Проверяет, что используется Python 3."""
     if sys.version_info.major < 3:
         print("[!] Ошибка: требуется Python 3")
         sys.exit(1)
-
 
 def is_internet_available(timeout=3):
     """Проверяет доступность GitHub для определения наличия интернета."""
@@ -64,7 +62,6 @@ def is_internet_available(timeout=3):
         return True
     except requests.RequestException:
         return False
-
 
 def apply_self_update(new_launcher_path):
     """
@@ -81,7 +78,7 @@ def apply_self_update(new_launcher_path):
 
     print("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
     try:
-        # Используем shutil.move для копирования между разными устройствами
+        # Используем shutil.move для копирования между разными устройствами (tmp -> home)
         shutil.move(new_launcher_path, current_script)
         # Восстанавливаем права на исполнение (если были)
         st = os.stat(current_script)
@@ -97,7 +94,6 @@ def apply_self_update(new_launcher_path):
         except:
             pass
         return False
-
 
 def download_and_extract_repo(target_dir, script_name):
     """
@@ -168,19 +164,13 @@ def download_and_extract_repo(target_dir, script_name):
 
         # Если есть обновление для лаунчера, запускаем самообновление
         if new_launcher_tmp:
-            # apply_self_update либо заменяет файл и перезапускает процесс (не возвращает управление),
-            # либо возвращает False, если обновление не требуется.
-            if apply_self_update(new_launcher_tmp):
-                # Если обновление произошло, процесс будет перезапущен и сюда управление не дойдёт.
-                # Но apply_self_update возвращает False в случае ошибки или если файлы идентичны.
-                pass
+            apply_self_update(new_launcher_tmp)
 
         return True
 
     except Exception as e:
         print(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
-
 
 def install_requirements():
     """
@@ -195,7 +185,6 @@ def install_requirements():
 
     try:
         print("[L] Установка зависимостей...")
-        # Используем sys.executable -m pip для вызова pip, соответствующего текущему python3
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE]
         )
@@ -205,7 +194,6 @@ def install_requirements():
         print(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
-
 def run_main_in_terminal():
     """Запускает main.py в новом окне терминала (если возможно), иначе в текущем."""
     main_path = Path(MAIN_SCRIPT)
@@ -213,58 +201,52 @@ def run_main_in_terminal():
         print(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден в текущей директории.")
         return False
 
-    # Команда для запуска main.py (используем sys.executable для гарантии python3)
+    # Команда для запуска main.py
     cmd = [sys.executable, MAIN_SCRIPT]
-    cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
 
-    # Проверяем, запущены ли мы в графической среде (имеется DISPLAY или WAYLAND_DISPLAY)
+    # Проверяем, запущены ли мы в графической среде
     has_gui = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')
 
-    # Если есть GUI, пробуем найти доступный терминал
-    terminal_found = False
-    if has_gui:
-        # Список возможных эмуляторов терминала в порядке предпочтения
-        terminals = [
-            # name, command pattern ({} будет заменено на cmd_str)
-            ('gnome-terminal', 'gnome-terminal -- {}'),  # gnome-terminal требует опцию --, иногда --wait
-            ('xterm', 'xterm -hold -e {}'),  # -hold оставляет окно открытым после завершения
-            ('konsole', 'konsole -e {}'),
-            ('xfce4-terminal', 'xfce4-terminal -e {}'),
-            ('lxterminal', 'lxterminal -e {}'),
-            ('terminator', 'terminator -e {}'),
-            ('urxvt', 'urxvt -e {}'),
-            ('rxvt', 'rxvt -e {}'),
-        ]
+    if not has_gui:
+        print("[L] Графическая среда не обнаружена. Запускаю в текущем терминале...")
+        return run_main_current_terminal(cmd)
 
-        for term_name, term_cmd_template in terminals:
-            if shutil.which(term_name):
-                # Формируем полную команду
-                full_cmd = term_cmd_template.format(cmd_str)
-                print(f"[L] Запускаю {MAIN_SCRIPT} в терминале {term_name}...")
-                try:
-                    # Используем shell=True, так как шаблон может содержать пробелы и опции
-                    subprocess.Popen(full_cmd, shell=True)
-                    terminal_found = True
-                    break
-                except Exception as e:
-                    print(f"[!] Не удалось запустить {term_name}: {e}")
-                    continue
+    # Определяем доступные терминалы и правила их запуска
+    # Каждый элемент: (имя, список базовых аргументов, флаг требует ли удержания окна)
+    terminals = [
+        ('xterm', ['xterm', '-hold', '-e'], True),
+        ('xfce4-terminal', ['xfce4-terminal', '-x'], False),
+        ('gnome-terminal', ['gnome-terminal', '--'], False),
+        ('konsole', ['konsole', '-e'], False),
+        ('lxterminal', ['lxterminal', '-e'], False),
+        ('terminator', ['terminator', '-e'], False),
+        ('urxvt', ['urxvt', '-e'], False),
+        ('rxvt', ['rxvt', '-e'], False),
+    ]
 
-    if not terminal_found:
-        # Если нет GUI или не найден ни один терминал, запускаем в текущем
-        if not has_gui:
-            print("[L] Графическая среда не обнаружена. Запускаю в текущем терминале...")
-        else:
-            print("[L] Не найден подходящий эмулятор терминала. Запускаю в текущем терминале...")
-        try:
-            subprocess.run(cmd)
-            return True
-        except Exception as e:
-            print(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
-            return False
+    for term_name, base_args, hold in terminals:
+        if shutil.which(term_name):
+            full_args = base_args + cmd
+            print(f"[L] Запускаю {MAIN_SCRIPT} в терминале {term_name}...")
+            try:
+                subprocess.Popen(full_args)
+                return True
+            except Exception as e:
+                print(f"[!] Не удалось запустить {term_name}: {e}")
+                continue
 
-    return True
+    # Если ни один терминал не сработал, запускаем в текущем
+    print("[L] Не найден подходящий эмулятор терминала. Запускаю в текущем терминале...")
+    return run_main_current_terminal(cmd)
 
+def run_main_current_terminal(cmd):
+    """Запускает main.py в текущем терминале (блокирует лаунчер до завершения)."""
+    try:
+        subprocess.run(cmd)
+        return True
+    except Exception as e:
+        print(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
+        return False
 
 # --- Функции для автозапуска в Linux ---
 def is_autostart_installed():
@@ -282,12 +264,11 @@ def is_autostart_installed():
         return True
     return False
 
-
 def setup_autostart_linux():
     """Устанавливает текущий скрипт в автозагрузку Linux."""
     script_path = os.path.abspath(__file__)
     user_home = os.path.expanduser("~")
-
+    
     if os.geteuid() == 0:
         # Системный systemd юнит
         service_content = f"""[Unit]
@@ -340,7 +321,6 @@ X-GNOME-Autostart-enabled=true
             print(f"[!] Не удалось создать .desktop файл: {e}")
             return False
 
-
 def remove_autostart_linux():
     """Удаляет текущий скрипт из автозагрузки Linux."""
     if os.geteuid() == 0:
@@ -354,7 +334,7 @@ def remove_autostart_linux():
                 print(f"[L] Systemd сервис {SYSTEMD_SERVICE_NAME} удалён.")
         except Exception as e:
             print(f"[!] Ошибка при удалении systemd сервиса: {e}")
-
+    
     user_home = os.path.expanduser("~")
     desktop_file_path = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     try:
@@ -364,19 +344,15 @@ def remove_autostart_linux():
     except Exception as e:
         print(f"[!] Ошибка при удалении .desktop файла: {e}")
 
-
 def main():
     check_python_version()
 
     # Разбор аргументов командной строки
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
-    parser.add_argument("--install-autostart", action="store_true",
-                        help="Установить скрипт в автозагрузку (только Linux)")
+    parser.add_argument("--install-autostart", action="store_true", help="Установить скрипт в автозагрузку (только Linux)")
     parser.add_argument("--remove-autostart", action="store_true", help="Удалить скрипт из автозагрузки (только Linux)")
-    parser.add_argument("--dont-install-autostart", action="store_true",
-                        help="Не устанавливать автозагрузку автоматически")
-    parser.add_argument("--no-terminal", action="store_true",
-                        help="Запустить main.py в текущем терминале (без нового окна)")
+    parser.add_argument("--dont-install-autostart", action="store_true", help="Не устанавливать автозагрузку автоматически")
+    parser.add_argument("--no-terminal", action="store_true", help="Запустить main.py в текущем терминале (без нового окна)")
     args, unknown = parser.parse_known_args()
 
     # Обработка специальных команд автозапуска
@@ -434,14 +410,12 @@ def main():
     else:
         print("[*] Нет интернета, пропускаем обновление.")
 
-    # Запускаем main.py в отдельном терминале (если не указано --no-terminal)
+    # Запускаем main.py
     if args.no_terminal:
         print("[L] Запуск main.py в текущем терминале (--no-terminal)...")
-        from run_main import run_main
-        run_main()  # используем старую функцию run_main (которая была ранее в коде)
+        run_main_current_terminal([sys.executable, MAIN_SCRIPT])
     else:
         run_main_in_terminal()
-
 
 if __name__ == "__main__":
     main()
