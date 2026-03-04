@@ -14,11 +14,14 @@ from collections import deque
 
 import psutil
 from flask import Flask, render_template, jsonify, request
+from flask_socketio import SocketIO, emit
+import ptyprocess
 
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 LOG_FILE = "logs.txt"
-
+active_sessions = {}  # {sid: {'proc': ptyprocess.PtyProcess, 'thread': Thread}}
 
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
@@ -31,7 +34,6 @@ def log_message(*args):
     except Exception:
         pass
 
-
 def get_cpu_temp():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
@@ -40,7 +42,6 @@ def get_cpu_temp():
     except Exception as e:
         log_message(f"Не удалось прочитать температуру: {e}")
         return "N/A"
-
 
 def get_recent_logs(n=500):
     log_files = ['/var/log/syslog', '/var/log/messages']
@@ -75,27 +76,24 @@ def get_recent_logs(n=500):
         log_message(f"journalctl не удался: {e}")
     return ["Нет доступа к системным логам"]
 
-
+# Маршруты страниц
 @app.route('/')
 def index():
     return render_template('index.html')
-
 
 @app.route('/screen')
 def screen():
     return render_template('screen.html')
 
+@app.route('/terminal')
+def terminal():
+    return render_template('terminal.html')
 
-@app.route('/cmd/main')
-def cmd_main():
-    return render_template('cmd_main.html')
+@app.route('/logs')
+def logs():
+    return render_template('logs.html')
 
-
-@app.route('/cmd/os')
-def cmd_os():
-    return render_template('cmd_os.html')
-
-
+# API данных
 @app.route('/api/data')
 def api_data():
     cpu = psutil.cpu_percent()
@@ -109,41 +107,7 @@ def api_data():
         'logs': logs
     })
 
-# main.py (фрагменты)
-@app.route('/api/cmd/os', methods=['POST'])
-def api_cmd_os():
-    data = request.get_json()
-    cmd = data.get('cmd', '').strip()
-    if not cmd:
-        return jsonify({'output': '', 'error': 'Пустая команда'})
-
-    try:
-        # Таймаут 30 секунд, чтобы команда не висела вечно
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-        output = result.stdout + result.stderr
-        return jsonify({'output': output, 'error': ''})
-    except subprocess.TimeoutExpired:
-        return jsonify({'output': '', 'error': 'Команда выполнялась слишком долго (>30с)'})
-    except Exception as e:
-        return jsonify({'output': '', 'error': str(e)})
-
-@app.route('/api/cmd/main', methods=['POST'])
-def api_cmd_main():
-    data = request.get_json()
-    code = data.get('cmd', '').strip()
-    if not code:
-        return jsonify({'output': '', 'error': 'Пустой код'})
-
-    try:
-        # Таймаут 30 секунд
-        result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=30)
-        output = result.stdout + result.stderr
-        return jsonify({'output': output, 'error': ''})
-    except subprocess.TimeoutExpired:
-        return jsonify({'output': '', 'error': 'Код выполнялся слишком долго (>30с)'})
-    except Exception as e:
-        return jsonify({'output': '', 'error': str(e)})
-        
+# API управления
 @app.route('/api/update', methods=['POST'])
 def api_update():
     try:
@@ -162,7 +126,6 @@ def api_update():
         log_message(f"Ошибка запуска лаунчера: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-
 @app.route('/api/shutdown', methods=['POST'])
 def api_shutdown():
     log_message("Получена команда на завершение")
@@ -172,46 +135,71 @@ def api_shutdown():
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
-
-@app.route('/api/run_python', methods=['POST'])
-def run_python():
-    code = request.json.get('code', '')
+# SocketIO обработчики для терминала
+@socketio.on('connect')
+def handle_connect():
+    sid = request.sid
+    log_message(f"Терминал подключен: {sid}")
     try:
-        # Запускаем Python код в отдельном процессе с ограничением времени
-        proc = subprocess.run(
-            [sys.executable, '-c', code],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        output = proc.stdout + proc.stderr
-        return jsonify({'output': output})
-    except subprocess.TimeoutExpired:
-        return jsonify({'output': 'Ошибка: время выполнения истекло (>10 сек)'})
+        proc = ptyprocess.PtyProcess.spawn(['/bin/bash'])
+        active_sessions[sid] = {'proc': proc}
+
+        def read_output():
+            try:
+                while True:
+                    data = proc.read(1024)
+                    if not data:
+                        break
+                    socketio.emit('output', data.decode('utf-8', errors='replace'), room=sid)
+            except Exception as e:
+                log_message(f"Ошибка чтения из pty для {sid}: {e}")
+            finally:
+                socketio.emit('exit', room=sid)
+                active_sessions.pop(sid, None)
+
+        thread = threading.Thread(target=read_output, daemon=True)
+        thread.start()
+        active_sessions[sid]['thread'] = thread
     except Exception as e:
-        return jsonify({'output': f'Ошибка: {str(e)}'})
+        log_message(f"Не удалось создать pty для {sid}: {e}")
+        socketio.emit('output', f"Ошибка запуска терминала: {e}\r\n", room=sid)
+        socketio.emit('exit', room=sid)
 
+@socketio.on('input')
+def handle_input(data):
+    sid = request.sid
+    proc_info = active_sessions.get(sid)
+    if proc_info:
+        try:
+            proc_info['proc'].write(data.encode('utf-8'))
+        except Exception as e:
+            log_message(f"Ошибка записи в pty для {sid}: {e}")
 
-@app.route('/api/run_command', methods=['POST'])
-def run_command():
-    command = request.json.get('command', '')
-    try:
-        # Запускаем команду shell
-        proc = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        output = proc.stdout + proc.stderr
-        return jsonify({'output': output})
-    except subprocess.TimeoutExpired:
-        return jsonify({'output': 'Ошибка: время выполнения истекло (>30 сек)'})
-    except Exception as e:
-        return jsonify({'output': f'Ошибка: {str(e)}'})
+@socketio.on('resize')
+def handle_resize(data):
+    sid = request.sid
+    proc_info = active_sessions.get(sid)
+    if proc_info:
+        try:
+            rows = data.get('rows')
+            cols = data.get('cols')
+            if rows and cols:
+                proc_info['proc'].setwinsize(rows, cols)
+        except Exception as e:
+            log_message(f"Ошибка изменения размера pty для {sid}: {e}")
 
+@socketio.on('disconnect')
+def handle_disconnect():
+    sid = request.sid
+    log_message(f"Терминал отключен: {sid}")
+    proc_info = active_sessions.pop(sid, None)
+    if proc_info:
+        try:
+            proc_info['proc'].terminate()
+        except:
+            pass
 
+# Функции для запуска браузера (без изменений)
 def get_display_user():
     if os.geteuid() != 0:
         return None
@@ -222,7 +210,6 @@ def get_display_user():
         if 1000 <= u.pw_uid < 65534:
             return u.pw_name
     return None
-
 
 def run_browser_as_user(command):
     user = get_display_user()
@@ -254,7 +241,6 @@ def run_browser_as_user(command):
         log_message(f"Не удалось переключиться на пользователя {user}: {e}")
         subprocess.Popen(command)
 
-
 def open_browser_kiosk():
     url = "http://127.0.0.1:5000/screen"
     is_root = (os.geteuid() == 0)
@@ -275,7 +261,6 @@ def open_browser_kiosk():
         log_message("Не найден браузер с поддержкой kiosk. Открываем обычный.")
         subprocess.Popen(["xdg-open", url])
 
-
 def wait_for_server(host='127.0.0.1', port=5000, timeout=15):
     start = time.time()
     while time.time() - start < timeout:
@@ -286,7 +271,6 @@ def wait_for_server(host='127.0.0.1', port=5000, timeout=15):
             time.sleep(0.5)
     return False
 
-
 def start_browser_when_ready():
     if wait_for_server(timeout=15):
         time.sleep(5)
@@ -294,12 +278,10 @@ def start_browser_when_ready():
     else:
         log_message("Сервер не запустился вовремя, браузер не открыт.")
 
-
 def main():
     log_message("Запуск веб-сервера R2")
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
-
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
 
 if __name__ == "__main__":
     main()
