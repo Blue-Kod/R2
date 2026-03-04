@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Chill Monitor – веб-версия с локальным сервером.
-Глаза (CSS-анимации), системные логи (последние 500 строк) и кнопка обновления.
+R2 – веб-монитор Orange Pi с глазами и системными логами.
 После запуска сервера автоматически открывается браузер в полноэкранном режиме (kiosk).
 Если запущено от root – браузер стартует от обычного пользователя с флагом --no-sandbox.
 """
@@ -24,9 +23,7 @@ from flask import Flask, render_template, jsonify
 
 app = Flask(__name__)
 
-# Константы
 LOG_FILE = "logs.txt"
-REQUESTS_TIMEOUT = 2
 
 
 def log_message(*args):
@@ -92,7 +89,6 @@ def index():
 
 @app.route('/api/data')
 def api_data():
-    """Возвращает JSON с метриками и логами."""
     cpu = psutil.cpu_percent()
     ram = psutil.virtual_memory().percent
     temp = get_cpu_temp()
@@ -107,7 +103,6 @@ def api_data():
 
 @app.route('/api/update', methods=['POST'])
 def api_update():
-    """Запускает лаунчер для обновления кода."""
     try:
         launcher_path = os.path.join(os.path.dirname(__file__), "launcher.py")
         if os.path.exists(launcher_path):
@@ -122,7 +117,6 @@ def api_update():
 
 
 def get_display_user():
-    """Возвращает имя обычного пользователя для запуска браузера (если мы root)."""
     if os.geteuid() != 0:
         return None
     user = os.environ.get('SUDO_USER')
@@ -186,7 +180,7 @@ def open_browser_kiosk():
         subprocess.Popen(["xdg-open", url])
 
 
-def wait_for_server(host='127.0.0.1', port=5000, timeout=10):
+def wait_for_server(host='127.0.0.1', port=5000, timeout=15):
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -198,15 +192,16 @@ def wait_for_server(host='127.0.0.1', port=5000, timeout=10):
 
 
 def start_browser_when_ready():
+    # Дополнительная задержка в 5 секунд после готовности сервера
     if wait_for_server(timeout=15):
+        time.sleep(5)
         open_browser_kiosk()
     else:
         log_message("Сервер не запустился вовремя, браузер не открыт.")
 
 
 def main():
-    log_message("Запуск веб-сервера Chill Monitor")
-    # Запускаем браузер в отдельном потоке после старта сервера
+    log_message("Запуск веб-сервера R2")
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
     app.run(host='0.0.0.0', port=5000, debug=False)
 
