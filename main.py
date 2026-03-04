@@ -2,35 +2,23 @@
 # -*- coding: utf-8 -*-
 
 """
-Мониторинг Orange Pi RK3399 с веб‑интерфейсом.
+Мониторинг Orange Pi RK3399 с GUI на Tkinter.
 Показывает температуру CPU, загрузку, использование RAM и реальные системные логи.
-При запуске автоматически открывает браузер в полноэкранном режиме (kiosk) после того,
-как веб‑сервер станет доступен.
-Все сообщения дублируются в консоль и в файл logs.txt.
-Если запущено от root, переключается на обычного пользователя для запуска браузера,
-чтобы избежать ошибок с сессией X11 (SESSION_MANAGER, DBUS). Добавляет флаг --no-sandbox
-для Chromium при запуске от root.
+Обновление раз в 2 секунды.
+Если передан аргумент --web, запускается веб-версия (Flask) для удалённого доступа.
 """
 
-import os
+import tkinter as tk
+from tkinter import scrolledtext
 import sys
-import subprocess
-import shutil
-import webbrowser
 import datetime
-import pwd
-import time
-import socket
-import threading
+import os
+import subprocess
 from collections import deque
-from pathlib import Path
 
 import psutil
-from flask import Flask, render_template, jsonify
 
-app = Flask(__name__)
-
-# Лог-файл для сообщений
+# Лог-файл для сообщений (совместимость с лаунчером)
 LOG_FILE = "logs.txt"
 
 def log_message(*args):
@@ -96,121 +84,102 @@ def get_recent_logs(n=50):
 
     return ["Нет доступа к системным логам"]
 
-@app.route('/')
-def index():
-    return render_template('screen.html')
 
-@app.route('/get_system_data')
-def get_system_data():
-    now = datetime.datetime.now().strftime("%H:%M:%S")
-    cpu_load = psutil.cpu_percent()
-    ram = psutil.virtual_memory().percent
-    temp = get_cpu_temp()
-    logs = get_recent_logs(50)
-    return jsonify(logs)
+class MonitorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Orange Pi Monitor")
+        self.root.geometry("800x600")
+        # Полноэкранный режим (можно отключить клавишей Escape)
+        self.root.attributes('-fullscreen', True)
+        self.root.bind('<Escape>', self.exit_fullscreen)
 
-def get_display_user():
-    """Возвращает имя обычного пользователя для запуска браузера (если запущено от root)."""
-    if os.geteuid() != 0:
-        return None
-    user = os.environ.get('SUDO_USER')
-    if user and user != 'root':
-        return user
-    for u in pwd.getpwall():
-        if 1000 <= u.pw_uid < 65534:
-            return u.pw_name
-    return None
+        # Верхняя панель с метриками
+        self.frame_metrics = tk.Frame(root, bg='black')
+        self.frame_metrics.pack(fill=tk.X, padx=10, pady=10)
 
-def run_browser_as_user(command):
-    """
-    Запускает браузер от имени обычного пользователя, если мы root.
-    Использует fork + setuid для смены пользователя.
-    """
-    user = get_display_user()
-    if not user:
-        log_message(f"Запуск браузера от текущего пользователя: {' '.join(command)}")
-        subprocess.Popen(command)
-        return
+        self.label_temp = tk.Label(self.frame_metrics, text="CPU Temp: --", font=("Courier", 16),
+                                    fg='cyan', bg='black')
+        self.label_temp.pack(side=tk.LEFT, padx=20)
 
-    try:
-        pw = pwd.getpwnam(user)
-        uid = pw.pw_uid
-        gid = pw.pw_gid
+        self.label_cpu = tk.Label(self.frame_metrics, text="CPU Load: --", font=("Courier", 16),
+                                   fg='lightgreen', bg='black')
+        self.label_cpu.pack(side=tk.LEFT, padx=20)
 
-        pid = os.fork()
-        if pid == 0:
-            os.setgid(gid)
-            os.setuid(uid)
-            os.environ['HOME'] = pw.pw_dir
-            os.environ['USER'] = user
-            os.environ['LOGNAME'] = user
-            os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':0')
-            xauth = os.path.join(pw.pw_dir, '.Xauthority')
-            if os.path.exists(xauth):
-                os.environ['XAUTHORITY'] = xauth
+        self.label_ram = tk.Label(self.frame_metrics, text="RAM Used: --", font=("Courier", 16),
+                                   fg='yellow', bg='black')
+        self.label_ram.pack(side=tk.LEFT, padx=20)
 
-            log_message(f"Запуск браузера от пользователя {user}: {' '.join(command)}")
-            try:
-                subprocess.Popen(command)
-            except Exception as e:
-                log_message(f"Ошибка запуска браузера: {e}")
-            finally:
-                os._exit(0)
-        else:
-            pass
-    except Exception as e:
-        log_message(f"Не удалось переключиться на пользователя {user}: {e}")
-        log_message(f"Запуск браузера от root: {' '.join(command)}")
-        subprocess.Popen(command)
+        # Область логов
+        self.text_log = scrolledtext.ScrolledText(root, bg='black', fg='lightgray',
+                                                   font=("Courier", 10), wrap=tk.WORD)
+        self.text_log.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-def open_browser_kiosk():
-    """Запускает браузер в полноэкранном режиме (kiosk) с указанным URL."""
-    url = "http://127.0.0.1:5000"
-    is_root = (os.geteuid() == 0)
+        # Кнопка выхода
+        self.btn_quit = tk.Button(root, text="Выход (ESC)", command=self.quit_app,
+                                   bg='red', fg='white', font=("Arial", 12))
+        self.btn_quit.pack(pady=5)
 
-    if shutil.which("chromium-browser"):
-        cmd = ["chromium-browser", "--kiosk", url]
-        if is_root:
-            cmd.insert(1, "--no-sandbox")
-        log_message("Используется chromium-browser")
-        run_browser_as_user(cmd)
-    elif shutil.which("chromium"):
-        cmd = ["chromium", "--kiosk", url]
-        if is_root:
-            cmd.insert(1, "--no-sandbox")
-        log_message("Используется chromium")
-        run_browser_as_user(cmd)
-    elif shutil.which("firefox"):
-        cmd = ["firefox", "--kiosk", url]
-        log_message("Используется firefox")
-        run_browser_as_user(cmd)
-    else:
-        webbrowser.open(url)
-        log_message("Не удалось найти браузер с поддержкой kiosk. Открыто в обычном режиме.")
+        self.update_data()
 
-def wait_for_server(host='127.0.0.1', port=5000, timeout=10):
-    """Ожидает, пока сервер не станет доступен по указанному адресу."""
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1):
-                log_message(f"Сервер доступен на {host}:{port}")
-                return True
-        except (socket.timeout, ConnectionRefusedError):
-            time.sleep(0.5)
-    log_message(f"Сервер не стал доступен за {timeout} секунд")
-    return False
+    def exit_fullscreen(self, event=None):
+        self.root.attributes('-fullscreen', False)
 
-def open_browser_when_ready():
-    """Ожидает готовности сервера и запускает браузер."""
-    if wait_for_server(timeout=15):
-        open_browser_kiosk()
-    else:
-        log_message("Не удалось дождаться сервера, браузер не запущен.")
+    def quit_app(self):
+        self.root.quit()
+        self.root.destroy()
 
-if __name__ == '__main__':
-    # Запускаем поток, который подождёт сервер и откроет браузер
-    threading.Thread(target=open_browser_when_ready, daemon=True).start()
+    def update_data(self):
+        # Обновляем метрики
+        temp = get_cpu_temp()
+        cpu = psutil.cpu_percent()
+        ram = psutil.virtual_memory().percent
+        self.label_temp.config(text=f"CPU Temp: {temp}")
+        self.label_cpu.config(text=f"CPU Load: {cpu}%")
+        self.label_ram.config(text=f"RAM Used: {ram}%")
 
-    # Запуск Flask-сервера
+        # Обновляем логи
+        logs = get_recent_logs(50)
+        self.text_log.delete(1.0, tk.END)
+        for line in logs:
+            self.text_log.insert(tk.END, line + "\n")
+        self.text_log.see(tk.END)  # прокрутка вниз
+
+        # Планируем следующее обновление через 2000 мс
+        self.root.after(2000, self.update_data)
+
+
+def run_web_server():
+    """Запуск веб-версии (Flask) для удалённого доступа."""
+    log_message("Запуск веб-версии (Flask)")
+    from flask import Flask, render_template, jsonify
+    app = Flask(__name__)
+
+    @app.route('/')
+    def index():
+        return render_template('screen.html')
+
+    @app.route('/get_system_data')
+    def get_system_data():
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        cpu_load = psutil.cpu_percent()
+        ram = psutil.virtual_memory().percent
+        temp = get_cpu_temp()
+        logs = get_recent_logs(50)
+        return jsonify(logs)
+
     app.run(host='0.0.0.0', port=5000, debug=False)
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--web":
+        run_web_server()
+    else:
+        log_message("Запуск Tkinter GUI")
+        root = tk.Tk()
+        app = MonitorApp(root)
+        root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
