@@ -262,7 +262,7 @@ def run_terminal_as_user(terminal_cmd):
         log_message(f"Не удалось переключиться на пользователя {user}: {e}")
         subprocess.Popen(terminal_cmd)
 
-def is_display_ready(timeout=30):
+def is_display_ready(timeout=300):
     """
     Проверяет, готова ли графическая среда.
     Возвращает True, если переменная DISPLAY установлена (признак графической сессии).
