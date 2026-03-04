@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chill Monitor</title>
+    <title>R2</title>
     <style>
         * {
             margin: 0;
@@ -13,87 +13,117 @@
         }
         body {
             background-color: black;
-            color: #888;
+            color: #ccc;
             font-family: 'Courier New', monospace;
             height: 100vh;
-            display: flex;
-            flex-direction: column;
+            width: 100vw;
             overflow: hidden;
+            position: relative;
         }
-        /* Контейнер глаз */
+        /* Контейнер глаз – выше логов */
         .eyes-container {
-            flex: 1;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 30px;
+            gap: 100px;
             background: black;
+            z-index: 10;
         }
-        /* Глаз */
+        /* Глаз – тонкий, белый */
         .eye {
-            width: 240px;
-            height: 560px;
-            background-color: #aaa;
+            width: 120px;
+            height: 460px;
+            background-color: #fff;
             border-radius: 60px;
-            transition: background-color 0.1s ease;
-            animation: shake 1s infinite ease-in-out;
+            transition: transform 0.1s ease; /* для моргания */
+            transform-origin: center center;
         }
-        /* Анимация дрожания */
-        @keyframes shake {
-            0% { transform: translateX(0); }
-            25% { transform: translateX(-2px); }
-            50% { transform: translateX(2px); }
-            75% { transform: translateX(-1px); }
-            100% { transform: translateX(0); }
-        }
-        /* Состояние моргания (закрытый глаз) */
+        /* Моргание – сжатие по высоте */
         .eye.blink {
-            background-color: #222;
+            transform: scaleY(0.1);
         }
-        /* Нижняя панель */
-        .bottom-panel {
-            background: black;
-            padding: 10px;
-            border-top: 1px solid #333;
-        }
-        .buttons {
+        /* Логи на фоне – без фона, текст прямо поверх глаз (ниже по z-index) */
+        .logs-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+            pointer-events: none;
             display: flex;
-            gap: 10px;
-            margin-bottom: 10px;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: flex-start;
+            padding: 40px;
         }
-        button {
-            background: #333;
-            color: white;
-            border: none;
-            padding: 8px 16px;
+        .metrics {
+            color: #fff;
             font-size: 14px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-family: inherit;
+            margin-bottom: 20px;
+            text-shadow: 0 0 5px black;
+            pointer-events: none;
         }
-        button:hover {
-            background: #555;
-        }
-        button:disabled {
-            background: #222;
-            color: #666;
-            cursor: not-allowed;
-        }
-        /* Логи */
         .logs {
-            background: #111;
-            padding: 10px;
-            height: 200px;
+            color: #fff;
+            font-size: 10px;
+            line-height: 1.4;
+            max-height: 60%;
             overflow-y: auto;
-            font-size: 9pt;
-            border: none;
+            width: 100%;
+            pointer-events: auto;
+            padding-right: 10px;
+            scrollbar-width: thin;
+            scrollbar-color: #444 #111;
+            text-shadow: 0 0 3px black;
+        }
+        .logs::-webkit-scrollbar {
+            width: 8px;
+        }
+        .logs::-webkit-scrollbar-track {
+            background: #111;
+        }
+        .logs::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 4px;
+        }
+        .logs div {
             white-space: pre-wrap;
             word-wrap: break-word;
         }
-        .metrics {
-            color: #888;
-            margin-bottom: 5px;
-            font-size: 12px;
+        /* Кнопки */
+        .buttons {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 20;
+        }
+        button {
+            background: rgba(30, 30, 30, 0.9);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-family: inherit;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: rgba(80, 80, 80, 0.9);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
     </style>
 </head>
@@ -103,13 +133,14 @@
         <div class="eye" id="rightEye"></div>
     </div>
 
-    <div class="bottom-panel">
-        <div class="buttons">
-            <button id="minimizeBtn">Свернуть</button>
-            <button id="updateBtn">Обновление</button>
-        </div>
+    <div class="logs-overlay">
         <div class="metrics" id="metrics"></div>
         <div class="logs" id="logs"></div>
+    </div>
+
+    <div class="buttons">
+        <button id="minimizeBtn">Свернуть</button>
+        <button id="updateBtn">Обновление</button>
     </div>
 
     <script>
@@ -120,7 +151,7 @@
         const metricsDiv = document.getElementById('metrics');
         const logsDiv = document.getElementById('logs');
 
-        // Моргание случайное
+        // --- Моргание (меняет высоту) ---
         function blink() {
             if (leftEye.classList.contains('blink')) return;
             leftEye.classList.add('blink');
@@ -138,30 +169,49 @@
         }
         scheduleBlink();
 
-        // Обновление метрик и логов
+        // --- Постоянное слабое дрожание ---
+        function randomShake() {
+            // случайное смещение от -3 до 3 пикселей по X и Y
+            const x = (Math.random() * 6 - 3).toFixed(1);
+            const y = (Math.random() * 6 - 3).toFixed(1);
+            const transform = `translate(${x}px, ${y}px)`;
+            leftEye.style.transform = transform;
+            rightEye.style.transform = transform;
+        }
+        // Запускаем интервал каждые 100 мс для непрерывной тряски
+        setInterval(randomShake, 500);
+
+        // --- Обновление данных ---
         async function fetchData() {
             try {
                 const response = await fetch('/api/data');
                 const data = await response.json();
                 metricsDiv.textContent = `CPU: ${data.cpu}%  RAM: ${data.ram}%  TEMP: ${data.temp}`;
-                logsDiv.textContent = data.logs.join('\n');
-                // Прокрутка вниз
+                logsDiv.innerHTML = data.logs.map(line => `<div>${escapeHtml(line)}</div>`).join('');
                 logsDiv.scrollTop = logsDiv.scrollHeight;
             } catch (e) {
                 console.error('Ошибка получения данных:', e);
             }
         }
+
+        function escapeHtml(unsafe) {
+            return unsafe.replace(/[&<>"]/g, function(m) {
+                if(m === '&') return '&amp;';
+                if(m === '<') return '&lt;';
+                if(m === '>') return '&gt;';
+                if(m === '"') return '&quot;';
+                return m;
+            });
+        }
+
         fetchData();
         setInterval(fetchData, 2000);
 
-        // Кнопка свернуть (не работает в полноэкранном браузере без API)
+        // --- Кнопки ---
         minimizeBtn.addEventListener('click', () => {
-            // В Chromium в kiosk-режиме нельзя свернуть окно программно.
-            // Можно попробовать отправить Alt+F9 или что-то, но лучше просто игнорировать.
             alert('Используйте клавишу Esc для выхода из полноэкранного режима');
         });
 
-        // Кнопка обновления
         updateBtn.addEventListener('click', async () => {
             updateBtn.disabled = true;
             updateBtn.textContent = 'Обновляется...';
@@ -169,7 +219,6 @@
                 const response = await fetch('/api/update', { method: 'POST' });
                 const result = await response.json();
                 if (result.status === 'ok') {
-                    // Через некоторое время вернём кнопку
                     setTimeout(() => {
                         updateBtn.disabled = false;
                         updateBtn.textContent = 'Обновление';
@@ -186,10 +235,9 @@
             }
         });
 
-        // Выход по Esc (если окно не в kiosk, но в обычном режиме)
+        // Выход по Esc
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
-                // Попытка выйти из полноэкранного режима (работает не во всех браузерах)
                 if (document.exitFullscreen) {
                     document.exitFullscreen();
                 }
