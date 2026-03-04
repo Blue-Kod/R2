@@ -109,19 +109,15 @@ def get_system_data():
 def open_browser_kiosk():
     """Запускает браузер в полноэкранном режиме (kiosk) с указанным URL."""
     url = "http://127.0.0.1:5000"
-    # Определяем, запущены ли мы от root (UID 0)
-    is_root = (os.geteuid() == 0)
 
     # Пробуем Chromium
     if shutil.which("chromium-browser"):
         cmd = ["chromium-browser", "--kiosk", url]
-        if is_root:
-            cmd.insert(1, "--no-sandbox")  # вставляем после имени программы
+        cmd.insert(1, "--no-sandbox")  # вставляем после имени программы
         subprocess.Popen(cmd)
     elif shutil.which("chromium"):
         cmd = ["chromium", "--kiosk", url]
-        if is_root:
-            cmd.insert(1, "--no-sandbox")
+        cmd.insert(1, "--no-sandbox")
         subprocess.Popen(cmd)
     # Пробуем Firefox (он не требует --no-sandbox)
     elif shutil.which("firefox"):
