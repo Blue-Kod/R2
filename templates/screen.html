@@ -20,7 +20,7 @@
             overflow: hidden;
             position: relative;
         }
-        /* Контейнер глаз – выше логов */
+        /* Контейнер глаз */
         .eyes-container {
             position: absolute;
             top: 0;
@@ -33,22 +33,19 @@
             gap: 150px;
             background: black;
             z-index: 10;
-            transform: translateY(-150px);
         }
-        /* Глаз – тонкий, белый */
         .eye {
             width: 180px;
             height: 560px;
             background-color: #fff;
             border-radius: 120px;
-            transition: transform 0.1s ease; /* для моргания */
+            transition: transform 0.1s ease;
             transform-origin: center center;
         }
-        /* Моргание – сжатие по высоте */
         .eye.blink {
             transform: scaleY(0.1);
         }
-        /* Логи на фоне – без фона, текст прямо поверх глаз (ниже по z-index) */
+        /* Логи на фоне */
         .logs-overlay {
             position: absolute;
             top: 0;
@@ -97,34 +94,50 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
-        /* Кнопки */
-        .buttons {
+        /* Область для вызова меню (невидимая полоса внизу) */
+        .menu-trigger {
             position: absolute;
-            bottom: 30px;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 60px;
+            z-index: 30;
+            background: transparent;
+            cursor: pointer;
+        }
+        /* Само меню */
+        .menu {
+            position: absolute;
+            bottom: 70px;
             left: 50%;
             transform: translateX(-50%);
+            background: rgba(30, 30, 30, 0.95);
+            border-radius: 12px;
+            padding: 8px 0;
+            display: none;
+            flex-direction: column;
+            min-width: 180px;
+            z-index: 40;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.7);
+            border: 1px solid #444;
+        }
+        .menu.visible {
             display: flex;
-            gap: 15px;
-            z-index: 20;
         }
-        button {
-            background: rgba(30, 30, 30, 0.9);
+        .menu-item {
             color: white;
-            border: none;
-            padding: 10px 20px;
+            padding: 12px 20px;
             font-size: 16px;
-            border-radius: 30px;
             cursor: pointer;
-            font-family: inherit;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
             transition: background 0.2s;
+            text-align: center;
+            border-bottom: 1px solid #444;
         }
-        button:hover {
-            background: rgba(80, 80, 80, 0.9);
+        .menu-item:last-child {
+            border-bottom: none;
         }
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+        .menu-item:hover {
+            background: #555;
         }
     </style>
 </head>
@@ -139,20 +152,28 @@
         <div class="logs" id="logs"></div>
     </div>
 
-    <div class="buttons">
-        <button id="minimizeBtn">Свернуть</button>
-        <button id="updateBtn">Обновление</button>
+    <!-- Область для вызова меню -->
+    <div class="menu-trigger" id="menuTrigger"></div>
+
+    <!-- Меню -->
+    <div class="menu" id="menu">
+        <div class="menu-item" id="minimizeBtn">Свернуть</div>
+        <div class="menu-item" id="closeBtn">Закрыть</div>
+        <div class="menu-item" id="updateBtn">Обновить</div>
     </div>
 
     <script>
         const leftEye = document.getElementById('leftEye');
         const rightEye = document.getElementById('rightEye');
-        const updateBtn = document.getElementById('updateBtn');
+        const menuTrigger = document.getElementById('menuTrigger');
+        const menu = document.getElementById('menu');
         const minimizeBtn = document.getElementById('minimizeBtn');
+        const closeBtn = document.getElementById('closeBtn');
+        const updateBtn = document.getElementById('updateBtn');
         const metricsDiv = document.getElementById('metrics');
         const logsDiv = document.getElementById('logs');
 
-        // --- Моргание (меняет высоту) ---
+        // --- Моргание ---
         function blink() {
             if (leftEye.classList.contains('blink')) return;
             leftEye.classList.add('blink');
@@ -165,22 +186,83 @@
         }
 
         function scheduleBlink() {
-            const delay = Math.random() * (15000 - 5000) + 5000; // 5-15 сек
+            const delay = Math.random() * (15000 - 5000) + 5000;
             setTimeout(blink, delay);
         }
         scheduleBlink();
 
-        // --- Постоянное слабое дрожание ---
+        // --- Дрожание ---
         function randomShake() {
-            // случайное смещение от -3 до 3 пикселей по X и Y
             const x = (Math.random() * 6 - 3).toFixed(1);
             const y = (Math.random() * 6 - 3).toFixed(1);
             const transform = `translate(${x}px, ${y}px)`;
             leftEye.style.transform = transform;
             rightEye.style.transform = transform;
         }
-        // Запускаем интервал каждые 100 мс для непрерывной тряски
         setInterval(randomShake, 500);
+
+        // --- Показ/скрытие меню ---
+        menuTrigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menu.classList.toggle('visible');
+        });
+
+        // Клик вне меню скрывает его
+        document.addEventListener('click', (e) => {
+            if (!menu.contains(e.target) && e.target !== menuTrigger) {
+                menu.classList.remove('visible');
+            }
+        });
+
+        // --- Действия меню ---
+        minimizeBtn.addEventListener('click', () => {
+            menu.classList.remove('visible');
+            // Выход из полноэкранного режима (позволяет свернуть окно вручную)
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            } else {
+                alert('Используйте системные средства для сворачивания');
+            }
+        });
+
+        closeBtn.addEventListener('click', async () => {
+            menu.classList.remove('visible');
+            try {
+                const response = await fetch('/api/shutdown', { method: 'POST' });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    // Пытаемся закрыть окно браузера
+                    setTimeout(() => {
+                        window.close();
+                    }, 1000);
+                } else {
+                    alert('Ошибка: ' + result.message);
+                }
+            } catch (e) {
+                alert('Ошибка сети');
+            }
+        });
+
+        updateBtn.addEventListener('click', async () => {
+            menu.classList.remove('visible');
+            updateBtn.style.pointerEvents = 'none'; // защита от повторного клика
+            try {
+                const response = await fetch('/api/update', { method: 'POST' });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    // Через некоторое время перезагрузим страницу, чтобы подключиться к новому серверу
+                    setTimeout(() => {
+                        location.reload();
+                    }, 5000);
+                } else {
+                    alert('Ошибка: ' + result.message);
+                    updateBtn.style.pointerEvents = 'auto';
+                }
+            } catch (e) {
+                alert('Ошибка сети');
+                updateBtn.style.pointerEvents = 'auto';
+            }
+        });
 
         // --- Обновление данных ---
         async function fetchData() {
@@ -207,34 +289,6 @@
 
         fetchData();
         setInterval(fetchData, 2000);
-
-        // --- Кнопки ---
-        minimizeBtn.addEventListener('click', () => {
-            alert('Используйте клавишу Esc для выхода из полноэкранного режима');
-        });
-
-        updateBtn.addEventListener('click', async () => {
-            updateBtn.disabled = true;
-            updateBtn.textContent = 'Обновляется...';
-            try {
-                const response = await fetch('/api/update', { method: 'POST' });
-                const result = await response.json();
-                if (result.status === 'ok') {
-                    setTimeout(() => {
-                        updateBtn.disabled = false;
-                        updateBtn.textContent = 'Обновление';
-                    }, 10000);
-                } else {
-                    alert('Ошибка: ' + result.message);
-                    updateBtn.disabled = false;
-                    updateBtn.textContent = 'Обновление';
-                }
-            } catch (e) {
-                alert('Ошибка сети');
-                updateBtn.disabled = false;
-                updateBtn.textContent = 'Обновление';
-            }
-        });
 
         // Выход по Esc
         document.addEventListener('keydown', (e) => {
