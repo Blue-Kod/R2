@@ -93,30 +93,26 @@ def get_system_data():
     return jsonify(logs)
 
 
+# ... (в начало файла добавить import pwd)
+
 def get_display_user():
-    """Возвращает имя обычного пользователя для запуска браузера (если запущено от root)."""
+    """Возвращает имя обычного пользователя для запуска графических приложений (если запущено от root)."""
     if os.geteuid() != 0:
         return None
-    # Если запущено через sudo, берём SUDO_USER
     user = os.environ.get('SUDO_USER')
     if user and user != 'root':
         return user
-    # Иначе ищем первого пользователя с UID >= 1000
     for u in pwd.getpwall():
         if 1000 <= u.pw_uid < 65534:
             return u.pw_name
     return None
 
-
-def run_browser_as_user(command):
-    """
-    Запускает браузер от имени обычного пользователя, если мы root.
-    Использует fork + setuid для смены пользователя.
-    """
+def run_terminal_as_user(terminal_cmd):
+    """Запускает терминал от имени обычного пользователя, если мы root."""
     user = get_display_user()
     if not user:
-        # Запускаем от текущего пользователя (не root или не нашли)
-        subprocess.Popen(command)
+        # Не root или не нашли пользователя – запускаем как есть
+        subprocess.Popen(terminal_cmd)
         return
 
     try:
@@ -126,10 +122,9 @@ def run_browser_as_user(command):
 
         pid = os.fork()
         if pid == 0:
-            # Дочерний процесс – меняем пользователя
+            # Дочерний процесс
             os.setgid(gid)
             os.setuid(uid)
-            # Устанавливаем правильное окружение
             os.environ['HOME'] = pw.pw_dir
             os.environ['USER'] = user
             os.environ['LOGNAME'] = user
@@ -138,11 +133,10 @@ def run_browser_as_user(command):
             if os.path.exists(xauth):
                 os.environ['XAUTHORITY'] = xauth
 
-            # Запускаем браузер
             try:
-                subprocess.Popen(command)
+                subprocess.Popen(terminal_cmd)
             except Exception as e:
-                print(f"Ошибка запуска браузера: {e}")
+                print(f"Ошибка запуска терминала: {e}")
             finally:
                 os._exit(0)
         else:
@@ -150,8 +144,55 @@ def run_browser_as_user(command):
             pass
     except Exception as e:
         print(f"Не удалось переключиться на пользователя {user}: {e}")
-        subprocess.Popen(command)
+        subprocess.Popen(terminal_cmd)
 
+def run_main_in_terminal():
+    """Запускает main.py в новом окне терминала (с поддержкой запуска от обычного пользователя, если мы root)."""
+    main_path = Path(MAIN_SCRIPT)
+    if not main_path.exists():
+        print(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден в текущей директории.")
+        return False
+
+    cmd_str = f"{sys.executable} {MAIN_SCRIPT}"
+    log_file = Path(f"{MAIN_SCRIPT}.log")
+    cmd_with_log = f"{cmd_str} >> {log_file} 2>&1"  # можно использовать для перенаправления
+
+    has_gui = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')
+    if not has_gui:
+        print("[L] Графическая среда не обнаружена. Запускаю в текущем терминале...")
+        return run_main_current_terminal(cmd_str)
+
+    terminals = [
+        ('xterm', ['xterm', '-hold', '-e'], True),
+        ('xfce4-terminal', ['xfce4-terminal', '--hold', '-e'], True),
+        ('gnome-terminal', ['gnome-terminal', '--'], True),
+        ('konsole', ['konsole', '-e'], True),
+        ('lxterminal', ['lxterminal', '-e'], True),
+        ('terminator', ['terminator', '-e'], True),
+        ('urxvt', ['urxvt', '-e'], True),
+        ('rxvt', ['rxvt', '-e'], True),
+    ]
+
+    for term_name, base_args, use_string in terminals:
+        if shutil.which(term_name):
+            if use_string:
+                full_args = base_args + [cmd_str]
+            else:
+                full_args = base_args + [sys.executable, MAIN_SCRIPT]
+            print(f"[L] Запускаю {MAIN_SCRIPT} в терминале {term_name}...")
+            try:
+                # Если мы root, запускаем терминал от обычного пользователя
+                if os.geteuid() == 0:
+                    run_terminal_as_user(full_args)
+                else:
+                    subprocess.Popen(full_args)
+                return True
+            except Exception as e:
+                print(f"[!] Не удалось запустить {term_name}: {e}")
+                continue
+
+    print("[L] Не найден подходящий эмулятор терминала. Запускаю в текущем терминале...")
+    return run_main_current_terminal(cmd_str)
 
 def open_browser_kiosk():
     """Запускает браузер в полноэкранном режиме (kiosk) с указанным URL."""
