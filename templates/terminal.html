@@ -178,7 +178,7 @@
             if (e.key === 'Enter') {
                 const cmd = commandInput.value;
                 if (cmd.trim() !== '') {
-                    appendOutput('$ ' + cmd + '\r\n');
+                    appendOutput(cmd + '\r\n');
                     sendCommand(cmd);
                     commandInput.value = '';
                 }
