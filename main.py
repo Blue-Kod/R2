@@ -10,19 +10,98 @@ import socket
 import datetime
 import pwd
 import shutil
+import ptyprocess
 from collections import deque
 
 import psutil
 from flask import Flask, render_template, jsonify, request
-from flask_socketio import SocketIO, emit
-import ptyprocess
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
 
 LOG_FILE = "logs.txt"
-active_sessions = {}  # {sid: {'proc': ptyprocess.PtyProcess, 'thread': Thread}}
 
+# ---------- Глобальный менеджер shell ----------
+class ShellManager:
+    def __init__(self):
+        self.proc = None
+        self.output_buffer = deque(maxlen=2000)  # храним до 2000 строк
+        self.lock = threading.Lock()
+        self.running = False
+        self.thread = None
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        try:
+            # Запускаем bash в интерактивном режиме через pty
+            self.proc = ptyprocess.PtyProcess.spawn(['/bin/bash', '-i'])
+            # Устанавливаем размер терминала (опционально)
+            self.proc.setwinsize(24, 80)
+        except Exception as e:
+            log_message(f"Не удалось запустить shell: {e}")
+            self.running = False
+            return
+
+        self.thread = threading.Thread(target=self._reader, daemon=True)
+        self.thread.start()
+        log_message("Shell процесс запущен")
+
+    def _reader(self):
+        """Читает вывод из pty и сохраняет в буфер."""
+        try:
+            while self.running:
+                try:
+                    data = self.proc.read(1024)
+                    if not data:
+                        break
+                    # Декодируем и разбиваем на строки
+                    text = data.decode('utf-8', errors='replace')
+                    with self.lock:
+                        # Можно добавлять как одну строку или разбивать
+                        self.output_buffer.append(text)
+                except Exception as e:
+                    log_message(f"Ошибка чтения из shell: {e}")
+                    break
+        finally:
+            log_message("Поток чтения shell завершён")
+            self.running = False
+
+    def write(self, cmd):
+        """Отправляет команду в shell."""
+        if not self.running or not self.proc:
+            return False
+        try:
+            # Добавляем перевод строки, если его нет
+            if not cmd.endswith('\n'):
+                cmd += '\n'
+            self.proc.write(cmd.encode('utf-8'))
+            return True
+        except Exception as e:
+            log_message(f"Ошибка записи в shell: {e}")
+            return False
+
+    def get_output(self, max_lines=None):
+        """Возвращает весь накопленный вывод как одну строку."""
+        with self.lock:
+            if max_lines:
+                # последние max_lines записей (может быть не целыми строками)
+                lines = list(self.output_buffer)[-max_lines:]
+            else:
+                lines = list(self.output_buffer)
+            return ''.join(lines)
+
+    def stop(self):
+        self.running = False
+        if self.proc:
+            try:
+                self.proc.terminate()
+            except:
+                pass
+
+shell_manager = ShellManager()
+
+# ---------- Вспомогательные функции ----------
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -76,7 +155,7 @@ def get_recent_logs(n=500):
         log_message(f"journalctl не удался: {e}")
     return ["Нет доступа к системным логам"]
 
-# Маршруты страниц
+# ---------- Маршруты страниц ----------
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -93,7 +172,7 @@ def terminal():
 def logs():
     return render_template('logs.html')
 
-# API данных
+# ---------- API ----------
 @app.route('/api/data')
 def api_data():
     cpu = psutil.cpu_percent()
@@ -107,7 +186,6 @@ def api_data():
         'logs': logs
     })
 
-# API управления
 @app.route('/api/update', methods=['POST'])
 def api_update():
     try:
@@ -135,67 +213,39 @@ def api_shutdown():
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
-# SocketIO обработчики для терминала
-@socketio.on('connect')
-def handle_connect():
-    sid = request.sid
-    log_message(f"Терминал подключен: {sid}")
-    try:
-        # Запускаем bash в интерактивном режиме с явным указанием размера
-        proc = ptyprocess.PtyProcess.spawn(['/bin/bash', '-i'])
-        # Устанавливаем начальный размер терминала (по умолчанию 80x24)
-        proc.setwinsize(24, 80)
-        active_sessions[sid] = {'proc': proc}
+# ---------- API для терминала ----------
+@app.route('/api/cmd/send', methods=['POST'])
+def cmd_send():
+    """Принимает команду и отправляет её в shell."""
+    data = request.get_json()
+    if not data or 'command' not in data:
+        return jsonify({'error': 'No command provided'}), 400
+    cmd = data['command'].strip()
+    if not cmd:
+        return jsonify({'error': 'Empty command'}), 400
 
-        def read_output():
-            try:
-                while True:
-                    data = proc.read(1024)
-                    if not data:
-                        log_message(f"read_output: получен EOF для {sid}")
-                        break
-                    log_message(f"read_output: получено {len(data)} байт для {sid}")
-                    socketio.emit('output', data.decode('utf-8', errors='replace'), room=sid)
-            except Exception as e:
-                log_message(f"Ошибка чтения из pty для {sid}: {e}")
-            finally:
-                log_message(f"Выход из read_output для {sid}")
-                socketio.emit('exit', room=sid)
-                active_sessions.pop(sid, None)
+    if not shell_manager.running:
+        # Попытаемся запустить shell, если он ещё не запущен
+        shell_manager.start()
 
-        thread = threading.Thread(target=read_output, daemon=True)
-        thread.start()
-        active_sessions[sid]['thread'] = thread
-        log_message(f"Терминал для {sid} успешно создан")
-    except Exception as e:
-        log_message(f"Не удалось создать pty для {sid}: {e}")
-        socketio.emit('output', f"Ошибка запуска терминала: {e}\r\n", room=sid)
-        socketio.emit('exit', room=sid)
+    if shell_manager.write(cmd):
+        return jsonify({'status': 'ok'})
+    else:
+        return jsonify({'error': 'Shell not available'}), 500
 
-@socketio.on('input')
-def handle_input(data):
-    sid = request.sid
-    log_message(f"Получен input от {sid}: {repr(data)}")
-    proc_info = active_sessions.get(sid)
-    if proc_info:
-        try:
-            proc_info['proc'].write(data.encode('utf-8'))
-            log_message(f"Данные записаны в pty для {sid}")
-        except Exception as e:
-            log_message(f"Ошибка записи в pty для {sid}: {e}")
+@app.route('/api/cmd/output', methods=['GET'])
+def cmd_output():
+    """Возвращает текущий вывод shell."""
+    if not shell_manager.running:
+        shell_manager.start()
+        time.sleep(0.5)  # дадим время на запуск
+    output = shell_manager.get_output()
+    return jsonify({'output': output})
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    sid = request.sid
-    log_message(f"Терминал отключен: {sid}")
-    proc_info = active_sessions.pop(sid, None)
-    if proc_info:
-        try:
-            proc_info['proc'].terminate()
-        except:
-            pass
+# ---------- Запуск shell при старте сервера ----------
+shell_manager.start()
 
-# Функции для запуска браузера (без изменений)
+# ---------- Запуск браузера (как было) ----------
 def get_display_user():
     if os.geteuid() != 0:
         return None
@@ -277,7 +327,7 @@ def start_browser_when_ready():
 def main():
     log_message("Запуск веб-сервера R2")
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
 
 if __name__ == "__main__":
     main()
