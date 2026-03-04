@@ -6,10 +6,10 @@ Launcher для автообновления приложения из GitHub р
 Для работы этого скрипта требуется установить библиотеку requests:
     pip3 install requests
 
-Скрипт скачивает последнюю версию репозитория https://github.com/Blue-Kod/R2,
-обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет
-зависимости из requirements.txt, затем запускает main.py.
-При отсутствии интернета или ошибке обновления запускает текущую версию.
+Скрипт использует python3 и pip3 (через sys.executable, что гарантирует работу с тем же интерпретатором,
+которым запущен скрипт). Он скачивает последнюю версию репозитория https://github.com/Blue-Kod/R2,
+обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt,
+затем запускает main.py. При отсутствии интернета или ошибке обновления запускает текущую версию.
 Работает без использования виртуального окружения (venv).
 
 Поддерживает установку/удаление автозапуска в Linux:
@@ -47,6 +47,13 @@ AUTOSTART_DESKTOP_FILE = "r2-launcher.desktop"
 
 # Флаг для определения, запущены ли мы в режиме финишного обновления
 SELF_UPDATE_ARG = "--finish-self-update"
+
+
+def check_python_version():
+    """Проверяет, что используется Python 3."""
+    if sys.version_info.major < 3:
+        print("[!] Ошибка: требуется Python 3")
+        sys.exit(1)
 
 
 def is_internet_available(timeout=3):
@@ -186,7 +193,11 @@ def finish_self_update(old_script_path):
 
 
 def install_requirements():
-    """Устанавливает/обновляет зависимости из requirements.txt с помощью pip."""
+    """
+    Устанавливает/обновляет зависимости из requirements.txt с помощью pip.
+    Использует тот же интерпретатор Python (sys.executable) для вызова pip,
+    что гарантирует работу с правильной версией pip (pip3 для Python 3).
+    """
     req_path = Path(REQUIREMENTS_FILE)
     if not req_path.exists():
         print("[*] Файл requirements.txt не найден, пропускаем установку зависимостей.")
@@ -194,6 +205,7 @@ def install_requirements():
 
     try:
         print("[L] Установка зависимостей...")
+        # Используем sys.executable -m pip для вызова pip, соответствующего текущему python3
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE]
         )
@@ -205,7 +217,7 @@ def install_requirements():
 
 
 def run_main():
-    """Запускает main.py, если он существует."""
+    """Запускает main.py, если он существует, используя текущий интерпретатор python3."""
     main_path = Path(MAIN_SCRIPT)
     if not main_path.exists():
         print(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден в текущей директории.")
@@ -213,6 +225,7 @@ def run_main():
 
     try:
         print(f"[L] Запуск {MAIN_SCRIPT}...")
+        # Запускаем main.py с тем же python3
         subprocess.run([sys.executable, MAIN_SCRIPT])
         return True
     except Exception as e:
@@ -320,6 +333,8 @@ def remove_autostart_linux():
 
 
 def main():
+    check_python_version()
+
     # Разбор аргументов командной строки
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
     parser.add_argument("--install-autostart", action="store_true",
@@ -372,6 +387,7 @@ def main():
     # Переходим в эту директорию (чтобы все пути были относительно неё)
     os.chdir(script_dir)
     print(f"[L] Рабочая директория: {script_dir}")
+    print(f"[L] Используемый интерпретатор: {sys.executable}")
 
     # Автоматическая установка автозапуска (только Linux и если не запрещено и ещё не установлено)
     if platform.system() == "Linux" and not args.dont_install_autostart:
