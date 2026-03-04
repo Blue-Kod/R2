@@ -2,22 +2,26 @@
 # -*- coding: utf-8 -*-
 
 """
-Chill Monitor с глазами, системными логами и кнопкой обновления.
+Chill Monitor на PySide6 с глазами, системными логами и кнопкой обновления.
 Глаза вытянуты вверх, без зрачков, подрагивают раз в секунду, моргают случайно.
 Логи (последние 500 строк) отображаются внизу с прокруткой.
 Кнопка "Обновление" запускает лаунчер для обновления кода.
+Все элементы на чёрном фоне, без лишних обводок.
 """
 
-import tkinter as tk
-from tkinter import scrolledtext
+import sys
+import os
 import random
 import datetime
-import os
 import subprocess
-import time
 from collections import deque
 
 import psutil
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                               QHBoxLayout, QPushButton, QTextEdit, QGraphicsView,
+                               QGraphicsScene, QGraphicsRectItem)
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPointF, QEasingCurve
+from PySide6.QtGui import QColor, QBrush, QPen, QFont
 
 # Лог-файл для отладки самого скрипта
 LOG_FILE = "logs.txt"
@@ -75,222 +79,299 @@ def get_recent_logs(n=500):
         log_message(f"journalctl не удался: {e}")
     return ["Нет доступа к системным логам"]
 
-class ChillEyes:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Chill Monitor")
-        self.root.configure(bg='black')
-        self.root.attributes('-fullscreen', True)
-        self.root.bind('<Escape>', self.quit_fullscreen)
 
-        # Верхняя часть – холст для глаз
-        self.canvas = tk.Canvas(root, bg='black', highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+class EyeItem(QGraphicsRectItem):
+    """Пользовательский графический элемент глаза со скруглёнными углами."""
+    def __init__(self, x, y, width, height, radius, color, parent=None):
+        super().__init__(x, y, width, height, parent)
+        self.setBrush(QBrush(color))
+        self.setPen(QPen(Qt.NoPen))
+        # Устанавливаем скруглённые углы через QPainterPath (позже, но для прямоугольника так не работает).
+        # Проще нарисовать прямоугольник со скруглёнными углами в paint().
+        # Но для упрощения будем использовать QGraphicsRectItem с закруглёнными углами? В PySide6 можно установить corner radii через QGraphicsRectItem.set... нет прямого метода.
+        # Поэтому мы будем рисовать прямоугольник со скруглёнными углами при помощи QPainterPath в paintEvent, но QGraphicsRectItem не позволяет.
+        # Альтернатива: создать кастомный QGraphicsPathItem или переопределить paint.
+        # Чтобы не усложнять, используем QGraphicsRectItem и применим стиль через QPainterPath в paint().
+        # Создадим класс-наследник с переопределённым paint.
+        pass
 
-        # Нижняя часть – фрейм с логами и кнопками
-        bottom_frame = tk.Frame(root, bg='black')
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
 
-        # Кнопки
-        btn_frame = tk.Frame(bottom_frame, bg='black')
-        btn_frame.pack(fill=tk.X, pady=5)
+class RoundedRectItem(QGraphicsRectItem):
+    """Прямоугольник со скруглёнными углами."""
+    def __init__(self, x, y, w, h, radius, color, parent=None):
+        super().__init__(x, y, w, h, parent)
+        self.radius = radius
+        self.color = color
+        self.setBrush(QBrush(color))
+        self.setPen(QPen(Qt.NoPen))
 
-        self.btn_minimize = tk.Button(btn_frame, text="Свернуть", command=self.minimize_window,
-                                      bg='#333', fg='white', font=('Arial', 12),
-                                      relief=tk.FLAT, activebackground='#555')
-        self.btn_minimize.pack(side=tk.LEFT, padx=5)
+    def paint(self, painter, option, widget=None):
+        painter.setBrush(self.brush())
+        painter.setPen(self.pen())
+        painter.drawRoundedRect(self.rect(), self.radius, self.radius)
 
-        self.btn_update = tk.Button(btn_frame, text="Обновление", command=self.run_update,
-                                    bg='#333', fg='white', font=('Arial', 12),
-                                    relief=tk.FLAT, activebackground='#555')
-        self.btn_update.pack(side=tk.LEFT, padx=5)
 
-        # Область логов с прокруткой
-        self.log_text = scrolledtext.ScrolledText(bottom_frame, bg='#111', fg='#888',
-                                                   font=('Courier', 9), wrap=tk.WORD,
-                                                   height=15, relief=tk.FLAT)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+class EyesWidget(QGraphicsView):
+    """Виджет с глазами, поддерживающий анимацию и моргание."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setScene(QGraphicsScene(self))
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setRenderHint(QPainter.Antialiasing)
 
         # Параметры глаз
-        self.eye_width = 60           # ширина (стала меньше, так как вертикальные)
-        self.eye_height = 140          # высота (вытянутые вверх)
-        self.eye_spacing = 30          # расстояние между глазами
-        self.eye_color = '#aaaaaa'     # светло-серый
-        self.blink_color = '#222222'   # цвет закрытого глаза
-        self.blinking = False
-        self.blink_after_id = None
+        self.eye_width = 240
+        self.eye_height = 560
+        self.eye_spacing = 30
+        self.eye_radius = 60
+        self.eye_color_open = QColor(170, 170, 170)   # #aaaaaa
+        self.eye_color_closed = QColor(34, 34, 34)    # #222222
+
+        self.left_eye = None
+        self.right_eye = None
         self.eyes_open = True
-
-        # Смещение для дрожания
+        self.blinking = False
         self.shake_offset = 0
-        self.shake_after_id = None
 
-        # Координаты глаз (будут установлены после отображения окна)
-        self.eye_y = 0
-        self.left_eye_x = 0
-        self.right_eye_x = 0
+        self.setup_eyes()
 
-        # Обновим позицию после того, как окно отобразится
-        self.root.after(100, self.initialize_position)
+        # Таймеры и анимации
+        self.blink_timer = QTimer(self)
+        self.blink_timer.timeout.connect(self.start_blink)
+        self.schedule_next_blink()
 
-        # Запускаем моргание и дрожание
-        self.schedule_blink()
-        self.schedule_shake()
+        self.shake_timer = QTimer(self)
+        self.shake_timer.timeout.connect(self.shake)
+        self.shake_timer.start(1000)  # каждую секунду
 
-        # Запускаем обновление логов и метрик
-        self.update_logs()
+    def resizeEvent(self, event):
+        """Центрируем глаза при изменении размера."""
+        super().resizeEvent(event)
+        self.center_eyes()
 
-    def quit_fullscreen(self, event=None):
-        self.root.attributes('-fullscreen', False)
+    def center_eyes(self):
+        if not self.left_eye or not self.right_eye:
+            return
+        w = self.width()
+        h = self.height()
+        # Вычисляем позицию
+        eye_y = max(0, (h - self.eye_height) // 2)
+        left_x = (w - 2*self.eye_width - self.eye_spacing) // 2
+        right_x = left_x + self.eye_width + self.eye_spacing
 
-    def minimize_window(self):
-        self.root.iconify()
+        self.left_eye.setPos(left_x, eye_y)
+        self.right_eye.setPos(right_x, eye_y)
 
-    def initialize_position(self):
-        """Вычисляет позицию глаз после того, как холст получил размеры."""
-        self.update_position()
-
-    def update_position(self):
-        """Пересчитывает координаты глаз на основе текущего размера холста."""
-        w = self.canvas.winfo_width()
-        h = self.canvas.winfo_height()
-        if w > 10 and h > 10:
-            self.eye_y = h // 2 - self.eye_height // 2
-            self.left_eye_x = w // 2 - self.eye_width - self.eye_spacing // 2
-            self.right_eye_x = w // 2 + self.eye_spacing // 2
-            self.draw_eyes()
-
-    def draw_eyes(self):
-        """Рисует глаза с учётом состояния и смещения."""
-        self.canvas.delete('eye')
-
-        # Радиус скругления (зависит от ширины/высоты)
-        r = 20
-
+    def setup_eyes(self):
+        self.scene().clear()
         # Левый глаз
-        x1 = self.left_eye_x + self.shake_offset
-        y1 = self.eye_y
-        x2 = x1 + self.eye_width
-        y2 = y1 + self.eye_height
-        color = self.eye_color if self.eyes_open else self.blink_color
-
-        # Прямоугольник с заливкой
-        self.canvas.create_rectangle(x1, y1, x2, y2,
-                                     fill=color, outline='', tags='eye')
-        # Угловые закругления (круги)
-        self.canvas.create_oval(x1, y1, x1 + 2*r, y1 + 2*r,
-                                fill=color, outline='', tags='eye')
-        self.canvas.create_oval(x2 - 2*r, y1, x2, y1 + 2*r,
-                                fill=color, outline='', tags='eye')
-        self.canvas.create_oval(x1, y2 - 2*r, x1 + 2*r, y2,
-                                fill=color, outline='', tags='eye')
-        self.canvas.create_oval(x2 - 2*r, y2 - 2*r, x2, y2,
-                                fill=color, outline='', tags='eye')
-
+        self.left_eye = RoundedRectItem(0, 0, self.eye_width, self.eye_height,
+                                        self.eye_radius, self.eye_color_open)
+        self.scene().addItem(self.left_eye)
         # Правый глаз
-        x1 = self.right_eye_x + self.shake_offset
-        y1 = self.eye_y
-        x2 = x1 + self.eye_width
-        y2 = y1 + self.eye_height
-        self.canvas.create_rectangle(x1, y1, x2, y2,
-                                     fill=color, outline='', tags='eye')
-        self.canvas.create_oval(x1, y1, x1 + 2*r, y1 + 2*r,
-                                fill=color, outline='', tags='eye')
-        self.canvas.create_oval(x2 - 2*r, y1, x2, y1 + 2*r,
-                                fill=color, outline='', tags='eye')
-        self.canvas.create_oval(x1, y2 - 2*r, x1 + 2*r, y2,
-                                fill=color, outline='', tags='eye')
-        self.canvas.create_oval(x2 - 2*r, y2 - 2*r, x2, y2,
-                                fill=color, outline='', tags='eye')
+        self.right_eye = RoundedRectItem(0, 0, self.eye_width, self.eye_height,
+                                         self.eye_radius, self.eye_color_open)
+        self.scene().addItem(self.right_eye)
+        self.center_eyes()
 
-    def blink(self):
-        """Закрыть глаза, потом открыть через 150 мс."""
-        if self.blinking:
+    def set_eyes_color(self, color):
+        self.left_eye.setBrush(QBrush(color))
+        self.right_eye.setBrush(QBrush(color))
+
+    def start_blink(self):
+        if self.blinking or not self.eyes_open:
             return
         self.blinking = True
         self.eyes_open = False
-        self.draw_eyes()
-        self.root.after(150, self.open_eyes)
+        self.set_eyes_color(self.eye_color_closed)
+        QTimer.singleShot(150, self.end_blink)
 
-    def open_eyes(self):
+    def end_blink(self):
         self.eyes_open = True
-        self.draw_eyes()
+        self.set_eyes_color(self.eye_color_open)
         self.blinking = False
+        self.schedule_next_blink()
 
-    def schedule_blink(self):
-        """Планирует следующее моргание через 5-15 секунд."""
+    def schedule_next_blink(self):
         interval = random.randint(5000, 15000)
-        self.blink_after_id = self.root.after(interval, self.do_blink)
+        self.blink_timer.start(interval)
 
-    def do_blink(self):
-        self.blink()
-        self.schedule_blink()
+    def shake(self):
+        """Короткая анимация дрожания."""
+        # Создаём анимацию для смещения по X
+        anim = QPropertyAnimation(self, b"shake_offset")
+        anim.setDuration(300)
+        anim.setStartValue(-3)
+        anim.setKeyValueAt(0.25, 2)
+        anim.setKeyValueAt(0.5, -2)
+        anim.setKeyValueAt(0.75, 1)
+        anim.setEndValue(0)
+        anim.setEasingCurve(QEasingCurve.OutSine)
+        anim.start()
 
-    def schedule_shake(self):
-        """Запускает цикл дрожания раз в секунду."""
-        self.shake_loop()
+    def get_shake_offset(self):
+        return self._shake_offset if hasattr(self, '_shake_offset') else 0
 
-    def shake_loop(self):
-        """Меняет смещение глаз случайным образом и перерисовывает."""
-        # Новое случайное смещение от -3 до 3
-        self.shake_offset = random.randint(-3, 3)
-        self.draw_eyes()
-        # Повтор через 1 секунду
-        self.shake_after_id = self.root.after(1000, self.shake_loop)
+    def set_shake_offset(self, offset):
+        self._shake_offset = offset
+        if self.left_eye and self.right_eye:
+            # Сохраняем базовые позиции и добавляем смещение
+            # Проще каждый раз пересчитывать базовые позиции и применять смещение
+            self.center_eyes()
+            self.left_eye.moveBy(offset, 0)
+            self.right_eye.moveBy(offset, 0)
+
+    shake_offset = property(get_shake_offset, set_shake_offset)
+
+
+class ChillMonitor(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Chill Monitor")
+        self.setStyleSheet("background-color: black; color: #888;")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.showFullScreen()
+
+        # Центральный виджет
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        # Виджет глаз
+        self.eyes = EyesWidget()
+        layout.addWidget(self.eyes, stretch=1)  # занимает всё доступное пространство
+
+        # Нижняя панель
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(5)
+
+        # Кнопки
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(5)
+
+        self.btn_minimize = QPushButton("Свернуть")
+        self.btn_minimize.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-size: 14px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+            QPushButton:pressed {
+                background-color: #777;
+            }
+        """)
+        self.btn_minimize.clicked.connect(self.showMinimized)
+        btn_layout.addWidget(self.btn_minimize)
+
+        self.btn_update = QPushButton("Обновление")
+        self.btn_update.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-size: 14px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+            QPushButton:pressed {
+                background-color: #777;
+            }
+            QPushButton:disabled {
+                background-color: #222;
+                color: #666;
+            }
+        """)
+        self.btn_update.clicked.connect(self.run_update)
+        btn_layout.addWidget(self.btn_update)
+        btn_layout.addStretch()
+
+        bottom_layout.addLayout(btn_layout)
+
+        # Текстовое поле для логов
+        self.log_text = QTextEdit()
+        self.log_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #111;
+                color: #888;
+                border: none;
+                font-family: Courier;
+                font-size: 9pt;
+            }
+        """)
+        self.log_text.setReadOnly(True)
+        self.log_text.setLineWrapMode(QTextEdit.NoWrap)
+        bottom_layout.addWidget(self.log_text)
+
+        layout.addWidget(bottom_widget)
+
+        # Таймер обновления логов
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.update_logs)
+        self.update_timer.start(2000)
+        self.update_logs()
+
+        # Обработка клавиши Escape
+        self.escape_action = None
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.showNormal()  # или просто оставляем полноэкранный? Можно выйти из фуллскрина.
+            # Для выхода из полноэкранного режима можно установить self.showNormal()
+            self.setWindowFlags(Qt.Window)
+            self.showNormal()
+        super().keyPressEvent(event)
 
     def update_logs(self):
-        """Обновляет текст логов и метрики вверху."""
-        # Получаем метрики
-        cpu = psutil.cpu_percent()
-        ram = psutil.virtual_memory().percent
-        temp = get_cpu_temp()
-        metrics = f"CPU:{cpu}%  RAM:{ram}%  TEMP:{temp}"
-
-        # Получаем последние логи
+        metrics = f"CPU: {psutil.cpu_percent()}%  RAM: {psutil.virtual_memory().percent}%  TEMP: {get_cpu_temp()}"
         logs = get_recent_logs(500)
-
-        # Обновляем текстовое поле
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.insert(tk.END, metrics + "\n\n")
-        for line in logs:
-            self.log_text.insert(tk.END, line + "\n")
-        self.log_text.config(state=tk.DISABLED)
-        # Прокрутка вниз, чтобы видеть новые строки
-        self.log_text.see(tk.END)
-
-        # Планируем следующее обновление через 2 секунды
-        self.root.after(2000, self.update_logs)
+        text = metrics + "\n\n" + "\n".join(logs)
+        self.log_text.setText(text)
+        # Прокрутка вниз
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(cursor.End)
+        self.log_text.setTextCursor(cursor)
 
     def run_update(self):
-        """Запускает лаунчер для обновления кода."""
-        # Блокируем кнопку, чтобы не запустить повторно
-        self.btn_update.config(state=tk.DISABLED, text="Обновляется...")
-        # Запускаем лаунчер в фоне
+        self.btn_update.setEnabled(False)
+        self.btn_update.setText("Обновляется...")
         try:
-            # Путь к лаунчеру (рядом с main.py)
             launcher_path = os.path.join(os.path.dirname(__file__), "launcher.py")
             if os.path.exists(launcher_path):
                 subprocess.Popen([sys.executable, launcher_path])
                 log_message("Запущен процесс обновления")
             else:
                 log_message("launcher.py не найден")
-                self.btn_update.config(state=tk.NORMAL, text="Обновление")
-                return
         except Exception as e:
             log_message(f"Ошибка запуска лаунчера: {e}")
-        # Через некоторое время вернём кнопку в активное состояние
-        self.root.after(10000, self.enable_update_button)  # 10 секунд, чтобы процесс успел завершиться
+        # Разблокировать кнопку через 10 секунд
+        QTimer.singleShot(10000, self.enable_update_button)
 
     def enable_update_button(self):
-        self.btn_update.config(state=tk.NORMAL, text="Обновление")
+        self.btn_update.setEnabled(True)
+        self.btn_update.setText("Обновление")
+
 
 def main():
-    log_message("Запуск Chill Monitor")
-    root = tk.Tk()
-    app = ChillEyes(root)
-    root.bind('<Configure>', lambda e: app.update_position())
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = ChillMonitor()
+    window.show()
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
