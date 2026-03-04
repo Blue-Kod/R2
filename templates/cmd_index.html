@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2 - Управление</title>
+    <style>
+        body {
+            background-color: black;
+            color: #ccc;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            flex-direction: column;
+        }
+        h1 {
+            color: white;
+            margin-bottom: 40px;
+        }
+        .menu {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .card {
+            background: #111;
+            border-radius: 12px;
+            padding: 30px;
+            width: 250px;
+            text-align: center;
+            cursor: pointer;
+            transition: background 0.2s;
+            border: 1px solid #333;
+        }
+        .card:hover {
+            background: #222;
+        }
+        .card h2 {
+            color: white;
+            margin-bottom: 15px;
+        }
+        .card p {
+            color: #888;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>R2 Control Panel</h1>
+    <div class="menu">
+        <div class="card" onclick="location.href='/screen'">
+            <h2>👀 Монитор</h2>
+            <p>Экран с глазами и системными логами</p>
+        </div>
+        <div class="card" onclick="location.href='/cmd/main'">
+            <h2>🐍 Python (main)</h2>
+            <p>Выполнить Python-код в контексте приложения</p>
+        </div>
+        <div class="card" onclick="location.href='/cmd/os'">
+            <h2>💻 Системная консоль</h2>
+            <p>Выполнить команды ОС</p>
+        </div>
+    </div>
+</body>
+</html>
