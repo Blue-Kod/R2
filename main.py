@@ -141,7 +141,10 @@ def handle_connect():
     sid = request.sid
     log_message(f"Терминал подключен: {sid}")
     try:
-        proc = ptyprocess.PtyProcess.spawn(['/bin/bash'])
+        # Запускаем bash в интерактивном режиме с явным указанием размера
+        proc = ptyprocess.PtyProcess.spawn(['/bin/bash', '-i'])
+        # Устанавливаем начальный размер терминала (по умолчанию 80x24)
+        proc.setwinsize(24, 80)
         active_sessions[sid] = {'proc': proc}
 
         def read_output():
@@ -149,17 +152,21 @@ def handle_connect():
                 while True:
                     data = proc.read(1024)
                     if not data:
+                        log_message(f"read_output: получен EOF для {sid}")
                         break
+                    log_message(f"read_output: получено {len(data)} байт для {sid}")
                     socketio.emit('output', data.decode('utf-8', errors='replace'), room=sid)
             except Exception as e:
                 log_message(f"Ошибка чтения из pty для {sid}: {e}")
             finally:
+                log_message(f"Выход из read_output для {sid}")
                 socketio.emit('exit', room=sid)
                 active_sessions.pop(sid, None)
 
         thread = threading.Thread(target=read_output, daemon=True)
         thread.start()
         active_sessions[sid]['thread'] = thread
+        log_message(f"Терминал для {sid} успешно создан")
     except Exception as e:
         log_message(f"Не удалось создать pty для {sid}: {e}")
         socketio.emit('output', f"Ошибка запуска терминала: {e}\r\n", room=sid)
@@ -168,10 +175,12 @@ def handle_connect():
 @socketio.on('input')
 def handle_input(data):
     sid = request.sid
+    log_message(f"Получен input от {sid}: {repr(data)}")
     proc_info = active_sessions.get(sid)
     if proc_info:
         try:
             proc_info['proc'].write(data.encode('utf-8'))
+            log_message(f"Данные записаны в pty для {sid}")
         except Exception as e:
             log_message(f"Ошибка записи в pty для {sid}: {e}")
 
