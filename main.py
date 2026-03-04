@@ -109,7 +109,41 @@ def api_data():
         'logs': logs
     })
 
+# main.py (фрагменты)
+@app.route('/api/cmd/os', methods=['POST'])
+def api_cmd_os():
+    data = request.get_json()
+    cmd = data.get('cmd', '').strip()
+    if not cmd:
+        return jsonify({'output': '', 'error': 'Пустая команда'})
 
+    try:
+        # Таймаут 30 секунд, чтобы команда не висела вечно
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        output = result.stdout + result.stderr
+        return jsonify({'output': output, 'error': ''})
+    except subprocess.TimeoutExpired:
+        return jsonify({'output': '', 'error': 'Команда выполнялась слишком долго (>30с)'})
+    except Exception as e:
+        return jsonify({'output': '', 'error': str(e)})
+
+@app.route('/api/cmd/main', methods=['POST'])
+def api_cmd_main():
+    data = request.get_json()
+    code = data.get('cmd', '').strip()
+    if not code:
+        return jsonify({'output': '', 'error': 'Пустой код'})
+
+    try:
+        # Таймаут 30 секунд
+        result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=30)
+        output = result.stdout + result.stderr
+        return jsonify({'output': output, 'error': ''})
+    except subprocess.TimeoutExpired:
+        return jsonify({'output': '', 'error': 'Код выполнялся слишком долго (>30с)'})
+    except Exception as e:
+        return jsonify({'output': '', 'error': str(e)})
+        
 @app.route('/api/update', methods=['POST'])
 def api_update():
     try:
