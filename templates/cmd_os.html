@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 - System Console</title>
+    <title>R2 - Системная консоль</title>
     <style>
         * {
             margin: 0;
@@ -12,156 +12,147 @@
         }
         body {
             background-color: black;
-            color: #ccc;
-            font-family: 'Courier New', monospace;
+            color: white;
+            font-family: 'Ubuntu Sans Mono', monospace;
             height: 100vh;
-            padding: 20px;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
         .header {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
+            padding: 10px;
+            background: #111;
+            border-bottom: 1px solid #333;
         }
-        h2 {
-            color: white;
-        }
-        .back-btn {
+        .header button {
             background: #333;
             color: white;
             border: none;
-            padding: 8px 16px;
-            border-radius: 20px;
+            padding: 6px 12px;
+            border-radius: 4px;
             cursor: pointer;
-            text-decoration: none;
-            font-size: 14px;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            margin-right: 10px;
         }
-        .back-btn:hover {
+        .header button:hover {
             background: #555;
         }
-        .console {
+        .header span {
+            font-size: 18px;
+        }
+        #output {
             flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            min-height: 0;
+            overflow-y: auto;
+            padding: 10px;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            background: black;
+            color: white;
         }
         .input-area {
             display: flex;
-            gap: 10px;
-        }
-        input[type=text] {
-            flex: 1;
+            border-top: 1px solid #333;
             background: #111;
-            color: #0f0;
+            padding: 8px;
+        }
+        #command {
+            flex: 1;
+            background: black;
+            color: white;
             border: 1px solid #333;
             padding: 10px;
-            font-family: 'Courier New', monospace;
-            font-size: 16px;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            font-size: 14px;
+            outline: none;
+            border-radius: 4px;
         }
-        button {
+        #command:focus {
+            border-color: #555;
+        }
+        #send {
             background: #333;
             color: white;
             border: none;
-            padding: 10px 20px;
-            border-radius: 20px;
+            padding: 0 20px;
+            margin-left: 8px;
+            border-radius: 4px;
             cursor: pointer;
-            font-size: 16px;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            font-size: 14px;
         }
-        button:hover {
+        #send:hover {
             background: #555;
         }
-        button:disabled {
+        #send:disabled {
             opacity: 0.5;
             cursor: not-allowed;
         }
-        .output {
-            background: #111;
-            border: 1px solid #333;
-            padding: 10px;
-            overflow-y: auto;
-            flex: 1;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        .output .error {
-            color: #f66;
-        }
-        .status {
-            color: #888;
-            font-size: 12px;
+        .error {
+            color: #ff6b6b;
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h2>💻 System Console (OS)</h2>
-        <a href="/" class="back-btn">← На главную</a>
+        <button onclick="window.location.href='/'">Главная</button>
+        <span>Системная консоль</span>
     </div>
-    <div class="console">
-        <div class="input-area">
-            <input type="text" id="cmdInput" placeholder="Введите команду..." value="ls -la">
-            <button id="execBtn">Выполнить</button>
-        </div>
-        <div class="output" id="output"></div>
-        <div class="status" id="status"></div>
+    <div id="output"></div>
+    <div class="input-area">
+        <input type="text" id="command" placeholder="Введите команду..." autofocus>
+        <button id="send">Выполнить</button>
     </div>
-    <script>
-        const cmdInput = document.getElementById('cmdInput');
-        const execBtn = document.getElementById('execBtn');
-        const outputDiv = document.getElementById('output');
-        const statusDiv = document.getElementById('status');
 
-        execBtn.addEventListener('click', async () => {
-            const cmd = cmdInput.value.trim();
+    <script>
+        const outputDiv = document.getElementById('output');
+        const commandInput = document.getElementById('command');
+        const sendBtn = document.getElementById('send');
+
+        function appendOutput(text, isError = false) {
+            const line = document.createElement('div');
+            line.textContent = text;
+            if (isError) line.style.color = '#ff6b6b';
+            outputDiv.appendChild(line);
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
+
+        async function executeCommand() {
+            const cmd = commandInput.value.trim();
             if (!cmd) return;
-            execBtn.disabled = true;
-            statusDiv.textContent = 'Выполнение...';
-            outputDiv.innerHTML = '';
+
+            appendOutput(`$ ${cmd}`);
+            commandInput.value = '';
+            sendBtn.disabled = true;
+
             try {
-                const response = await fetch('/api/exec/os', {
+                const response = await fetch('/api/run_command', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cmd })
+                    body: JSON.stringify({ command: cmd })
                 });
-                const result = await response.json();
-                if (response.ok) {
-                    let html = '';
-                    if (result.stdout) html += `<span style="color:#0f0">${escapeHtml(result.stdout)}</span>`;
-                    if (result.stderr) html += `<span class="error">${escapeHtml(result.stderr)}</span>`;
-                    if (result.returncode !== 0) html += `<div>⛔ Возврат: ${result.returncode}</div>`;
-                    outputDiv.innerHTML = html || '<span style="color:#888">(пустой вывод)</span>';
+                if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+                const data = await response.json();
+                if (data.output) {
+                    appendOutput(data.output);
                 } else {
-                    outputDiv.innerHTML = `<span class="error">Ошибка: ${result.error || 'неизвестная'}</span>`;
+                    appendOutput('(пустой вывод)');
                 }
             } catch (e) {
-                outputDiv.innerHTML = `<span class="error">Сетевая ошибка: ${e}</span>`;
+                appendOutput(`Ошибка: ${e.message}`, true);
             } finally {
-                execBtn.disabled = false;
-                statusDiv.textContent = '';
+                sendBtn.disabled = false;
+                commandInput.focus();
             }
-        });
-
-        // Поддержка Enter
-        cmdInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                execBtn.click();
-            }
-        });
-
-        function escapeHtml(unsafe) {
-            return unsafe.replace(/[&<>"]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                if (m === '"') return '&quot;';
-                return m;
-            });
         }
+
+        sendBtn.addEventListener('click', executeCommand);
+        commandInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') executeCommand();
+        });
     </script>
 </body>
 </html>
