@@ -175,19 +175,6 @@ def handle_input(data):
         except Exception as e:
             log_message(f"Ошибка записи в pty для {sid}: {e}")
 
-@socketio.on('resize')
-def handle_resize(data):
-    sid = request.sid
-    proc_info = active_sessions.get(sid)
-    if proc_info:
-        try:
-            rows = data.get('rows')
-            cols = data.get('cols')
-            if rows and cols:
-                proc_info['proc'].setwinsize(rows, cols)
-        except Exception as e:
-            log_message(f"Ошибка изменения размера pty для {sid}: {e}")
-
 @socketio.on('disconnect')
 def handle_disconnect():
     sid = request.sid
