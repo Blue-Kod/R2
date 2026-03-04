@@ -10,18 +10,14 @@ import socket
 import datetime
 import pwd
 import shutil
-import signal
 from collections import deque
 
 import psutil
-from flask import Flask, render_template, jsonify, request, abort
+from flask import Flask, render_template, jsonify, request
 
 app = Flask(__name__)
 
 LOG_FILE = "logs.txt"
-
-# Для команд ОС
-CMD_TIMEOUT = 30  # таймаут выполнения команды в секундах
 
 
 def log_message(*args):
@@ -80,10 +76,9 @@ def get_recent_logs(n=500):
     return ["Нет доступа к системным логам"]
 
 
-# ---------- Страницы ----------
 @app.route('/')
 def index():
-    return render_template('cmd_index.html')  # стартовая страница с выбором режима
+    return render_template('index.html')
 
 
 @app.route('/screen')
@@ -101,7 +96,6 @@ def cmd_os():
     return render_template('cmd_os.html')
 
 
-# ---------- API ----------
 @app.route('/api/data')
 def api_data():
     cpu = psutil.cpu_percent()
@@ -118,17 +112,14 @@ def api_data():
 
 @app.route('/api/update', methods=['POST'])
 def api_update():
-    """Запускает лаунчер и завершает текущий процесс."""
     try:
         launcher_path = os.path.join(os.path.dirname(__file__), "launcher.py")
         if os.path.exists(launcher_path):
             subprocess.Popen([sys.executable, launcher_path])
             log_message("Запущен процесс обновления")
-
             def shutdown():
                 time.sleep(1)
                 os._exit(0)
-
             threading.Thread(target=shutdown, daemon=True).start()
             return jsonify({'status': 'ok', 'message': 'Обновление запущено'})
         else:
@@ -140,78 +131,53 @@ def api_update():
 
 @app.route('/api/shutdown', methods=['POST'])
 def api_shutdown():
-    """Завершает процесс main.py."""
     log_message("Получена команда на завершение")
-
     def shutdown():
         time.sleep(1)
         os._exit(0)
-
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
 
-@app.route('/api/exec/main', methods=['POST'])
-def api_exec_main():
-    """Выполняет Python-код в контексте main.py (осторожно!)."""
+@app.route('/api/run_python', methods=['POST'])
+def run_python():
     code = request.json.get('code', '')
-    if not code:
-        return jsonify({'error': 'Пустой код'}), 400
-
     try:
-        # Создаём временный файл и выполняем через subprocess, чтобы изолировать?
-        # Но проще использовать exec с ограничением глобальных переменных.
-        # Здесь нужно быть осторожным: код может навредить системе.
-        # Для безопасности выполним в отдельном процессе с таймаутом.
-        # Для простоты используем exec, но добавим предупреждение.
-        # В реальном проекте лучше использовать multiprocessing или контейнеры.
-        # Реализуем через subprocess: запускаем python -c с этим кодом.
-        result = subprocess.run(
+        # Запускаем Python код в отдельном процессе с ограничением времени
+        proc = subprocess.run(
             [sys.executable, '-c', code],
             capture_output=True,
             text=True,
-            timeout=CMD_TIMEOUT
+            timeout=10
         )
-        return jsonify({
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'returncode': result.returncode
-        })
+        output = proc.stdout + proc.stderr
+        return jsonify({'output': output})
     except subprocess.TimeoutExpired:
-        return jsonify({'error': f'Команда превысила время ожидания ({CMD_TIMEOUT} с)'}), 408
+        return jsonify({'output': 'Ошибка: время выполнения истекло (>10 сек)'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'output': f'Ошибка: {str(e)}'})
 
 
-@app.route('/api/exec/os', methods=['POST'])
-def api_exec_os():
-    """Выполняет системную команду."""
-    cmd = request.json.get('cmd', '')
-    if not cmd:
-        return jsonify({'error': 'Пустая команда'}), 400
-
+@app.route('/api/run_command', methods=['POST'])
+def run_command():
+    command = request.json.get('command', '')
     try:
-        # Запускаем через shell=True (осторожно, возможна инъекция)
-        # Можно использовать shlex для безопасности, но shell=True нужен для пайпов и т.д.
-        result = subprocess.run(
-            cmd,
+        # Запускаем команду shell
+        proc = subprocess.run(
+            command,
             shell=True,
             capture_output=True,
             text=True,
-            timeout=CMD_TIMEOUT
+            timeout=30
         )
-        return jsonify({
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'returncode': result.returncode
-        })
+        output = proc.stdout + proc.stderr
+        return jsonify({'output': output})
     except subprocess.TimeoutExpired:
-        return jsonify({'error': f'Команда превысила время ожидания ({CMD_TIMEOUT} с)'}), 408
+        return jsonify({'output': 'Ошибка: время выполнения истекло (>30 сек)'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'output': f'Ошибка: {str(e)}'})
 
 
-# ---------- Браузер ----------
 def get_display_user():
     if os.geteuid() != 0:
         return None
@@ -255,7 +221,8 @@ def run_browser_as_user(command):
         subprocess.Popen(command)
 
 
-def open_browser_kiosk(url="http://127.0.0.1:5000/screen"):
+def open_browser_kiosk():
+    url = "http://127.0.0.1:5000/screen"
     is_root = (os.geteuid() == 0)
 
     if shutil.which("chromium-browser"):
@@ -297,7 +264,7 @@ def start_browser_when_ready():
 def main():
     log_message("Запуск веб-сервера R2")
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
