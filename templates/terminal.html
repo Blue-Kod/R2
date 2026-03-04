@@ -94,6 +94,18 @@
         let lastOutput = '';
         let pollInterval = 100; // миллисекунд
 
+        // Функция для удаления ANSI escape-последовательностей
+        function stripAnsi(str) {
+            // Убирает CSI последовательности: \x1b\[[0-9;]*[a-zA-Z]
+            // OSC: \x1b\][0-9;]*[a-zA-Z]?
+            // также убирает символы \x07 (BEL) и \x1b\\
+            return str
+                .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                .replace(/\x1b\][0-9;]*[a-zA-Z]?/g, '')
+                .replace(/\x1b\\/g, '')
+                .replace(/\x07/g, '');
+        }
+
         function escapeHtml(unsafe) {
             return unsafe.replace(/[&<>]/g, function(m) {
                 if (m === '&') return '&amp;';
@@ -104,12 +116,12 @@
         }
 
         function appendOutput(text) {
-            outputDiv.innerHTML += text;
+            outputDiv.innerHTML += escapeHtml(stripAnsi(text));
             outputDiv.scrollTop = outputDiv.scrollHeight;
         }
 
         function setOutput(text) {
-            outputDiv.innerHTML = text;
+            outputDiv.innerHTML = escapeHtml(stripAnsi(text));
             outputDiv.scrollTop = outputDiv.scrollHeight;
         }
 
@@ -124,7 +136,7 @@
                 }
             } catch (err) {
                 console.error('Ошибка получения вывода:', err);
-                appendOutput(`\r\n\x1b[31mОшибка: ${err.message}\x1b[0m\r\n`);
+                appendOutput(`\r\nОшибка: ${err.message}\r\n`);
             }
         }
 
@@ -138,13 +150,12 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 if (data.error) {
-                    appendOutput(`\r\n\x1b[31mОшибка: ${data.error}\x1b[0m\r\n`);
+                    appendOutput(`\r\nОшибка: ${data.error}\r\n`);
                 } else {
-                    // Сразу запросим вывод, чтобы увидеть результат команды
-                    await fetchOutput();
+                    await fetchOutput(); // сразу обновляем вывод после команды
                 }
             } catch (err) {
-                appendOutput(`\r\n\x1b[31mОшибка отправки: ${err.message}\x1b[0m\r\n`);
+                appendOutput(`\r\nОшибка отправки: ${err.message}\r\n`);
             }
         }
 
@@ -159,8 +170,8 @@
             }
         });
 
-        // Запускаем опрос
-        fetchOutput(); // сразу получить начальный вывод
+        // Запускаем опрос вывода
+        fetchOutput();
         setInterval(fetchOutput, pollInterval);
     </script>
 </body>
