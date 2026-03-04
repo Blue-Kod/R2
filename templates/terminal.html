@@ -4,14 +4,72 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>R2 - Терминал</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: black; color: white; font-family: 'Ubuntu Sans Mono', monospace; height: 100vh; display: flex; flex-direction: column; }
-        header { background: #111; padding: 10px; text-align: center; border-bottom: 1px solid #333; }
-        header a { color: #fff; text-decoration: none; font-size: 20px; margin: 0 15px; }
-        header a:hover { text-decoration: underline; }
-        #terminal-container { flex: 1; padding: 10px; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: black;
+            color: #00ff00;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            background: #111;
+            padding: 10px;
+            text-align: center;
+            border-bottom: 1px solid #333;
+        }
+        header a {
+            color: #fff;
+            text-decoration: none;
+            font-size: 20px;
+            margin: 0 15px;
+        }
+        header a:hover {
+            text-decoration: underline;
+        }
+        #output {
+            flex: 1;
+            background: black;
+            color: #00ff00;
+            padding: 15px;
+            overflow-y: auto;
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Ubuntu Sans Mono', monospace;
+        }
+        .input-line {
+            display: flex;
+            background: #111;
+            border-top: 1px solid #333;
+            padding: 10px;
+        }
+        .prompt {
+            color: #00ff00;
+            font-size: 16px;
+            margin-right: 8px;
+            user-select: none;
+        }
+        #command {
+            flex: 1;
+            background: black;
+            border: none;
+            outline: none;
+            color: #00ff00;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            font-size: 16px;
+            caret-color: #00ff00;
+        }
+        #command::placeholder {
+            color: #006600;
+        }
     </style>
 </head>
 <body>
@@ -21,50 +79,74 @@
         <a href="/terminal">CMD</a>
         <a href="/logs">Логи</a>
     </header>
-    <div id="terminal-container"></div>
+    <div id="output"></div>
+    <div class="input-line">
+        <span class="prompt">$</span>
+        <input type="text" id="command" placeholder="Введите команду..." autofocus>
+    </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const term = new Terminal({
-                cursorBlink: true,
-                theme: { background: '#000000', foreground: '#ffffff' },
-                fontFamily: 'Ubuntu Sans Mono, monospace',
-                fontSize: 14
-            });
-            const fitAddon = new FitAddon.FitAddon();
-            term.loadAddon(fitAddon);
-            term.open(document.getElementById('terminal-container'));
-            fitAddon.fit();
+        const outputDiv = document.getElementById('output');
+        const commandInput = document.getElementById('command');
+        let socket = null;
+        let buffer = '';
 
-            const socket = io();
+        function connect() {
+            socket = io();
 
             socket.on('connect', () => {
-                term.write('Подключено к терминалу.\r\n');
+                appendOutput('Подключено к терминалу.\r\n');
+                commandInput.disabled = false;
+                commandInput.focus();
             });
 
             socket.on('output', (data) => {
-                term.write(data);
+                appendOutput(data);
             });
 
             socket.on('exit', () => {
-                term.write('\r\n\x1b[31mПроцесс завершен\x1b[0m\r\n');
+                appendOutput('\r\n\x1b[31mСессия завершена\x1b[0m\r\n');
+                commandInput.disabled = true;
             });
 
-            term.onData((data) => {
-                socket.emit('input', data);
+            socket.on('disconnect', () => {
+                appendOutput('\r\n\x1b[31mСоединение потеряно\x1b[0m\r\n');
+                commandInput.disabled = true;
             });
+        }
 
-            term.onResize((size) => {
-                socket.emit('resize', { cols: size.cols, rows: size.rows });
-            });
+        function appendOutput(text) {
+            outputDiv.innerHTML += escapeHtml(text);
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
 
-            window.addEventListener('resize', () => {
-                fitAddon.fit();
+        function escapeHtml(unsafe) {
+            return unsafe.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
             });
+        }
+
+        commandInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const cmd = commandInput.value;
+                if (cmd.trim() !== '' && socket && socket.connected) {
+                    // Отображаем введённую команду в выводе
+                    appendOutput('$ ' + cmd + '\r\n');
+                    // Отправляем команду + перевод строки, чтобы shell её выполнил
+                    socket.emit('input', cmd + '\n');
+                    commandInput.value = '';
+                } else if (!socket || !socket.connected) {
+                    appendOutput('\x1b[31mНет подключения к серверу\x1b[0m\r\n');
+                }
+            }
         });
+
+        // Подключаемся при загрузке страницы
+        connect();
     </script>
 </body>
 </html>
