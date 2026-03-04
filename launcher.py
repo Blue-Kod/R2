@@ -9,12 +9,14 @@ Launcher для автообновления приложения из GitHub р
 Скрипт использует python3 и pip3 (через sys.executable, что гарантирует работу с тем же интерпретатором,
 которым запущен скрипт). Он скачивает последнюю версию репозитория https://github.com/Blue-Kod/R2,
 обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt,
-затем запускает main.py. При отсутствии интернета или ошибке обновления запускает текущую версию.
+затем запускает main.py в отдельном окне терминала (чтобы визуально видеть его работу).
+При отсутствии интернета или ошибке обновления запускает текущую версию.
 Работает без использования виртуального окружения (venv).
 
 Поддерживает установку/удаление автозапуска в Linux:
     python3 launcher.py                      # обычный запуск + автоустановка автозагрузки (если ещё не установлена)
     python3 launcher.py --dont-install-autostart   # запуск без автоматической установки автозагрузки
+    python3 launcher.py --no-terminal              # запустить main.py в текущем терминале (без нового окна)
     python3 launcher.py --install-autostart        # принудительно установить в автозагрузку
     python3 launcher.py --remove-autostart         # удалить из автозагрузки
 
@@ -34,6 +36,7 @@ import requests
 import argparse
 import platform
 import filecmp
+import shlex
 from pathlib import Path
 
 # Константы
@@ -197,21 +200,64 @@ def install_requirements():
         print(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
-def run_main():
-    """Запускает main.py, если он существует, используя текущий интерпретатор python3."""
+def run_main_in_terminal():
+    """Запускает main.py в новом окне терминала (если возможно), иначе в текущем."""
     main_path = Path(MAIN_SCRIPT)
     if not main_path.exists():
         print(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден в текущей директории.")
         return False
 
-    try:
-        print(f"[L] Запуск {MAIN_SCRIPT}...")
-        # Запускаем main.py с тем же python3
-        subprocess.run([sys.executable, MAIN_SCRIPT])
-        return True
-    except Exception as e:
-        print(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
-        return False
+    # Команда для запуска main.py (используем sys.executable для гарантии python3)
+    cmd = [sys.executable, MAIN_SCRIPT]
+    cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
+
+    # Проверяем, запущены ли мы в графической среде (имеется DISPLAY или WAYLAND_DISPLAY)
+    has_gui = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')
+
+    # Если есть GUI, пробуем найти доступный терминал
+    terminal_found = False
+    if has_gui:
+        # Список возможных эмуляторов терминала в порядке предпочтения
+        terminals = [
+            # name, command pattern ({} будет заменено на cmd_str)
+            ('gnome-terminal', 'gnome-terminal -- {}'),  # gnome-terminal требует опцию --, иногда --wait
+            ('xterm', 'xterm -hold -e {}'),              # -hold оставляет окно открытым после завершения
+            ('konsole', 'konsole -e {}'),
+            ('xfce4-terminal', 'xfce4-terminal -e {}'),
+            ('lxterminal', 'lxterminal -e {}'),
+            ('terminator', 'terminator -e {}'),
+            ('urxvt', 'urxvt -e {}'),
+            ('rxvt', 'rxvt -e {}'),
+        ]
+
+        for term_name, term_cmd_template in terminals:
+            if shutil.which(term_name):
+                # Формируем полную команду
+                full_cmd = term_cmd_template.format(cmd_str)
+                print(f"[L] Запускаю {MAIN_SCRIPT} в терминале {term_name}...")
+                try:
+                    # Используем shell=True, так как шаблон может содержать пробелы и опции
+                    subprocess.Popen(full_cmd, shell=True)
+                    terminal_found = True
+                    break
+                except Exception as e:
+                    print(f"[!] Не удалось запустить {term_name}: {e}")
+                    continue
+
+    if not terminal_found:
+        # Если нет GUI или не найден ни один терминал, запускаем в текущем
+        if not has_gui:
+            print("[L] Графическая среда не обнаружена. Запускаю в текущем терминале...")
+        else:
+            print("[L] Не найден подходящий эмулятор терминала. Запускаю в текущем терминале...")
+        try:
+            subprocess.run(cmd)
+            return True
+        except Exception as e:
+            print(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
+            return False
+
+    return True
 
 # --- Функции для автозапуска в Linux ---
 def is_autostart_installed():
@@ -317,6 +363,7 @@ def main():
     parser.add_argument("--install-autostart", action="store_true", help="Установить скрипт в автозагрузку (только Linux)")
     parser.add_argument("--remove-autostart", action="store_true", help="Удалить скрипт из автозагрузки (только Linux)")
     parser.add_argument("--dont-install-autostart", action="store_true", help="Не устанавливать автозагрузку автоматически")
+    parser.add_argument("--no-terminal", action="store_true", help="Запустить main.py в текущем терминале (без нового окна)")
     args, unknown = parser.parse_known_args()
 
     # Обработка специальных команд автозапуска
@@ -374,8 +421,13 @@ def main():
     else:
         print("[*] Нет интернета, пропускаем обновление.")
 
-    # В любом случае пытаемся запустить main.py
-    run_main()
+    # Запускаем main.py в отдельном терминале (если не указано --no-terminal)
+    if args.no_terminal:
+        print("[L] Запуск main.py в текущем терминале (--no-terminal)...")
+        from run_main import run_main
+        run_main()  # используем старую функцию run_main (которая была ранее в коде)
+    else:
+        run_main_in_terminal()
 
 if __name__ == "__main__":
     main()
