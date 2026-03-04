@@ -70,6 +70,9 @@
         #command::placeholder {
             color: #006600;
         }
+        .error {
+            color: #ff5555;
+        }
     </style>
 </head>
 <body>
@@ -90,62 +93,55 @@
         const outputDiv = document.getElementById('output');
         const commandInput = document.getElementById('command');
         let socket = null;
-        let buffer = '';
 
         function connect() {
             socket = io();
 
             socket.on('connect', () => {
-                appendOutput('Подключено к терминалу.\r\n');
+                appendOutput('Подключено к терминалу.\r\n', false);
                 commandInput.disabled = false;
                 commandInput.focus();
             });
 
             socket.on('output', (data) => {
-                appendOutput(data);
+                appendOutput(data, false);
             });
 
             socket.on('exit', () => {
-                appendOutput('\r\n\x1b[31mСессия завершена\x1b[0m\r\n');
+                appendOutput('\r\n\x1b[31mСессия завершена\x1b[0m\r\n', false);
                 commandInput.disabled = true;
             });
 
-            socket.on('disconnect', () => {
-                appendOutput('\r\n\x1b[31mСоединение потеряно\x1b[0m\r\n');
+            socket.on('disconnect', (reason) => {
+                appendOutput(`\r\n\x1b[31mСоединение потеряно: ${reason}\x1b[0m\r\n`, false);
                 commandInput.disabled = true;
+            });
+
+            socket.on('connect_error', (err) => {
+                appendOutput(`\r\n\x1b[31mОшибка подключения: ${err.message}\x1b[0m\r\n`, false);
             });
         }
 
-        function appendOutput(text) {
-            outputDiv.innerHTML += escapeHtml(text);
+        function appendOutput(text, isCommand = false) {
+            // Для отладки оставим текст как есть (escape-последовательности будут видны)
+            // Если хотим скрыть escape-коды, можно использовать обработку, но пока оставим.
+            outputDiv.innerHTML += text;
             outputDiv.scrollTop = outputDiv.scrollHeight;
-        }
-
-        function escapeHtml(unsafe) {
-            return unsafe.replace(/[&<>]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                return m;
-            });
         }
 
         commandInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 const cmd = commandInput.value;
                 if (cmd.trim() !== '' && socket && socket.connected) {
-                    // Отображаем введённую команду в выводе
-                    appendOutput('$ ' + cmd + '\r\n');
-                    // Отправляем команду + перевод строки, чтобы shell её выполнил
+                    appendOutput('$ ' + cmd + '\r\n', true);
                     socket.emit('input', cmd + '\n');
                     commandInput.value = '';
                 } else if (!socket || !socket.connected) {
-                    appendOutput('\x1b[31mНет подключения к серверу\x1b[0m\r\n');
+                    appendOutput('\x1b[31mНет подключения к серверу\x1b[0m\r\n', false);
                 }
             }
         });
 
-        // Подключаемся при загрузке страницы
         connect();
     </script>
 </body>
