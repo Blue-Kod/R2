@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2 - Терминал</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: black; color: white; font-family: 'Ubuntu Sans Mono', monospace; height: 100vh; display: flex; flex-direction: column; }
+        header { background: #111; padding: 10px; text-align: center; border-bottom: 1px solid #333; }
+        header a { color: #fff; text-decoration: none; font-size: 20px; margin: 0 15px; }
+        header a:hover { text-decoration: underline; }
+        #terminal-container { flex: 1; padding: 10px; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="/">R2</a>
+        <a href="/screen">Экран</a>
+        <a href="/terminal">CMD</a>
+        <a href="/logs">Логи</a>
+    </header>
+    <div id="terminal-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const term = new Terminal({
+                cursorBlink: true,
+                theme: { background: '#000000', foreground: '#ffffff' },
+                fontFamily: 'Ubuntu Sans Mono, monospace',
+                fontSize: 14
+            });
+            const fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(document.getElementById('terminal-container'));
+            fitAddon.fit();
+
+            const socket = io();
+
+            socket.on('connect', () => {
+                term.write('Подключено к терминалу.\r\n');
+            });
+
+            socket.on('output', (data) => {
+                term.write(data);
+            });
+
+            socket.on('exit', () => {
+                term.write('\r\n\x1b[31mПроцесс завершен\x1b[0m\r\n');
+            });
+
+            term.onData((data) => {
+                socket.emit('input', data);
+            });
+
+            term.onResize((size) => {
+                socket.emit('resize', { cols: size.cols, rows: size.rows });
+            });
+
+            window.addEventListener('resize', () => {
+                fitAddon.fit();
+            });
+        });
+    </script>
+</body>
+</html>
