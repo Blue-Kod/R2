@@ -11,6 +11,7 @@ Launcher для автообновления приложения из GitHub р
 обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt,
 затем запускает main.py. При запуске с графическим интерфейсом открывает новое окно терминала,
 в противном случае (если графика не готова) запускает main.py в фоновом режиме с сохранением вывода в лог-файл.
+Все сообщения лаунчера дублируются в консоль и в файл logs.txt.
 При отсутствии интернета или ошибке обновления запускает текущую версию.
 Работает без использования виртуального окружения (venv).
 
@@ -41,7 +42,7 @@ import filecmp
 import shlex
 import pwd
 import time
-import signal
+import datetime
 from pathlib import Path
 
 # Константы
@@ -50,15 +51,28 @@ ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"  # п
 REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
 MAIN_LOG = f"{MAIN_SCRIPT}.log"
+LAUNCHER_LOG = "logs.txt"  # файл для логов лаунчера
 
 # Для автозапуска в Linux
 SYSTEMD_SERVICE_NAME = "r2-launcher.service"
 AUTOSTART_DESKTOP_FILE = "r2-launcher.desktop"
 
+def log_message(*args):
+    """Выводит сообщение в консоль и дописывает в лог-файл с временной меткой."""
+    msg = " ".join(str(arg) for arg in args)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {msg}"
+    print(line)
+    try:
+        with open(LAUNCHER_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"[!] Не удалось записать в лог-файл {LAUNCHER_LOG}: {e}")
+
 def check_python_version():
     """Проверяет, что используется Python 3."""
     if sys.version_info.major < 3:
-        print("[!] Ошибка: требуется Python 3")
+        log_message("[!] Ошибка: требуется Python 3")
         sys.exit(1)
 
 def is_internet_available(timeout=3):
@@ -78,22 +92,22 @@ def apply_self_update(new_launcher_path):
     current_script = os.path.abspath(__file__)
     # Сравниваем содержимое (побайтово)
     if filecmp.cmp(current_script, new_launcher_path, shallow=False):
-        print("[L] Текущая версия лаунчера актуальна.")
+        log_message("[L] Текущая версия лаунчера актуальна.")
         os.unlink(new_launcher_path)
         return False  # обновление не требуется
 
-    print("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
+    log_message("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
     try:
         # Используем shutil.move для копирования между разными устройствами (tmp -> home)
         shutil.move(new_launcher_path, current_script)
         # Восстанавливаем права на исполнение (если были)
         st = os.stat(current_script)
         os.chmod(current_script, st.st_mode)
-        print("[L] Лаунчер успешно обновлён. Перезапускаю...")
+        log_message("[L] Лаунчер успешно обновлён. Перезапускаю...")
         # Перезапускаемся с теми же аргументами
         os.execv(sys.executable, [sys.executable, current_script] + sys.argv[1:])
     except Exception as e:
-        print(f"[!] Ошибка при самообновлении: {e}")
+        log_message(f"[!] Ошибка при самообновлении: {e}")
         # Если не удалось заменить, пробуем удалить временный файл
         try:
             os.unlink(new_launcher_path)
@@ -108,7 +122,7 @@ def download_and_extract_repo(target_dir, script_name):
     Возвращает True при успехе, False при ошибке.
     """
     try:
-        print("[L] Скачивание репозитория...")
+        log_message("[L] Скачивание репозитория...")
         response = requests.get(ARCHIVE_URL, stream=True)
         response.raise_for_status()
 
@@ -154,7 +168,7 @@ def download_and_extract_repo(target_dir, script_name):
 
                     # Обработка самого лаунчера: не копируем сразу, сохраняем отдельно
                     if file == script_name:
-                        print(f"[L] Найдена новая версия {script_name}, проверяем необходимость обновления...")
+                        log_message(f"[L] Найдена новая версия {script_name}, проверяем необходимость обновления...")
                         # Сохраняем во временный файл
                         fd, new_launcher_tmp = tempfile.mkstemp(prefix="launcher_new_", suffix=".py")
                         os.close(fd)
@@ -163,7 +177,7 @@ def download_and_extract_repo(target_dir, script_name):
 
                     dest_file = os.path.join(dest_dir, file)
                     shutil.copy2(src_file, dest_file)
-                    print(f"[L] Скопирован: {os.path.join(rel_path, file) if rel_path != '.' else file}")
+                    log_message(f"[L] Скопирован: {os.path.join(rel_path, file) if rel_path != '.' else file}")
 
         # Удаляем временный zip
         os.unlink(tmp_zip)
@@ -175,7 +189,7 @@ def download_and_extract_repo(target_dir, script_name):
         return True
 
     except Exception as e:
-        print(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
+        log_message(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
 
 def install_requirements():
@@ -186,18 +200,18 @@ def install_requirements():
     """
     req_path = Path(REQUIREMENTS_FILE)
     if not req_path.exists():
-        print("[*] Файл requirements.txt не найден, пропускаем установку зависимостей.")
+        log_message("[*] Файл requirements.txt не найден, пропускаем установку зависимостей.")
         return True
 
     try:
-        print("[L] Установка зависимостей...")
+        log_message("[L] Установка зависимостей...")
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE]
         )
-        print("[L] Зависимости успешно установлены/обновлены.")
+        log_message("[L] Зависимости успешно установлены/обновлены.")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"[!] Ошибка при установке зависимостей: {e}")
+        log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
 def get_display_user():
@@ -239,13 +253,13 @@ def run_terminal_as_user(terminal_cmd):
             try:
                 subprocess.Popen(terminal_cmd)
             except Exception as e:
-                print(f"Ошибка запуска терминала: {e}")
+                log_message(f"Ошибка запуска терминала: {e}")
             finally:
                 os._exit(0)
         else:
             pass
     except Exception as e:
-        print(f"Не удалось переключиться на пользователя {user}: {e}")
+        log_message(f"Не удалось переключиться на пользователя {user}: {e}")
         subprocess.Popen(terminal_cmd)
 
 def is_display_ready(timeout=30):
@@ -260,9 +274,8 @@ def is_display_ready(timeout=30):
         if display:
             # Пробуем выполнить xdpyinfo (требуется x11-utils) или хотя бы открыть окно xterm
             try:
-                # Быстрая проверка через xdpyinfo (если установлено)
                 subprocess.run(['xdpyinfo'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1)
-                print("[L] Графическая среда готова (xdpyinfo успешен).")
+                log_message("[L] Графическая среда готова (xdpyinfo успешен).")
                 return True
             except:
                 # Если xdpyinfo нет, пробуем открыть и сразу закрыть xterm
@@ -270,49 +283,47 @@ def is_display_ready(timeout=30):
                     proc = subprocess.Popen(['xterm', '-e', 'true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     proc.wait(timeout=2)
                     if proc.returncode == 0:
-                        print("[L] Графическая среда готова (xterm открылся).")
+                        log_message("[L] Графическая среда готова (xterm открылся).")
                         return True
                 except:
                     pass
         time.sleep(1)
-    print("[L] Таймаут ожидания графической среды.")
+    log_message("[L] Таймаут ожидания графической среды.")
     return False
 
 def run_main_background():
     """Запускает main.py в фоне, перенаправляя stdout/stderr в лог-файл."""
     main_path = Path(MAIN_SCRIPT)
     if not main_path.exists():
-        print(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден.")
+        log_message(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден.")
         return False
 
     with open(MAIN_LOG, 'a') as log:
         log.write(f"\n--- Запуск main.py в фоне ({datetime.datetime.now()}) ---\n")
     try:
-        # Запускаем в отдельном процессе, не привязанном к терминалу
         cmd = [sys.executable, MAIN_SCRIPT]
         with open(MAIN_LOG, 'a') as log:
             process = subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
-        print(f"[L] main.py запущен в фоне (PID {process.pid}). Лог: {MAIN_LOG}")
+        log_message(f"[L] main.py запущен в фоне (PID {process.pid}). Лог: {MAIN_LOG}")
         return True
     except Exception as e:
-        print(f"[!] Ошибка фонового запуска: {e}")
+        log_message(f"[!] Ошибка фонового запуска: {e}")
         return False
 
 def run_main_in_terminal():
     """Запускает main.py в новом окне терминала, если графика готова, иначе в фоне."""
     main_path = Path(MAIN_SCRIPT)
     if not main_path.exists():
-        print(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден в текущей директории.")
+        log_message(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден в текущей директории.")
         return False
 
     cmd_str = f"{sys.executable} {MAIN_SCRIPT}"
 
     # Проверяем готовность графической среды (ждём до 30 секунд)
     if not is_display_ready(timeout=30):
-        print("[L] Графическая среда не готова. Запускаю main.py в фоновом режиме.")
+        log_message("[L] Графическая среда не готова. Запускаю main.py в фоновом режиме.")
         return run_main_background()
 
-    # Графика есть, пробуем открыть терминал
     terminals = [
         ('xterm', ['xterm', '-hold', '-e'], True),
         ('xfce4-terminal', ['xfce4-terminal', '--hold', '-e'], True),
@@ -330,7 +341,7 @@ def run_main_in_terminal():
                 full_args = base_args + [cmd_str]
             else:
                 full_args = base_args + [sys.executable, MAIN_SCRIPT]
-            print(f"[L] Запускаю {MAIN_SCRIPT} в терминале {term_name}...")
+            log_message(f"[L] Запускаю {MAIN_SCRIPT} в терминале {term_name}...")
             try:
                 if os.geteuid() == 0:
                     run_terminal_as_user(full_args)
@@ -338,10 +349,10 @@ def run_main_in_terminal():
                     subprocess.Popen(full_args)
                 return True
             except Exception as e:
-                print(f"[!] Не удалось запустить {term_name}: {e}")
+                log_message(f"[!] Не удалось запустить {term_name}: {e}")
                 continue
 
-    print("[L] Не найден подходящий эмулятор терминала. Запускаю в фоновом режиме.")
+    log_message("[L] Не найден подходящий эмулятор терминала. Запускаю в фоновом режиме.")
     return run_main_background()
 
 def run_main_current_terminal(cmd_str):
@@ -351,7 +362,7 @@ def run_main_current_terminal(cmd_str):
         subprocess.run(cmd_list)
         return True
     except Exception as e:
-        print(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
+        log_message(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
         return False
 
 # --- Функции для автозапуска в Linux ---
@@ -396,10 +407,10 @@ WantedBy=multi-user.target
             subprocess.run(["systemctl", "daemon-reload"], check=True)
             subprocess.run(["systemctl", "enable", SYSTEMD_SERVICE_NAME], check=True)
             subprocess.run(["systemctl", "start", SYSTEMD_SERVICE_NAME], check=True)
-            print(f"[L] Автозапуск через systemd установлен (сервис {SYSTEMD_SERVICE_NAME})")
+            log_message(f"[L] Автозапуск через systemd установлен (сервис {SYSTEMD_SERVICE_NAME})")
             return True
         except Exception as e:
-            print(f"[!] Не удалось установить systemd сервис: {e}")
+            log_message(f"[!] Не удалось установить systemd сервис: {e}")
             return False
     else:
         autostart_dir = os.path.join(user_home, ".config", "autostart")
@@ -417,10 +428,10 @@ X-GNOME-Autostart-enabled=true
         try:
             with open(desktop_file_path, 'w') as f:
                 f.write(desktop_content)
-            print(f"[L] Автозапуск через .desktop файл установлен: {desktop_file_path}")
+            log_message(f"[L] Автозапуск через .desktop файл установлен: {desktop_file_path}")
             return True
         except Exception as e:
-            print(f"[!] Не удалось создать .desktop файл: {e}")
+            log_message(f"[!] Не удалось создать .desktop файл: {e}")
             return False
 
 def remove_autostart_linux():
@@ -433,18 +444,18 @@ def remove_autostart_linux():
                 subprocess.run(["systemctl", "disable", SYSTEMD_SERVICE_NAME], check=False)
                 os.remove(service_path)
                 subprocess.run(["systemctl", "daemon-reload"], check=True)
-                print(f"[L] Systemd сервис {SYSTEMD_SERVICE_NAME} удалён.")
+                log_message(f"[L] Systemd сервис {SYSTEMD_SERVICE_NAME} удалён.")
         except Exception as e:
-            print(f"[!] Ошибка при удалении systemd сервиса: {e}")
+            log_message(f"[!] Ошибка при удалении systemd сервиса: {e}")
     
     user_home = os.path.expanduser("~")
     desktop_file_path = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     try:
         if os.path.exists(desktop_file_path):
             os.remove(desktop_file_path)
-            print(f"[L] .desktop файл {desktop_file_path} удалён.")
+            log_message(f"[L] .desktop файл {desktop_file_path} удалён.")
     except Exception as e:
-        print(f"[!] Ошибка при удалении .desktop файла: {e}")
+        log_message(f"[!] Ошибка при удалении .desktop файла: {e}")
 
 def main():
     check_python_version()
@@ -459,7 +470,7 @@ def main():
 
     if args.install_autostart or args.remove_autostart:
         if platform.system() != "Linux":
-            print("[!] Автозапуск поддерживается только в Linux.")
+            log_message("[!] Автозапуск поддерживается только в Linux.")
             sys.exit(1)
         if args.install_autostart:
             setup_autostart_linux()
@@ -467,7 +478,7 @@ def main():
             remove_autostart_linux()
         sys.exit(0)
 
-    print("""
+    log_message("""
   _____     ___  
   |  __ \  |__ \ 
   | |__) |    ) |
@@ -482,33 +493,33 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_name = os.path.basename(__file__)
     os.chdir(script_dir)
-    print(f"[L] Рабочая директория: {script_dir}")
-    print(f"[L] Используемый интерпретатор: {sys.executable}")
+    log_message(f"[L] Рабочая директория: {script_dir}")
+    log_message(f"[L] Используемый интерпретатор: {sys.executable}")
 
     if platform.system() == "Linux" and not args.dont_install_autostart:
         if not is_autostart_installed():
-            print("[L] Автозапуск не обнаружен. Устанавливаем...")
+            log_message("[L] Автозапуск не обнаружен. Устанавливаем...")
             setup_autostart_linux()
         else:
-            print("[L] Автозапуск уже установлен.")
+            log_message("[L] Автозапуск уже установлен.")
 
     internet_ok = is_internet_available()
     if internet_ok:
-        print("[L] Интернет доступен, пробуем обновить репозиторий...")
+        log_message("[L] Интернет доступен, пробуем обновить репозиторий...")
         success = download_and_extract_repo(script_dir, script_name)
         if success:
             install_requirements()
         else:
-            print("[*] Обновление не удалось, продолжим с существующими файлами.")
+            log_message("[*] Обновление не удалось, продолжим с существующими файлами.")
     else:
-        print("[*] Нет интернета, пропускаем обновление.")
+        log_message("[*] Нет интернета, пропускаем обновление.")
 
     # Запуск main.py
     if args.background:
-        print("[L] Принудительный фоновый запуск main.py...")
+        log_message("[L] Принудительный фоновый запуск main.py...")
         run_main_background()
     elif args.no_terminal:
-        print("[L] Запуск main.py в текущем терминале (--no-terminal)...")
+        log_message("[L] Запуск main.py в текущем терминале (--no-terminal)...")
         run_main_current_terminal(f"{sys.executable} {MAIN_SCRIPT}")
     else:
         run_main_in_terminal()
