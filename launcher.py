@@ -37,6 +37,7 @@ import argparse
 import platform
 import filecmp
 import shlex
+import time
 from pathlib import Path
 
 # Константы
@@ -201,32 +202,39 @@ def run_main_in_terminal():
         print(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден в текущей директории.")
         return False
 
-    # Команда для запуска main.py
-    cmd = [sys.executable, MAIN_SCRIPT]
+    # Команда для запуска main.py (объединяем в строку для передачи в -e)
+    cmd_str = f"{sys.executable} {MAIN_SCRIPT}"
+    # Также сохраняем вывод в файл на всякий случай (для отладки)
+    log_file = Path(f"{MAIN_SCRIPT}.log")
+    cmd_with_log = f"{cmd_str} >> {log_file} 2>&1"
 
     # Проверяем, запущены ли мы в графической среде
     has_gui = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')
 
     if not has_gui:
         print("[L] Графическая среда не обнаружена. Запускаю в текущем терминале...")
-        return run_main_current_terminal(cmd)
+        return run_main_current_terminal(cmd_str)
 
     # Определяем доступные терминалы и правила их запуска
-    # Каждый элемент: (имя, список базовых аргументов, флаг требует ли удержания окна)
+    # Каждый элемент: (имя, список базовых аргументов, нужно ли объединять команду в одну строку)
     terminals = [
         ('xterm', ['xterm', '-hold', '-e'], True),
-        ('xfce4-terminal', ['xfce4-terminal', '-x'], False),
-        ('gnome-terminal', ['gnome-terminal', '--'], False),
-        ('konsole', ['konsole', '-e'], False),
-        ('lxterminal', ['lxterminal', '-e'], False),
-        ('terminator', ['terminator', '-e'], False),
-        ('urxvt', ['urxvt', '-e'], False),
-        ('rxvt', ['rxvt', '-e'], False),
+        ('xfce4-terminal', ['xfce4-terminal', '--hold', '-e'], True),
+        ('gnome-terminal', ['gnome-terminal', '--'], True),  # может закрыться, но обычно нет
+        ('konsole', ['konsole', '-e'], True),
+        ('lxterminal', ['lxterminal', '-e'], True),
+        ('terminator', ['terminator', '-e'], True),
+        ('urxvt', ['urxvt', '-e'], True),
+        ('rxvt', ['rxvt', '-e'], True),
     ]
 
-    for term_name, base_args, hold in terminals:
+    for term_name, base_args, use_string in terminals:
         if shutil.which(term_name):
-            full_args = base_args + cmd
+            if use_string:
+                full_args = base_args + [cmd_str]
+            else:
+                # если терминал принимает команду как список (редко)
+                full_args = base_args + [sys.executable, MAIN_SCRIPT]
             print(f"[L] Запускаю {MAIN_SCRIPT} в терминале {term_name}...")
             try:
                 subprocess.Popen(full_args)
@@ -237,12 +245,14 @@ def run_main_in_terminal():
 
     # Если ни один терминал не сработал, запускаем в текущем
     print("[L] Не найден подходящий эмулятор терминала. Запускаю в текущем терминале...")
-    return run_main_current_terminal(cmd)
+    return run_main_current_terminal(cmd_str)
 
-def run_main_current_terminal(cmd):
+def run_main_current_terminal(cmd_str):
     """Запускает main.py в текущем терминале (блокирует лаунчер до завершения)."""
     try:
-        subprocess.run(cmd)
+        # Разбиваем строку обратно в список (shlex.split уважает кавычки)
+        cmd_list = shlex.split(cmd_str)
+        subprocess.run(cmd_list)
         return True
     except Exception as e:
         print(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
@@ -413,7 +423,7 @@ def main():
     # Запускаем main.py
     if args.no_terminal:
         print("[L] Запуск main.py в текущем терминале (--no-terminal)...")
-        run_main_current_terminal([sys.executable, MAIN_SCRIPT])
+        run_main_current_terminal(f"{sys.executable} {MAIN_SCRIPT}")
     else:
         run_main_in_terminal()
 
