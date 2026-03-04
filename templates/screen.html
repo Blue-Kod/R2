@@ -2,105 +2,199 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Orange Pi UI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chill Monitor</title>
     <style>
         * {
-            box-sizing: border-box;
-            cursor: none; /* Скрываем курсор для красоты */
-        }
-
-        body, html {
             margin: 0;
             padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #000;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            background-color: black;
+            color: #888;
+            font-family: 'Courier New', monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
             overflow: hidden;
+        }
+        /* Контейнер глаз */
+        .eyes-container {
+            flex: 1;
             display: flex;
             justify-content: center;
             align-items: center;
-            font-family: 'Courier New', Courier, monospace;
+            gap: 30px;
+            background: black;
         }
-
-        /* Фоновый слой логов */
-        #log-overlay {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            right: 20px;
-            bottom: 20px;
-            color: #505050; /* Почти черный серый */
-            font-size: 13px;
-            line-height: 1.4;
-            z-index: 1;
-            pointer-events: none;
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-start;
-        }
-
-        /* Контейнер глаз */
-        .eyes-box {
-            display: flex;
-            gap: 70px;
-            z-index: 2;
-        }
-
+        /* Глаз */
         .eye {
-            width: 110px;
-            height: 270px;
-            background-color: #ffffff;
-            border-radius: 40px; /* Закругленный прямоугольник */
-            box-shadow: 0 0 30px rgba(255, 255, 255, 0.1);
-            transition: all 0.2s ease;
-            animation: blink_anim 10s infinite;
+            width: 240px;
+            height: 560px;
+            background-color: #aaa;
+            border-radius: 60px;
+            transition: background-color 0.1s ease;
+            animation: shake 1s infinite ease-in-out;
         }
-
-        /* Анимация моргания */
-        @keyframes blink_anim {
-            0%, 90%, 100% { transform: scaleY(1); }
-            95% { transform: scaleY(0.05); }
+        /* Анимация дрожания */
+        @keyframes shake {
+            0% { transform: translateX(0); }
+            25% { transform: translateX(-2px); }
+            50% { transform: translateX(2px); }
+            75% { transform: translateX(-1px); }
+            100% { transform: translateX(0); }
         }
-
-        /* Эффект для "злого" или "грустного" взгляда (опционально) */
-        .eye.half { height: 100px; }
+        /* Состояние моргания (закрытый глаз) */
+        .eye.blink {
+            background-color: #222;
+        }
+        /* Нижняя панель */
+        .bottom-panel {
+            background: black;
+            padding: 10px;
+            border-top: 1px solid #333;
+        }
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        button {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            font-size: 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        button:hover {
+            background: #555;
+        }
+        button:disabled {
+            background: #222;
+            color: #666;
+            cursor: not-allowed;
+        }
+        /* Логи */
+        .logs {
+            background: #111;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-size: 9pt;
+            border: none;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .metrics {
+            color: #888;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
+    <div class="eyes-container">
+        <div class="eye" id="leftEye"></div>
+        <div class="eye" id="rightEye"></div>
+    </div>
 
-    <div id="log-overlay"></div>
-
-    <div class="eyes-box">
-        <div class="eye"></div>
-        <div class="eye"></div>
+    <div class="bottom-panel">
+        <div class="buttons">
+            <button id="minimizeBtn">Свернуть</button>
+            <button id="updateBtn">Обновление</button>
+        </div>
+        <div class="metrics" id="metrics"></div>
+        <div class="logs" id="logs"></div>
     </div>
 
     <script>
-        const logOverlay = document.getElementById('log-overlay');
-        const MAX_LOGS = 30; // Сколько строк держать на экране
+        const leftEye = document.getElementById('leftEye');
+        const rightEye = document.getElementById('rightEye');
+        const updateBtn = document.getElementById('updateBtn');
+        const minimizeBtn = document.getElementById('minimizeBtn');
+        const metricsDiv = document.getElementById('metrics');
+        const logsDiv = document.getElementById('logs');
 
-        function fetchLogs() {
-            fetch('/get_system_data')
-                .then(res => res.json())
-                .then(data => {
-                    data.forEach(line => {
-                        const div = document.createElement('div');
-                        div.textContent = line;
-                        // Вставляем новый лог наверх
-                        logOverlay.prepend(div);
-                    });
-
-                    // Удаляем лишние старые строки
-                    while (logOverlay.childNodes.length > MAX_LOGS) {
-                        logOverlay.removeChild(logOverlay.lastChild);
-                    }
-                })
-                .catch(e => console.log("System offline"));
+        // Моргание случайное
+        function blink() {
+            if (leftEye.classList.contains('blink')) return;
+            leftEye.classList.add('blink');
+            rightEye.classList.add('blink');
+            setTimeout(() => {
+                leftEye.classList.remove('blink');
+                rightEye.classList.remove('blink');
+            }, 150);
+            scheduleBlink();
         }
 
-        // Обновление логов каждые 2 секунды
-        setInterval(fetchLogs, 2000);
-        fetchLogs();
+        function scheduleBlink() {
+            const delay = Math.random() * (15000 - 5000) + 5000; // 5-15 сек
+            setTimeout(blink, delay);
+        }
+        scheduleBlink();
+
+        // Обновление метрик и логов
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+                metricsDiv.textContent = `CPU: ${data.cpu}%  RAM: ${data.ram}%  TEMP: ${data.temp}`;
+                logsDiv.textContent = data.logs.join('\n');
+                // Прокрутка вниз
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            } catch (e) {
+                console.error('Ошибка получения данных:', e);
+            }
+        }
+        fetchData();
+        setInterval(fetchData, 2000);
+
+        // Кнопка свернуть (не работает в полноэкранном браузере без API)
+        minimizeBtn.addEventListener('click', () => {
+            // В Chromium в kiosk-режиме нельзя свернуть окно программно.
+            // Можно попробовать отправить Alt+F9 или что-то, но лучше просто игнорировать.
+            alert('Используйте клавишу Esc для выхода из полноэкранного режима');
+        });
+
+        // Кнопка обновления
+        updateBtn.addEventListener('click', async () => {
+            updateBtn.disabled = true;
+            updateBtn.textContent = 'Обновляется...';
+            try {
+                const response = await fetch('/api/update', { method: 'POST' });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    // Через некоторое время вернём кнопку
+                    setTimeout(() => {
+                        updateBtn.disabled = false;
+                        updateBtn.textContent = 'Обновление';
+                    }, 10000);
+                } else {
+                    alert('Ошибка: ' + result.message);
+                    updateBtn.disabled = false;
+                    updateBtn.textContent = 'Обновление';
+                }
+            } catch (e) {
+                alert('Ошибка сети');
+                updateBtn.disabled = false;
+                updateBtn.textContent = 'Обновление';
+            }
+        });
+
+        // Выход по Esc (если окно не в kiosk, но в обычном режиме)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                // Попытка выйти из полноэкранного режима (работает не во всех браузерах)
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        });
     </script>
 </body>
 </html>
