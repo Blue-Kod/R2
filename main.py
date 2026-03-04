@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-Мониторинг Orange Pi RK3399 с чилловым интерфейсом.
-Чёрный фон, по центру два скруглённых прямоугольных глаза, которые моргают и подрагивают.
-Внизу — серые логи системы и кнопка "Свернуть".
+Chill Monitor с глазами, системными логами и кнопкой обновления.
+Глаза вытянуты вверх, без зрачков, подрагивают раз в секунду, моргают случайно.
+Логи (последние 500 строк) отображаются внизу с прокруткой.
+Кнопка "Обновление" запускает лаунчер для обновления кода.
 """
 
 import tkinter as tk
+from tkinter import scrolledtext
 import random
 import datetime
 import os
@@ -17,7 +19,7 @@ from collections import deque
 
 import psutil
 
-# Лог-файл (на всякий случай, для отладки)
+# Лог-файл для отладки самого скрипта
 LOG_FILE = "logs.txt"
 
 def log_message(*args):
@@ -40,7 +42,7 @@ def get_cpu_temp():
         log_message(f"Не удалось прочитать температуру: {e}")
         return "N/A"
 
-def get_recent_logs(n=20):
+def get_recent_logs(n=500):
     """Возвращает последние n строк системного лога."""
     log_files = ['/var/log/syslog', '/var/log/messages']
     for log_file in log_files:
@@ -49,7 +51,7 @@ def get_recent_logs(n=20):
                 with open(log_file, 'rb') as f:
                     f.seek(0, os.SEEK_END)
                     file_size = f.tell()
-                    block_size = 1024
+                    block_size = 4096
                     lines = deque()
                     pos = file_size
                     while len(lines) < n and pos > 0:
@@ -78,57 +80,65 @@ class ChillEyes:
         self.root = root
         self.root.title("Chill Monitor")
         self.root.configure(bg='black')
-        # Полноэкранный режим
         self.root.attributes('-fullscreen', True)
         self.root.bind('<Escape>', self.quit_fullscreen)
 
-        # Основной холст для рисования
+        # Верхняя часть – холст для глаз
         self.canvas = tk.Canvas(root, bg='black', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
+        # Нижняя часть – фрейм с логами и кнопками
+        bottom_frame = tk.Frame(root, bg='black')
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+
+        # Кнопки
+        btn_frame = tk.Frame(bottom_frame, bg='black')
+        btn_frame.pack(fill=tk.X, pady=5)
+
+        self.btn_minimize = tk.Button(btn_frame, text="Свернуть", command=self.minimize_window,
+                                      bg='#333', fg='white', font=('Arial', 12),
+                                      relief=tk.FLAT, activebackground='#555')
+        self.btn_minimize.pack(side=tk.LEFT, padx=5)
+
+        self.btn_update = tk.Button(btn_frame, text="Обновление", command=self.run_update,
+                                    bg='#333', fg='white', font=('Arial', 12),
+                                    relief=tk.FLAT, activebackground='#555')
+        self.btn_update.pack(side=tk.LEFT, padx=5)
+
+        # Область логов с прокруткой
+        self.log_text = scrolledtext.ScrolledText(bottom_frame, bg='#111', fg='#888',
+                                                   font=('Courier', 9), wrap=tk.WORD,
+                                                   height=15, relief=tk.FLAT)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
         # Параметры глаз
-        self.eye_width = 150          # ширина глаза
-        self.eye_height = 80           # высота глаза
-        self.eye_spacing = 40          # расстояние между глазами
+        self.eye_width = 60           # ширина (стала меньше, так как вертикальные)
+        self.eye_height = 140          # высота (вытянутые вверх)
+        self.eye_spacing = 30          # расстояние между глазами
         self.eye_color = '#aaaaaa'     # светло-серый
-        self.pupil_color = '#333333'   # тёмно-серый зрачок
         self.blink_color = '#222222'   # цвет закрытого глаза
         self.blinking = False
         self.blink_after_id = None
-
-        # Состояние глаз: открыты/закрыты (True = открыты)
         self.eyes_open = True
-        # Текущее смещение для дрожания
+
+        # Смещение для дрожания
         self.shake_offset = 0
-        self.shake_direction = 1
         self.shake_after_id = None
 
-        # Начальные координаты глаз (центр экрана)
-        self.canvas.update()  # чтобы получить размеры
-        w = self.canvas.winfo_width() or 800
-        h = self.canvas.winfo_height() or 600
-        self.eye_y = h // 2 - 40
-        self.left_eye_x = w // 2 - self.eye_width - self.eye_spacing//2
-        self.right_eye_x = w // 2 + self.eye_spacing//2
+        # Координаты глаз (будут установлены после отображения окна)
+        self.eye_y = 0
+        self.left_eye_x = 0
+        self.right_eye_x = 0
 
-        # Текстовые метрики (температура, CPU, RAM) будем рисовать отдельно?
-        # Покажем их маленьким шрифтом вверху или внизу? Решим: вверху мелкими цифрами.
-        self.metrics_text = None
+        # Обновим позицию после того, как окно отобразится
+        self.root.after(100, self.initialize_position)
 
-        # Логи – будем хранить список строк и обновлять каждые 2 секунды
-        self.log_lines = []
-        self.log_texts = []   # список ID текстовых объектов на canvas
-        self.update_logs()
-
-        # Запускаем анимацию глаз
+        # Запускаем моргание и дрожание
         self.schedule_blink()
         self.schedule_shake()
 
-        # Кнопка "Свернуть"
-        self.btn_minimize = tk.Button(root, text="Свернуть", command=self.minimize_window,
-                                      bg='#333', fg='white', font=('Arial', 12),
-                                      relief=tk.FLAT, activebackground='#555')
-        self.btn_minimize.place(relx=0.5, rely=0.95, anchor='center')
+        # Запускаем обновление логов и метрик
+        self.update_logs()
 
     def quit_fullscreen(self, event=None):
         self.root.attributes('-fullscreen', False)
@@ -136,83 +146,70 @@ class ChillEyes:
     def minimize_window(self):
         self.root.iconify()
 
-    def draw_eyes(self):
-        """Рисует глаза с учётом текущего состояния (открыты/закрыты, смещение)."""
-        self.canvas.delete('eye')  # удаляем только элементы с тегом 'eye'
+    def initialize_position(self):
+        """Вычисляет позицию глаз после того, как холст получил размеры."""
+        self.update_position()
 
+    def update_position(self):
+        """Пересчитывает координаты глаз на основе текущего размера холста."""
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w > 10 and h > 10:
+            self.eye_y = h // 2 - self.eye_height // 2
+            self.left_eye_x = w // 2 - self.eye_width - self.eye_spacing // 2
+            self.right_eye_x = w // 2 + self.eye_spacing // 2
+            self.draw_eyes()
+
+    def draw_eyes(self):
+        """Рисует глаза с учётом состояния и смещения."""
+        self.canvas.delete('eye')
+
+        # Радиус скругления (зависит от ширины/высоты)
+        r = 20
+
+        # Левый глаз
         x1 = self.left_eye_x + self.shake_offset
         y1 = self.eye_y
         x2 = x1 + self.eye_width
         y2 = y1 + self.eye_height
+        color = self.eye_color if self.eyes_open else self.blink_color
 
-        # Левый глаз
+        # Прямоугольник с заливкой
         self.canvas.create_rectangle(x1, y1, x2, y2,
-                                     fill=self.eye_color if self.eyes_open else self.blink_color,
-                                     outline='', tags='eye', width=0)
-        # Скругление углов: рисуем кружки в углах тем же цветом
-        r = 20  # радиус скругления
+                                     fill=color, outline='', tags='eye')
+        # Угловые закругления (круги)
         self.canvas.create_oval(x1, y1, x1 + 2*r, y1 + 2*r,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
         self.canvas.create_oval(x2 - 2*r, y1, x2, y1 + 2*r,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
         self.canvas.create_oval(x1, y2 - 2*r, x1 + 2*r, y2,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
         self.canvas.create_oval(x2 - 2*r, y2 - 2*r, x2, y2,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
 
-        # Если глаз открыт, рисуем зрачок
-        if self.eyes_open:
-            pupil_w = self.eye_width // 3
-            pupil_h = self.eye_height // 2
-            pupil_x = x1 + (self.eye_width - pupil_w) // 2
-            pupil_y = y1 + (self.eye_height - pupil_h) // 2
-            self.canvas.create_oval(pupil_x, pupil_y,
-                                    pupil_x + pupil_w, pupil_y + pupil_h,
-                                    fill=self.pupil_color, outline='', tags='eye')
-
-        # Правый глаз (аналогично)
+        # Правый глаз
         x1 = self.right_eye_x + self.shake_offset
         y1 = self.eye_y
         x2 = x1 + self.eye_width
         y2 = y1 + self.eye_height
-
         self.canvas.create_rectangle(x1, y1, x2, y2,
-                                     fill=self.eye_color if self.eyes_open else self.blink_color,
-                                     outline='', tags='eye', width=0)
+                                     fill=color, outline='', tags='eye')
         self.canvas.create_oval(x1, y1, x1 + 2*r, y1 + 2*r,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
         self.canvas.create_oval(x2 - 2*r, y1, x2, y1 + 2*r,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
         self.canvas.create_oval(x1, y2 - 2*r, x1 + 2*r, y2,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
         self.canvas.create_oval(x2 - 2*r, y2 - 2*r, x2, y2,
-                                fill=self.eye_color if self.eyes_open else self.blink_color,
-                                outline='', tags='eye')
-
-        if self.eyes_open:
-            pupil_w = self.eye_width // 3
-            pupil_h = self.eye_height // 2
-            pupil_x = x1 + (self.eye_width - pupil_w) // 2
-            pupil_y = y1 + (self.eye_height - pupil_h) // 2
-            self.canvas.create_oval(pupil_x, pupil_y,
-                                    pupil_x + pupil_w, pupil_y + pupil_h,
-                                    fill=self.pupil_color, outline='', tags='eye')
+                                fill=color, outline='', tags='eye')
 
     def blink(self):
-        """Один цикл моргания: закрыть, открыть через короткое время."""
+        """Закрыть глаза, потом открыть через 150 мс."""
         if self.blinking:
             return
         self.blinking = True
         self.eyes_open = False
         self.draw_eyes()
-        # Через 150 мс открыть
         self.root.after(150, self.open_eyes)
 
     def open_eyes(self):
@@ -221,8 +218,8 @@ class ChillEyes:
         self.blinking = False
 
     def schedule_blink(self):
-        """Планирует следующее моргание через случайный интервал."""
-        interval = random.randint(5000, 15000)  # миллисекунды
+        """Планирует следующее моргание через 5-15 секунд."""
+        interval = random.randint(5000, 15000)
         self.blink_after_id = self.root.after(interval, self.do_blink)
 
     def do_blink(self):
@@ -230,62 +227,69 @@ class ChillEyes:
         self.schedule_blink()
 
     def schedule_shake(self):
-        """Планирует небольшое дрожание глаз."""
-        # Дрожание состоит из серии мелких движений
-        self.shake()
+        """Запускает цикл дрожания раз в секунду."""
+        self.shake_loop()
 
-    def shake(self):
-        """Один шаг дрожания (сдвиг на 1-2 пикселя, смена направления)."""
-        # Если глаза не моргают, немного двигаем их
-        max_offset = 3
-        self.shake_offset += self.shake_direction * random.randint(1, 2)
-        if abs(self.shake_offset) > max_offset:
-            self.shake_direction *= -1
-            self.shake_offset = self.shake_direction * max_offset
+    def shake_loop(self):
+        """Меняет смещение глаз случайным образом и перерисовывает."""
+        # Новое случайное смещение от -3 до 3
+        self.shake_offset = random.randint(-3, 3)
         self.draw_eyes()
-        # Повторяем дрожание с интервалом 50-100 мс, пока не отменят
-        self.shake_after_id = self.root.after(random.randint(50, 100), self.shake)
+        # Повтор через 1 секунду
+        self.shake_after_id = self.root.after(1000, self.shake_loop)
 
     def update_logs(self):
-        """Обновляет отображение логов и метрик внизу экрана."""
-        # Получаем новые логи
-        logs = get_recent_logs(15)
+        """Обновляет текст логов и метрики вверху."""
+        # Получаем метрики
         cpu = psutil.cpu_percent()
         ram = psutil.virtual_memory().percent
         temp = get_cpu_temp()
-
-        # Удаляем старые текстовые элементы с тегом 'log'
-        self.canvas.delete('log')
-
-        # Рисуем метрики мелким шрифтом вверху
         metrics = f"CPU:{cpu}%  RAM:{ram}%  TEMP:{temp}"
-        self.canvas.create_text(10, 10, text=metrics, anchor='nw',
-                                fill='#666666', font=('Courier', 12), tags='log')
 
-        # Рисуем логи внизу (с отступом от кнопки)
-        y = self.canvas.winfo_height() - 250
-        if y < 100:  # если окно маленькое, поднимем
-            y = 150
-        for i, line in enumerate(logs[-10:]):  # последние 10 строк
-            self.canvas.create_text(10, y + i*18, text=line, anchor='nw',
-                                    fill='#666666', font=('Courier', 10), tags='log')
+        # Получаем последние логи
+        logs = get_recent_logs(500)
 
-        # Запланировать следующее обновление через 2 секунды
+        # Обновляем текстовое поле
+        self.log_text.config(state=tk.NORMAL)
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.insert(tk.END, metrics + "\n\n")
+        for line in logs:
+            self.log_text.insert(tk.END, line + "\n")
+        self.log_text.config(state=tk.DISABLED)
+        # Прокрутка вниз, чтобы видеть новые строки
+        self.log_text.see(tk.END)
+
+        # Планируем следующее обновление через 2 секунды
         self.root.after(2000, self.update_logs)
 
-    def on_resize(self, event):
-        """Пересчитывает позиции глаз при изменении размера окна."""
-        if event.width > 10 and event.height > 10:
-            self.eye_y = event.height // 2 - 40
-            self.left_eye_x = event.width // 2 - self.eye_width - self.eye_spacing//2
-            self.right_eye_x = event.width // 2 + self.eye_spacing//2
-            self.draw_eyes()
+    def run_update(self):
+        """Запускает лаунчер для обновления кода."""
+        # Блокируем кнопку, чтобы не запустить повторно
+        self.btn_update.config(state=tk.DISABLED, text="Обновляется...")
+        # Запускаем лаунчер в фоне
+        try:
+            # Путь к лаунчеру (рядом с main.py)
+            launcher_path = os.path.join(os.path.dirname(__file__), "launcher.py")
+            if os.path.exists(launcher_path):
+                subprocess.Popen([sys.executable, launcher_path])
+                log_message("Запущен процесс обновления")
+            else:
+                log_message("launcher.py не найден")
+                self.btn_update.config(state=tk.NORMAL, text="Обновление")
+                return
+        except Exception as e:
+            log_message(f"Ошибка запуска лаунчера: {e}")
+        # Через некоторое время вернём кнопку в активное состояние
+        self.root.after(10000, self.enable_update_button)  # 10 секунд, чтобы процесс успел завершиться
+
+    def enable_update_button(self):
+        self.btn_update.config(state=tk.NORMAL, text="Обновление")
 
 def main():
     log_message("Запуск Chill Monitor")
     root = tk.Tk()
     app = ChillEyes(root)
-    root.bind('<Configure>', app.on_resize)  # отслеживаем изменение размера
+    root.bind('<Configure>', lambda e: app.update_position())
     root.mainloop()
 
 if __name__ == "__main__":
