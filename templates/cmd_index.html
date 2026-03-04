@@ -3,67 +3,61 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 - Управление</title>
+    <title>R2</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         body {
             background-color: black;
-            color: #ccc;
-            font-family: 'Courier New', monospace;
+            color: white;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            height: 100vh;
             display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            margin: 0;
-            flex-direction: column;
         }
         h1 {
-            color: white;
-            margin-bottom: 40px;
+            font-size: 6rem;
+            margin-bottom: 3rem;
+            letter-spacing: 0.2rem;
         }
-        .menu {
+        .buttons {
             display: flex;
-            gap: 30px;
+            gap: 2rem;
             flex-wrap: wrap;
             justify-content: center;
         }
-        .card {
-            background: #111;
-            border-radius: 12px;
-            padding: 30px;
-            width: 250px;
-            text-align: center;
-            cursor: pointer;
-            transition: background 0.2s;
-            border: 1px solid #333;
-        }
-        .card:hover {
-            background: #222;
-        }
-        .card h2 {
+        button {
+            background: #333;
             color: white;
-            margin-bottom: 15px;
+            border: none;
+            padding: 1rem 2.5rem;
+            font-size: 1.5rem;
+            border-radius: 40px;
+            cursor: pointer;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            transition: background 0.2s;
+            min-width: 180px;
         }
-        .card p {
-            color: #888;
-            font-size: 14px;
+        button:hover {
+            background: #555;
+        }
+        @media (max-width: 600px) {
+            h1 { font-size: 4rem; }
+            button { font-size: 1.2rem; padding: 0.8rem 1.5rem; }
         }
     </style>
 </head>
 <body>
-    <h1>R2 Control Panel</h1>
-    <div class="menu">
-        <div class="card" onclick="location.href='/screen'">
-            <h2>👀 Монитор</h2>
-            <p>Экран с глазами и системными логами</p>
-        </div>
-        <div class="card" onclick="location.href='/cmd/main'">
-            <h2>🐍 Python (main)</h2>
-            <p>Выполнить Python-код в контексте приложения</p>
-        </div>
-        <div class="card" onclick="location.href='/cmd/os'">
-            <h2>💻 Системная консоль</h2>
-            <p>Выполнить команды ОС</p>
-        </div>
+    <h1>R2</h1>
+    <div class="buttons">
+        <button onclick="window.location.href='/screen'">Экран</button>
+        <button onclick="window.location.href='/cmd/os'">CMD</button>
+        <button onclick="window.location.href='/cmd/main'">Python</button>
     </div>
 </body>
 </html>
