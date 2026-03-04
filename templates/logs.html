@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2 - Логи системы</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: black; color: white; font-family: 'Ubuntu Sans Mono', monospace; height: 100vh; display: flex; flex-direction: column; }
+        header { background: #111; padding: 10px; text-align: center; border-bottom: 1px solid #333; }
+        header a { color: #fff; text-decoration: none; font-size: 20px; margin: 0 15px; }
+        header a:hover { text-decoration: underline; }
+        .logs-container { flex: 1; padding: 20px; overflow-y: auto; font-size: 12px; line-height: 1.5; }
+        .logs-container div { white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="/">R2</a>
+        <a href="/screen">Экран</a>
+        <a href="/terminal">CMD</a>
+        <a href="/logs">Логи</a>
+    </header>
+    <div class="logs-container" id="logs"></div>
+
+    <script>
+        const logsDiv = document.getElementById('logs');
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+                logsDiv.innerHTML = data.logs.map(line => `<div>${escapeHtml(line)}</div>`).join('');
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            } catch (e) {
+                console.error('Ошибка получения логов:', e);
+            }
+        }
+        function escapeHtml(unsafe) {
+            return unsafe.replace(/[&<>"]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                if (m === '"') return '&quot;';
+                return m;
+            });
+        }
+        fetchLogs();
+        setInterval(fetchLogs, 2000);
+    </script>
+</body>
+</html>
