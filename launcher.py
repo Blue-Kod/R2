@@ -7,15 +7,13 @@ Launcher для автообновления приложения из GitHub р
     pip3 install requests
 
 Скрипт скачивает последнюю версию репозитория https://github.com/Blue-Kod/R2,
-обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt,
-затем запускает main.py в фоновом режиме. Все сообщения лаунчера дублируются в консоль и в файл logs.txt.
-При отсутствии интернета или ошибке обновления запускает текущую версию.
+обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt.
+При отсутствии интернета или ошибке обновления просто завершается (без запуска main.py).
 Работает без использования виртуального окружения (venv).
 
-Поддерживает установку/удаление автозапуска в Linux:
+Поддерживает установку/удаление автозапуска в Linux через .desktop файл:
     python3 launcher.py                      # обычный запуск + автоустановка автозагрузки (если ещё не установлена)
     python3 launcher.py --dont-install-autostart   # запуск без автоматической установки автозагрузки
-    python3 launcher.py --foreground               # запустить main.py в текущем терминале (блокирует лаунчер)
     python3 launcher.py --install-autostart        # принудительно установить в автозагрузку
     python3 launcher.py --remove-autostart         # удалить из автозагрузки
 
@@ -44,12 +42,10 @@ REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"  # предполагаем ветку main
 REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
-MAIN_LOG = f"{MAIN_SCRIPT}.log"
 LAUNCHER_LOG = "logs.txt"
 
-# Для автозапуска в Linux
-SYSTEMD_SERVICE_NAME = "r2-launcher.service"
-AUTOSTART_DESKTOP_FILE = "r2-launcher.desktop"
+# Для автозапуска в Linux (только .desktop, без systemd)
+AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 
 def log_message(*args):
     """Выводит сообщение в консоль и дописывает в лог-файл с временной меткой."""
@@ -171,109 +167,37 @@ def install_requirements():
         log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
-def run_main_foreground():
-    """Запускает main.py в текущем терминале (блокирует лаунчер до завершения)."""
-    cmd = [sys.executable, MAIN_SCRIPT]
-    log_message(f"[L] Запуск {MAIN_SCRIPT} в текущем терминале...")
-    try:
-        subprocess.run(cmd)
-    except Exception as e:
-        log_message(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
-
-def run_main_background():
-    """Запускает main.py в фоне, перенаправляя stdout/stderr в лог-файл."""
-    main_path = Path(MAIN_SCRIPT)
-    if not main_path.exists():
-        log_message(f"[!] Ошибка: файл {MAIN_SCRIPT} не найден.")
-        return False
-
-    with open(MAIN_LOG, 'a') as log:
-        log.write(f"\n--- Запуск main.py в фоне ({datetime.datetime.now()}) ---\n")
-    try:
-        cmd = [sys.executable, MAIN_SCRIPT]
-        with open(MAIN_LOG, 'a') as log:
-            process = subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
-        log_message(f"[L] main.py запущен в фоне (PID {process.pid}). Лог: {MAIN_LOG}")
-        log_message(f"[L] Веб-интерфейс доступен по адресу http://127.0.0.1:5000")
-        return True
-    except Exception as e:
-        log_message(f"[!] Ошибка фонового запуска: {e}")
-        return False
-
-# --- Функции для автозапуска в Linux (без изменений) ---
-def is_autostart_installed():
-    if platform.system() != "Linux":
-        return False
-    if os.path.exists(f"/etc/systemd/system/{SYSTEMD_SERVICE_NAME}"):
-        return True
-    user_home = os.path.expanduser("~")
-    return os.path.exists(os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE))
-
 def setup_autostart_linux():
+    """Устанавливает .desktop файл для автозапуска main.py после старта графической сессии."""
     script_path = os.path.abspath(__file__)
+    # Команда для запуска: сначала ждём 10 секунд (для полной инициализации), затем запускаем main.py
+    cmd = f"/bin/bash -c 'sleep 10 && {sys.executable} {os.path.dirname(script_path)}/{MAIN_SCRIPT}'"
     user_home = os.path.expanduser("~")
-    if os.geteuid() == 0:
-        service_content = f"""[Unit]
-Description=R2 Launcher Auto-Update
-After=network.target
-
-[Service]
-Type=simple
-User={os.getenv('SUDO_USER', 'root')}
-ExecStart={sys.executable} {script_path}
-WorkingDirectory={os.path.dirname(script_path)}
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-"""
-        service_path = f"/etc/systemd/system/{SYSTEMD_SERVICE_NAME}"
-        try:
-            with open(service_path, 'w') as f:
-                f.write(service_content)
-            subprocess.run(["systemctl", "daemon-reload"], check=True)
-            subprocess.run(["systemctl", "enable", SYSTEMD_SERVICE_NAME], check=True)
-            subprocess.run(["systemctl", "start", SYSTEMD_SERVICE_NAME], check=True)
-            log_message(f"[L] Автозапуск через systemd установлен (сервис {SYSTEMD_SERVICE_NAME})")
-            return True
-        except Exception as e:
-            log_message(f"[!] Не удалось установить systemd сервис: {e}")
-            return False
-    else:
-        autostart_dir = os.path.join(user_home, ".config", "autostart")
-        os.makedirs(autostart_dir, exist_ok=True)
-        desktop_file_path = os.path.join(autostart_dir, AUTOSTART_DESKTOP_FILE)
-        desktop_content = f"""[Desktop Entry]
+    autostart_dir = os.path.join(user_home, ".config", "autostart")
+    os.makedirs(autostart_dir, exist_ok=True)
+    desktop_file_path = os.path.join(autostart_dir, AUTOSTART_DESKTOP_FILE)
+    desktop_content = f"""[Desktop Entry]
 Type=Application
-Name=R2 Launcher
-Exec={sys.executable} {script_path}
+Name=Orange Pi Monitor
+Exec={cmd}
 Path={os.path.dirname(script_path)}
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Phase=Applications
 """
-        try:
-            with open(desktop_file_path, 'w') as f:
-                f.write(desktop_content)
-            log_message(f"[L] Автозапуск через .desktop файл установлен: {desktop_file_path}")
-            return True
-        except Exception as e:
-            log_message(f"[!] Не удалось создать .desktop файл: {e}")
-            return False
+    try:
+        with open(desktop_file_path, 'w') as f:
+            f.write(desktop_content)
+        log_message(f"[L] Автозапуск через .desktop файл установлен: {desktop_file_path}")
+        log_message(f"[L] Команда: {cmd}")
+        return True
+    except Exception as e:
+        log_message(f"[!] Не удалось создать .desktop файл: {e}")
+        return False
 
 def remove_autostart_linux():
-    if os.geteuid() == 0:
-        service_path = f"/etc/systemd/system/{SYSTEMD_SERVICE_NAME}"
-        try:
-            if os.path.exists(service_path):
-                subprocess.run(["systemctl", "stop", SYSTEMD_SERVICE_NAME], check=False)
-                subprocess.run(["systemctl", "disable", SYSTEMD_SERVICE_NAME], check=False)
-                os.remove(service_path)
-                subprocess.run(["systemctl", "daemon-reload"], check=True)
-                log_message(f"[L] Systemd сервис {SYSTEMD_SERVICE_NAME} удалён.")
-        except Exception as e:
-            log_message(f"[!] Ошибка при удалении systemd сервиса: {e}")
+    """Удаляет .desktop файл автозапуска."""
     user_home = os.path.expanduser("~")
     desktop_file_path = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     try:
@@ -283,16 +207,24 @@ def remove_autostart_linux():
     except Exception as e:
         log_message(f"[!] Ошибка при удалении .desktop файла: {e}")
 
+def is_autostart_installed():
+    """Проверяет, установлен ли .desktop файл."""
+    if platform.system() != "Linux":
+        return False
+    user_home = os.path.expanduser("~")
+    desktop_file = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
+    return os.path.exists(desktop_file)
+
 def main():
     check_python_version()
 
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
-    parser.add_argument("--install-autostart", action="store_true")
-    parser.add_argument("--remove-autostart", action="store_true")
-    parser.add_argument("--dont-install-autostart", action="store_true")
-    parser.add_argument("--foreground", action="store_true", help="Запустить main.py в текущем терминале (для отладки)")
+    parser.add_argument("--install-autostart", action="store_true", help="Установить автозапуск (.desktop)")
+    parser.add_argument("--remove-autostart", action="store_true", help="Удалить автозапуск")
+    parser.add_argument("--dont-install-autostart", action="store_true", help="Не устанавливать автозапуск автоматически")
     args, unknown = parser.parse_known_args()
 
+    # Обработка специальных команд автозапуска
     if args.install_autostart or args.remove_autostart:
         if platform.system() != "Linux":
             log_message("[!] Автозапуск поддерживается только в Linux.")
@@ -303,6 +235,7 @@ def main():
             remove_autostart_linux()
         sys.exit(0)
 
+    # Основной запуск (только обновление кода и зависимостей)
     log_message("""
   _____     ___  
   |  __ \  |__ \ 
@@ -321,6 +254,7 @@ def main():
     log_message(f"[L] Рабочая директория: {script_dir}")
     log_message(f"[L] Используемый интерпретатор: {sys.executable}")
 
+    # Автоматическая установка автозапуска (только Linux и если не запрещено)
     if platform.system() == "Linux" and not args.dont_install_autostart:
         if not is_autostart_installed():
             log_message("[L] Автозапуск не обнаружен. Устанавливаем...")
@@ -328,6 +262,7 @@ def main():
         else:
             log_message("[L] Автозапуск уже установлен.")
 
+    # Проверка интернета и обновление
     internet_ok = is_internet_available()
     if internet_ok:
         log_message("[L] Интернет доступен, пробуем обновить репозиторий...")
@@ -335,14 +270,12 @@ def main():
         if success:
             install_requirements()
         else:
-            log_message("[*] Обновление не удалось, продолжим с существующими файлами.")
+            log_message("[*] Обновление не удалось.")
     else:
         log_message("[*] Нет интернета, пропускаем обновление.")
 
-    if args.foreground:
-        run_main_foreground()
-    else:
-        run_main_background()
+    # Лаунчер завершает работу, не запуская main.py (он будет запущен через автозапуск или вручную)
+    log_message("[L] Работа лаунчера завершена. main.py будет запущен автоматически при следующем входе в графическую сессию (или вручную).")
 
 if __name__ == "__main__":
     main()
