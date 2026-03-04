@@ -33,6 +33,7 @@
             gap: 150px;
             background: black;
             z-index: 10;
+            transform: translateY(-150px);
         }
         .eye {
             width: 180px;
@@ -157,7 +158,6 @@
 
     <!-- Меню -->
     <div class="menu" id="menu">
-        <div class="menu-item" id="minimizeBtn">Свернуть</div>
         <div class="menu-item" id="closeBtn">Закрыть</div>
         <div class="menu-item" id="updateBtn">Обновить</div>
     </div>
@@ -167,7 +167,6 @@
         const rightEye = document.getElementById('rightEye');
         const menuTrigger = document.getElementById('menuTrigger');
         const menu = document.getElementById('menu');
-        const minimizeBtn = document.getElementById('minimizeBtn');
         const closeBtn = document.getElementById('closeBtn');
         const updateBtn = document.getElementById('updateBtn');
         const metricsDiv = document.getElementById('metrics');
@@ -211,17 +210,6 @@
         document.addEventListener('click', (e) => {
             if (!menu.contains(e.target) && e.target !== menuTrigger) {
                 menu.classList.remove('visible');
-            }
-        });
-
-        // --- Действия меню ---
-        minimizeBtn.addEventListener('click', () => {
-            menu.classList.remove('visible');
-            // Выход из полноэкранного режима (позволяет свернуть окно вручную)
-            if (document.exitFullscreen) {
-                document.exitFullscreen();
-            } else {
-                alert('Используйте системные средства для сворачивания');
             }
         });
 
