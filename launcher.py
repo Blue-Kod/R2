@@ -265,30 +265,16 @@ def run_terminal_as_user(terminal_cmd):
 def is_display_ready(timeout=30):
     """
     Проверяет, готова ли графическая среда.
-    Возвращает True, если переменная DISPLAY установлена и X-сервер отвечает.
-    При отсутствии DISPLAY ждёт до timeout секунд.
+    Возвращает True, если переменная DISPLAY установлена (признак графической сессии).
+    Если DISPLAY не установлена, ждёт до timeout секунд её появления.
     """
     start = time.time()
     while time.time() - start < timeout:
-        display = os.environ.get('DISPLAY')
-        if display:
-            # Пробуем выполнить xdpyinfo (требуется x11-utils) или хотя бы открыть окно xterm
-            try:
-                subprocess.run(['xdpyinfo'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1)
-                log_message("[L] Графическая среда готова (xdpyinfo успешен).")
-                return True
-            except:
-                # Если xdpyinfo нет, пробуем открыть и сразу закрыть xterm
-                try:
-                    proc = subprocess.Popen(['xterm', '-e', 'true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    proc.wait(timeout=2)
-                    if proc.returncode == 0:
-                        log_message("[L] Графическая среда готова (xterm открылся).")
-                        return True
-                except:
-                    pass
+        if os.environ.get('DISPLAY'):
+            log_message("[L] Графическая среда готова (DISPLAY установлен).")
+            return True
         time.sleep(1)
-    log_message("[L] Таймаут ожидания графической среды.")
+    log_message("[L] Таймаут ожидания графической среды (DISPLAY не появился).")
     return False
 
 def run_main_background():
@@ -319,7 +305,7 @@ def run_main_in_terminal():
 
     cmd_str = f"{sys.executable} {MAIN_SCRIPT}"
 
-    # Проверяем готовность графической среды (ждём до 30 секунд)
+    # Проверяем готовность графической среды (ждём до 30 секунд появления DISPLAY)
     if not is_display_ready(timeout=30):
         log_message("[L] Графическая среда не готова. Запускаю main.py в фоновом режиме.")
         return run_main_background()
