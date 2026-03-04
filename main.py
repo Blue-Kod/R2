@@ -192,7 +192,6 @@ def wait_for_server(host='127.0.0.1', port=5000, timeout=15):
 
 
 def start_browser_when_ready():
-    # Дополнительная задержка в 5 секунд после готовности сервера
     if wait_for_server(timeout=15):
         time.sleep(5)
         open_browser_kiosk()
