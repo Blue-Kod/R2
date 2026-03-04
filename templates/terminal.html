@@ -88,61 +88,80 @@
         <input type="text" id="command" placeholder="Введите команду..." autofocus>
     </div>
 
-    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
     <script>
         const outputDiv = document.getElementById('output');
         const commandInput = document.getElementById('command');
-        let socket = null;
+        let lastOutput = '';
+        let pollInterval = 100; // миллисекунд
 
-        function connect() {
-            socket = io();
-
-            socket.on('connect', () => {
-                appendOutput('Подключено к терминалу.\r\n', false);
-                commandInput.disabled = false;
-                commandInput.focus();
-            });
-
-            socket.on('output', (data) => {
-                appendOutput(data, false);
-            });
-
-            socket.on('exit', () => {
-                appendOutput('\r\n\x1b[31mСессия завершена\x1b[0m\r\n', false);
-                commandInput.disabled = true;
-            });
-
-            socket.on('disconnect', (reason) => {
-                appendOutput(`\r\n\x1b[31mСоединение потеряно: ${reason}\x1b[0m\r\n`, false);
-                commandInput.disabled = true;
-            });
-
-            socket.on('connect_error', (err) => {
-                appendOutput(`\r\n\x1b[31mОшибка подключения: ${err.message}\x1b[0m\r\n`, false);
+        function escapeHtml(unsafe) {
+            return unsafe.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
             });
         }
 
-        function appendOutput(text, isCommand = false) {
-            // Для отладки оставим текст как есть (escape-последовательности будут видны)
-            // Если хотим скрыть escape-коды, можно использовать обработку, но пока оставим.
+        function appendOutput(text) {
             outputDiv.innerHTML += text;
             outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
+
+        function setOutput(text) {
+            outputDiv.innerHTML = text;
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
+
+        async function fetchOutput() {
+            try {
+                const response = await fetch('/api/cmd/output');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (data.output !== lastOutput) {
+                    setOutput(data.output);
+                    lastOutput = data.output;
+                }
+            } catch (err) {
+                console.error('Ошибка получения вывода:', err);
+                appendOutput(`\r\n\x1b[31mОшибка: ${err.message}\x1b[0m\r\n`);
+            }
+        }
+
+        async function sendCommand(cmd) {
+            try {
+                const response = await fetch('/api/cmd/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: cmd })
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (data.error) {
+                    appendOutput(`\r\n\x1b[31mОшибка: ${data.error}\x1b[0m\r\n`);
+                } else {
+                    // Сразу запросим вывод, чтобы увидеть результат команды
+                    await fetchOutput();
+                }
+            } catch (err) {
+                appendOutput(`\r\n\x1b[31mОшибка отправки: ${err.message}\x1b[0m\r\n`);
+            }
         }
 
         commandInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 const cmd = commandInput.value;
-                if (cmd.trim() !== '' && socket && socket.connected) {
-                    appendOutput('$ ' + cmd + '\r\n', true);
-                    socket.emit('input', cmd + '\n');
+                if (cmd.trim() !== '') {
+                    appendOutput('$ ' + cmd + '\r\n');
+                    sendCommand(cmd);
                     commandInput.value = '';
-                } else if (!socket || !socket.connected) {
-                    appendOutput('\x1b[31mНет подключения к серверу\x1b[0m\r\n', false);
                 }
             }
         });
 
-        connect();
+        // Запускаем опрос
+        fetchOutput(); // сразу получить начальный вывод
+        setInterval(fetchOutput, pollInterval);
     </script>
 </body>
 </html>
