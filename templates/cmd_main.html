@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2 - Python Console</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: black;
+            color: #ccc;
+            font-family: 'Courier New', monospace;
+            height: 100vh;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        h2 {
+            color: white;
+        }
+        .back-btn {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .back-btn:hover {
+            background: #555;
+        }
+        .console {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
+        }
+        .input-area {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        textarea {
+            flex: 1;
+            background: #111;
+            color: #0f0;
+            border: 1px solid #333;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            resize: vertical;
+            min-height: 150px;
+        }
+        button {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 16px;
+            align-self: flex-end;
+        }
+        button:hover {
+            background: #555;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .output {
+            background: #111;
+            border: 1px solid #333;
+            padding: 10px;
+            overflow-y: auto;
+            flex: 1;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .output .error {
+            color: #f66;
+        }
+        .status {
+            color: #888;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>🐍 Python Console (main.py)</h2>
+        <a href="/" class="back-btn">← На главную</a>
+    </div>
+    <div class="console">
+        <div class="input-area">
+            <textarea id="codeInput" placeholder="Введите Python-код...">print("Hello, R2!")</textarea>
+            <button id="execBtn">Выполнить</button>
+        </div>
+        <div class="output" id="output"></div>
+        <div class="status" id="status"></div>
+    </div>
+    <script>
+        const codeInput = document.getElementById('codeInput');
+        const execBtn = document.getElementById('execBtn');
+        const outputDiv = document.getElementById('output');
+        const statusDiv = document.getElementById('status');
+
+        execBtn.addEventListener('click', async () => {
+            const code = codeInput.value.trim();
+            if (!code) return;
+            execBtn.disabled = true;
+            statusDiv.textContent = 'Выполнение...';
+            outputDiv.innerHTML = '';
+            try {
+                const response = await fetch('/api/exec/main', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    let html = '';
+                    if (result.stdout) html += `<span style="color:#0f0">${escapeHtml(result.stdout)}</span>`;
+                    if (result.stderr) html += `<span class="error">${escapeHtml(result.stderr)}</span>`;
+                    if (result.returncode !== 0) html += `<div>⛔ Возврат: ${result.returncode}</div>`;
+                    outputDiv.innerHTML = html || '<span style="color:#888">(пустой вывод)</span>';
+                } else {
+                    outputDiv.innerHTML = `<span class="error">Ошибка: ${result.error || 'неизвестная'}</span>`;
+                }
+            } catch (e) {
+                outputDiv.innerHTML = `<span class="error">Сетевая ошибка: ${e}</span>`;
+            } finally {
+                execBtn.disabled = false;
+                statusDiv.textContent = '';
+            }
+        });
+
+        function escapeHtml(unsafe) {
+            return unsafe.replace(/[&<>"]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                if (m === '"') return '&quot;';
+                return m;
+            });
+        }
+    </script>
+</body>
+</html>
