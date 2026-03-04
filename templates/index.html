@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: black;
+            color: white;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        h1 {
+            font-size: 6rem;
+            margin-bottom: 3rem;
+            letter-spacing: 0.2rem;
+        }
+        .buttons {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        button {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 1rem 2.5rem;
+            font-size: 1.5rem;
+            border-radius: 40px;
+            cursor: pointer;
+            font-family: 'Ubuntu Sans Mono', monospace;
+            transition: background 0.2s;
+            min-width: 180px;
+        }
+        button:hover {
+            background: #555;
+        }
+        @media (max-width: 600px) {
+            h1 { font-size: 4rem; }
+            button { font-size: 1.2rem; padding: 0.8rem 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <h1>R2</h1>
+    <div class="buttons">
+        <button onclick="window.location.href='/screen'">Экран</button>
+        <button onclick="window.location.href='/cmd/os'">CMD</button>
+        <button onclick="window.location.href='/cmd/main'">Python</button>
+    </div>
+</body>
+</html>
