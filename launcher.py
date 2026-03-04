@@ -20,7 +20,8 @@ Launcher для автообновления приложения из GitHub р
 
 Обновление самого себя:
     Скрипт умеет обновлять собственный код. При обнаружении новой версии launcher.py
-    в репозитории он создаёт временную копию, заменяет текущий файл и перезапускается.
+    в репозитории он создаёт временную копию, сравнивает содержимое, и если оно отличается,
+    заменяет текущий файл новой версией и перезапускается с теми же аргументами.
 """
 
 import os
@@ -45,16 +46,11 @@ MAIN_SCRIPT = "main.py"
 SYSTEMD_SERVICE_NAME = "r2-launcher.service"
 AUTOSTART_DESKTOP_FILE = "r2-launcher.desktop"
 
-# Флаг для определения, запущены ли мы в режиме финишного обновления
-SELF_UPDATE_ARG = "--finish-self-update"
-
-
 def check_python_version():
     """Проверяет, что используется Python 3."""
     if sys.version_info.major < 3:
         print("[!] Ошибка: требуется Python 3")
         sys.exit(1)
-
 
 def is_internet_available(timeout=3):
     """Проверяет доступность GitHub для определения наличия интернета."""
@@ -64,12 +60,42 @@ def is_internet_available(timeout=3):
     except requests.RequestException:
         return False
 
+def apply_self_update(new_launcher_path):
+    """
+    Сравнивает текущий скрипт с новой версией из new_launcher_path.
+    Если они различаются, заменяет текущий файл новой версией и
+    перезапускает себя с теми же аргументами командной строки.
+    """
+    current_script = os.path.abspath(__file__)
+    # Сравниваем содержимое (побайтово)
+    if filecmp.cmp(current_script, new_launcher_path, shallow=False):
+        print("[L] Текущая версия лаунчера актуальна.")
+        os.unlink(new_launcher_path)
+        return False  # обновление не требуется
+
+    print("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
+    try:
+        # Заменяем текущий файл новым (атомарно для POSIX)
+        os.replace(new_launcher_path, current_script)
+        # Восстанавливаем права на исполнение (если были)
+        st = os.stat(current_script)
+        os.chmod(current_script, st.st_mode)
+        print("[L] Лаунчер успешно обновлён. Перезапускаю...")
+        # Перезапускаемся с теми же аргументами (кроме возможных флагов автозапуска, но их оставляем)
+        os.execv(sys.executable, [sys.executable, current_script] + sys.argv[1:])
+    except Exception as e:
+        print(f"[!] Ошибка при самообновлении: {e}")
+        # Если не удалось заменить, пробуем удалить временный файл
+        try:
+            os.unlink(new_launcher_path)
+        except:
+            pass
+        return False
 
 def download_and_extract_repo(target_dir, script_name):
     """
     Скачивает репозиторий как ZIP, распаковывает во временную папку,
-    затем копирует все файлы в target_dir, включая сам скрипт (launcher.py)
-    во временный файл для последующего самообновления.
+    затем копирует все файлы в target_dir.
     Возвращает True при успехе, False при ошибке.
     """
     try:
@@ -119,7 +145,7 @@ def download_and_extract_repo(target_dir, script_name):
 
                     # Обработка самого лаунчера: не копируем сразу, сохраняем отдельно
                     if file == script_name:
-                        print(f"[L] Найдена новая версия {script_name}, готовим к обновлению...")
+                        print(f"[L] Найдена новая версия {script_name}, проверяем необходимость обновления...")
                         # Сохраняем во временный файл
                         fd, new_launcher_tmp = tempfile.mkstemp(prefix="launcher_new_", suffix=".py")
                         os.close(fd)
@@ -135,62 +161,18 @@ def download_and_extract_repo(target_dir, script_name):
 
         # Если есть обновление для лаунчера, запускаем самообновление
         if new_launcher_tmp:
-            self_update(new_launcher_tmp)
+            # apply_self_update либо заменяет файл и перезапускает процесс (не возвращает управление),
+            # либо возвращает False, если обновление не требуется.
+            if apply_self_update(new_launcher_tmp):
+                # Если обновление произошло, процесс будет перезапущен и сюда управление не дойдёт.
+                # Но apply_self_update возвращает False в случае ошибки или если файлы идентичны.
+                pass
 
         return True
 
     except Exception as e:
         print(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
-
-
-def self_update(new_launcher_path):
-    """
-    Запускает процесс самообновления: сравнивает текущий скрипт с новым,
-    и если они отличаются, запускает новый экземпляр с флагом --finish-self-update,
-    а текущий завершается.
-    """
-    current_script = os.path.abspath(__file__)
-    # Сравниваем файлы
-    if filecmp.cmp(current_script, new_launcher_path, shallow=False):
-        print("[L] Текущая версия лаунчера актуальна.")
-        os.unlink(new_launcher_path)
-        return
-
-    print("[L] Обнаружена новая версия лаунчера. Запускаем обновление...")
-    # Запускаем новый лаунчер с флагом финишного обновления
-    try:
-        subprocess.Popen(
-            [sys.executable, new_launcher_path, SELF_UPDATE_ARG, current_script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        # Завершаем текущий процесс
-        sys.exit(0)
-    except Exception as e:
-        print(f"[!] Не удалось запустить процесс самообновления: {e}")
-        os.unlink(new_launcher_path)
-
-
-def finish_self_update(old_script_path):
-    """
-    Выполняется в новом экземпляре лаунчера.
-    Заменяет старый файл лаунчера на новый (текущий) и перезапускает основной процесс.
-    """
-    new_script = os.path.abspath(__file__)
-    try:
-        # Заменяем старый файл новым
-        os.replace(new_script, old_script_path)
-        # Делаем новый файл исполняемым (сохраняем права)
-        st = os.stat(old_script_path)
-        os.chmod(old_script_path, st.st_mode)
-        print(f"[L] Лаунчер успешно обновлён.")
-        # Запускаем обновлённый лаунчер без аргументов
-        os.execv(sys.executable, [sys.executable, old_script_path])
-    except Exception as e:
-        print(f"[!] Ошибка при финишном обновлении: {e}")
-        sys.exit(1)
-
 
 def install_requirements():
     """
@@ -215,7 +197,6 @@ def install_requirements():
         print(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
-
 def run_main():
     """Запускает main.py, если он существует, используя текущий интерпретатор python3."""
     main_path = Path(MAIN_SCRIPT)
@@ -231,7 +212,6 @@ def run_main():
     except Exception as e:
         print(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
         return False
-
 
 # --- Функции для автозапуска в Linux ---
 def is_autostart_installed():
@@ -249,12 +229,11 @@ def is_autostart_installed():
         return True
     return False
 
-
 def setup_autostart_linux():
     """Устанавливает текущий скрипт в автозагрузку Linux."""
     script_path = os.path.abspath(__file__)
     user_home = os.path.expanduser("~")
-
+    
     if os.geteuid() == 0:
         # Системный systemd юнит
         service_content = f"""[Unit]
@@ -307,7 +286,6 @@ X-GNOME-Autostart-enabled=true
             print(f"[!] Не удалось создать .desktop файл: {e}")
             return False
 
-
 def remove_autostart_linux():
     """Удаляет текущий скрипт из автозагрузки Linux."""
     if os.geteuid() == 0:
@@ -321,7 +299,7 @@ def remove_autostart_linux():
                 print(f"[L] Systemd сервис {SYSTEMD_SERVICE_NAME} удалён.")
         except Exception as e:
             print(f"[!] Ошибка при удалении systemd сервиса: {e}")
-
+    
     user_home = os.path.expanduser("~")
     desktop_file_path = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     try:
@@ -331,19 +309,14 @@ def remove_autostart_linux():
     except Exception as e:
         print(f"[!] Ошибка при удалении .desktop файла: {e}")
 
-
 def main():
     check_python_version()
 
     # Разбор аргументов командной строки
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
-    parser.add_argument("--install-autostart", action="store_true",
-                        help="Установить скрипт в автозагрузку (только Linux)")
+    parser.add_argument("--install-autostart", action="store_true", help="Установить скрипт в автозагрузку (только Linux)")
     parser.add_argument("--remove-autostart", action="store_true", help="Удалить скрипт из автозагрузки (только Linux)")
-    parser.add_argument("--dont-install-autostart", action="store_true",
-                        help="Не устанавливать автозагрузку автоматически")
-    # Скрытый аргумент для самообновления
-    parser.add_argument(SELF_UPDATE_ARG, nargs="?", const=None, help=argparse.SUPPRESS)
+    parser.add_argument("--dont-install-autostart", action="store_true", help="Не устанавливать автозагрузку автоматически")
     args, unknown = parser.parse_known_args()
 
     # Обработка специальных команд автозапуска
@@ -356,16 +329,6 @@ def main():
         elif args.remove_autostart:
             remove_autostart_linux()
         sys.exit(0)
-
-    # Если мы в режиме финишного обновления
-    if getattr(args, SELF_UPDATE_ARG.lstrip('-').replace('-', '_'), None):
-        # Ожидаем, что следующий аргумент - путь к старому скрипту
-        if len(sys.argv) >= 3:
-            old_script = sys.argv[2]
-            finish_self_update(old_script)
-        else:
-            print("[!] Не указан путь к старому скрипту для обновления.")
-            sys.exit(1)
 
     # Основной запуск
     print("""
@@ -413,7 +376,6 @@ def main():
 
     # В любом случае пытаемся запустить main.py
     run_main()
-
 
 if __name__ == "__main__":
     main()
