@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2</title>
+    <title>R2 - Экран</title>
     <style>
         * {
             margin: 0;
@@ -20,7 +20,6 @@
             overflow: hidden;
             position: relative;
         }
-        /* Контейнер глаз */
         .eyes-container {
             position: absolute;
             top: 0;
@@ -46,7 +45,6 @@
         .eye.blink {
             transform: scaleY(0.1);
         }
-        /* Логи на фоне */
         .logs-overlay {
             position: absolute;
             top: 0;
@@ -95,7 +93,6 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
-        /* Область для вызова меню (невидимая полоса внизу) */
         .menu-trigger {
             position: absolute;
             bottom: 0;
@@ -106,7 +103,6 @@
             background: transparent;
             cursor: pointer;
         }
-        /* Само меню */
         .menu {
             position: absolute;
             bottom: 70px;
@@ -153,13 +149,11 @@
         <div class="logs" id="logs"></div>
     </div>
 
-    <!-- Область для вызова меню -->
     <div class="menu-trigger" id="menuTrigger"></div>
 
-    <!-- Меню -->
     <div class="menu" id="menu">
         <div class="menu-item" id="closeBtn">Закрыть</div>
-        <div class="menu-item" id="updateBtn">Обновить</div>
+        <div class="menu-item" id="homeBtn">На главную</div>
     </div>
 
     <script>
@@ -168,11 +162,11 @@
         const menuTrigger = document.getElementById('menuTrigger');
         const menu = document.getElementById('menu');
         const closeBtn = document.getElementById('closeBtn');
-        const updateBtn = document.getElementById('updateBtn');
+        const homeBtn = document.getElementById('homeBtn');
         const metricsDiv = document.getElementById('metrics');
         const logsDiv = document.getElementById('logs');
 
-        // --- Моргание ---
+        // Моргание
         function blink() {
             if (leftEye.classList.contains('blink')) return;
             leftEye.classList.add('blink');
@@ -183,14 +177,13 @@
             }, 150);
             scheduleBlink();
         }
-
         function scheduleBlink() {
             const delay = Math.random() * (15000 - 5000) + 5000;
             setTimeout(blink, delay);
         }
         scheduleBlink();
 
-        // --- Дрожание ---
+        // Дрожание
         function randomShake() {
             const x = (Math.random() * 6 - 3).toFixed(1);
             const y = (Math.random() * 6 - 3).toFixed(1);
@@ -200,13 +193,12 @@
         }
         setInterval(randomShake, 500);
 
-        // --- Показ/скрытие меню ---
+        // Меню
         menuTrigger.addEventListener('click', (e) => {
             e.stopPropagation();
             menu.classList.toggle('visible');
         });
 
-        // Клик вне меню скрывает его
         document.addEventListener('click', (e) => {
             if (!menu.contains(e.target) && e.target !== menuTrigger) {
                 menu.classList.remove('visible');
@@ -219,10 +211,7 @@
                 const response = await fetch('/api/shutdown', { method: 'POST' });
                 const result = await response.json();
                 if (result.status === 'ok') {
-                    // Пытаемся закрыть окно браузера
-                    setTimeout(() => {
-                        window.close();
-                    }, 1000);
+                    setTimeout(() => window.close(), 1000);
                 } else {
                     alert('Ошибка: ' + result.message);
                 }
@@ -231,28 +220,11 @@
             }
         });
 
-        updateBtn.addEventListener('click', async () => {
-            menu.classList.remove('visible');
-            updateBtn.style.pointerEvents = 'none'; // защита от повторного клика
-            try {
-                const response = await fetch('/api/update', { method: 'POST' });
-                const result = await response.json();
-                if (result.status === 'ok') {
-                    // Через некоторое время перезагрузим страницу, чтобы подключиться к новому серверу
-                    setTimeout(() => {
-                        location.reload();
-                    }, 5000);
-                } else {
-                    alert('Ошибка: ' + result.message);
-                    updateBtn.style.pointerEvents = 'auto';
-                }
-            } catch (e) {
-                alert('Ошибка сети');
-                updateBtn.style.pointerEvents = 'auto';
-            }
+        homeBtn.addEventListener('click', () => {
+            window.location.href = '/';
         });
 
-        // --- Обновление данных ---
+        // Обновление данных
         async function fetchData() {
             try {
                 const response = await fetch('/api/data');
@@ -278,12 +250,9 @@
         fetchData();
         setInterval(fetchData, 2000);
 
-        // Выход по Esc
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                }
+                if (document.exitFullscreen) document.exitFullscreen();
             }
         });
     </script>
