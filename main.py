@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 """
 Chill Monitor на PySide6 с глазами, системными логами и кнопкой обновления.
@@ -21,7 +19,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QPushButton, QTextEdit, QGraphicsView,
                                QGraphicsScene, QGraphicsRectItem)
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPointF, QEasingCurve
-from PySide6.QtGui import QColor, QBrush, QPen, QFont
+from PySide6.QtGui import QColor, QBrush, QPen, QFont, QPainter
 
 # Лог-файл для отладки самого скрипта
 LOG_FILE = "logs.txt"
