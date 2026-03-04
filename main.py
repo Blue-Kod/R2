@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-R2 – веб-монитор Orange Pi с глазами и системными логами.
-После запуска сервера автоматически открывается браузер в полноэкранном режиме (kiosk).
-Если запущено от root – браузер стартует от обычного пользователя с флагом --no-sandbox.
-"""
-
 import os
 import sys
 import subprocess
@@ -103,17 +97,35 @@ def api_data():
 
 @app.route('/api/update', methods=['POST'])
 def api_update():
+    """Запускает лаунчер и завершает текущий процесс."""
     try:
         launcher_path = os.path.join(os.path.dirname(__file__), "launcher.py")
         if os.path.exists(launcher_path):
             subprocess.Popen([sys.executable, launcher_path])
             log_message("Запущен процесс обновления")
+            # Даём время на отправку ответа, затем завершаем процесс
+            def shutdown():
+                time.sleep(1)
+                os._exit(0)
+            threading.Thread(target=shutdown, daemon=True).start()
             return jsonify({'status': 'ok', 'message': 'Обновление запущено'})
         else:
             return jsonify({'status': 'error', 'message': 'launcher.py не найден'}), 404
     except Exception as e:
         log_message(f"Ошибка запуска лаунчера: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/shutdown', methods=['POST'])
+def api_shutdown():
+    """Завершает процесс main.py и пытается закрыть окно браузера."""
+    log_message("Получена команда на завершение")
+    # Отправляем ответ и завершаем процесс
+    def shutdown():
+        time.sleep(1)
+        os._exit(0)
+    threading.Thread(target=shutdown, daemon=True).start()
+    return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
 
 def get_display_user():
