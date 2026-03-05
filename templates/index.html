@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2</title>
+    <title>R2 - Главная</title>
     <style>
         * {
             margin: 0;
@@ -11,53 +11,363 @@
             box-sizing: border-box;
         }
         body {
-            background-color: black;
-            color: white;
+            background: black;
+            color: #00ff00;
             font-family: 'Ubuntu Sans Mono', monospace;
             height: 100vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
+        }
+        header {
+            background: #111;
+            padding: 10px;
+            text-align: center;
+            border-bottom: 1px solid #333;
+        }
+        header a {
+            color: #fff;
+            text-decoration: none;
+            font-size: 20px;
+            margin: 0 15px;
+        }
+        header a:hover {
+            text-decoration: underline;
+        }
+        .container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        .panel {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            overflow: hidden;
+        }
+        .panel-left {
+            width: 25%;
+            background: #0a0a0a;
+            border-right: 1px solid #333;
+        }
+        .panel-center {
+            width: 50%;
+            background: black;
+            display: flex;
+            flex-direction: column;
+        }
+        .panel-right {
+            width: 25%;
+            background: #0a0a0a;
+            border-left: 1px solid #333;
+        }
+        .panel-title {
+            color: #00ff00;
+            font-size: 14px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #333;
+        }
+        #logs {
+            flex: 1;
+            overflow-y: auto;
+            font-size: 11px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            padding-right: 5px;
+        }
+        #logs div {
+            color: #aaa;
+        }
+        #video-container {
+            flex: 1;
+            background: black;
+            position: relative;
+            display: flex;
             justify-content: center;
             align-items: center;
         }
-        h1 {
-            font-size: 6rem;
-            margin-bottom: 3rem;
-            letter-spacing: 0.2rem;
+        #video-feed {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border: 1px solid #333;
         }
-        .buttons {
+        #controls {
+            padding: 10px;
+            background: #111;
+            border-top: 1px solid #333;
+        }
+        .control-row {
             display: flex;
-            gap: 2rem;
-            flex-wrap: wrap;
-            justify-content: center;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
         }
-        button {
-            background: #333;
-            color: white;
+        .control-row label {
+            color: #00ff00;
+            font-size: 12px;
+        }
+        .control-row input[type="checkbox"] {
+            accent-color: #00ff00;
+        }
+        .control-row input[type="range"] {
+            width: 60%;
+            accent-color: #00ff00;
+        }
+        #terminal-output {
+            flex: 1;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            background: #000;
+            padding: 5px;
+            border: 1px solid #333;
+            margin-bottom: 5px;
+        }
+        #terminal-input-line {
+            display: flex;
+        }
+        #terminal-prompt {
+            color: #00ff00;
+            margin-right: 5px;
+        }
+        #terminal-command {
+            flex: 1;
+            background: black;
             border: none;
-            padding: 1rem 2.5rem;
-            font-size: 1.5rem;
-            border-radius: 40px;
-            cursor: pointer;
+            outline: none;
+            color: #00ff00;
             font-family: 'Ubuntu Sans Mono', monospace;
-            transition: background 0.2s;
-            min-width: 180px;
+            font-size: 12px;
         }
-        button:hover {
-            background: #555;
+        .depth-tooltip {
+            position: absolute;
+            background: rgba(0,0,0,0.8);
+            color: #00ff00;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            border: 1px solid #00ff00;
+            z-index: 100;
         }
-        @media (max-width: 600px) {
-            h1 { font-size: 4rem; }
-            button { font-size: 1.2rem; padding: 0.8rem 1.5rem; }
+        .hidden {
+            display: none;
         }
     </style>
 </head>
 <body>
-    <h1>R2</h1>
-    <div class="buttons">
-        <button onclick="window.location.href='/screen'">Экран</button>
-        <button onclick="window.location.href='/terminal'">CMD</button>
-        <button onclick="window.location.href='/logs'">Логи</button>
+    <header>
+        <a href="/">R2</a>
+        <a href="/screen">Экран</a>
+        <a href="/terminal">CMD</a>
+        <a href="/logs">Логи</a>
+    </header>
+    <div class="container">
+        <!-- Левая панель: логи -->
+        <div class="panel panel-left">
+            <div class="panel-title">Системные логи</div>
+            <div id="logs"></div>
+        </div>
+
+        <!-- Центральная панель: видео -->
+        <div class="panel panel-center">
+            <div id="video-container">
+                <img id="video-feed" src="/video_feed" alt="Video Stream">
+                <div id="depth-tooltip" class="depth-tooltip hidden"></div>
+            </div>
+            <div id="controls">
+                <div class="control-row">
+                    <label>Основной глаз:</label>
+                    <div>
+                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateCamParams()"> <label for="eyeLeft">Левый</label>
+                        <input type="radio" name="mainEye" id="eyeRight" onchange="updateCamParams()"> <label for="eyeRight">Правый</label>
+                    </div>
+                </div>
+                <div class="control-row">
+                    <label>Показывать глубину:</label>
+                    <input type="checkbox" id="showDepth" checked onchange="updateCamParams()">
+                </div>
+                <div class="control-row">
+                    <label>Прозрачность глубины:</label>
+                    <input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateCamParams()">
+                </div>
+            </div>
+        </div>
+
+        <!-- Правая панель: терминал -->
+        <div class="panel panel-right">
+            <div class="panel-title">Терминал</div>
+            <div id="terminal-output"></div>
+            <div id="terminal-input-line">
+                <span id="terminal-prompt">$</span>
+                <input type="text" id="terminal-command" placeholder="Введите команду..." autofocus>
+            </div>
+        </div>
     </div>
+
+    <script>
+        // ---------- Логи ----------
+        const logsDiv = document.getElementById('logs');
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+                logsDiv.innerHTML = data.logs.map(line => `<div>${escapeHtml(line)}</div>`).join('');
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            } catch (e) {
+                console.error('Ошибка получения логов:', e);
+            }
+        }
+        function escapeHtml(unsafe) {
+            return unsafe.replace(/[&<>"]/g, function(m) {
+                if(m === '&') return '&amp;';
+                if(m === '<') return '&lt;';
+                if(m === '>') return '&gt;';
+                if(m === '"') return '&quot;';
+                return m;
+            });
+        }
+        fetchLogs();
+        setInterval(fetchLogs, 2000);
+
+        // ---------- Управление камерой ----------
+        const eyeLeft = document.getElementById('eyeLeft');
+        const eyeRight = document.getElementById('eyeRight');
+        const showDepth = document.getElementById('showDepth');
+        const depthAlpha = document.getElementById('depthAlpha');
+
+        function updateCamParams() {
+            const params = {
+                nD: 7,  // фиксированное значение, можно не менять
+                a_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0,
+                a_seg: 0, // AI отключён для простоты
+                ai_on: false,
+                m_left: eyeLeft.checked
+            };
+            fetch('/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(params)
+            }).catch(err => console.error('Ошибка отправки параметров:', err));
+        }
+
+        // ---------- Отображение глубины при наведении ----------
+        const video = document.getElementById('video-feed');
+        const tooltip = document.getElementById('depth-tooltip');
+
+        video.addEventListener('mousemove', (e) => {
+            const rect = video.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            // Нормализуем координаты относительно естественного размера видео
+            const scaleX = video.naturalWidth / rect.width;
+            const scaleY = video.naturalHeight / rect.height;
+            const imgX = Math.round(x * scaleX);
+            const imgY = Math.round(y * scaleY);
+
+            fetch('/api/depth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x: imgX, y: imgY })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.depth !== null && data.depth !== undefined) {
+                    tooltip.classList.remove('hidden');
+                    tooltip.style.left = (e.clientX + 15) + 'px';
+                    tooltip.style.top = (e.clientY + 15) + 'px';
+                    tooltip.textContent = `${data.depth.toFixed(1)} см`;
+                } else {
+                    tooltip.classList.add('hidden');
+                }
+            })
+            .catch(err => {
+                console.error('Ошибка получения глубины:', err);
+                tooltip.classList.add('hidden');
+            });
+        });
+
+        video.addEventListener('mouseleave', () => {
+            tooltip.classList.add('hidden');
+        });
+
+        // ---------- Терминал ----------
+        const terminalOutput = document.getElementById('terminal-output');
+        const terminalCommand = document.getElementById('terminal-command');
+        let lastOutput = '';
+        let fetchInProgress = false;
+        let sendInProgress = false;
+
+        function stripAnsi(str) {
+            if (!str) return '';
+            return str
+                .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+                .replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')
+                .replace(/\x1b\\/g, '')
+                .replace(/\x07/g, '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n');
+        }
+
+        function setTerminalOutput(text) {
+            terminalOutput.innerHTML = stripAnsi(text);
+            terminalOutput.scrollTop = terminalOutput.scrollHeight;
+        }
+
+        async function fetchTerminalOutput() {
+            if (fetchInProgress) return;
+            fetchInProgress = true;
+            try {
+                const response = await fetch('/api/cmd/output');
+                const data = await response.json();
+                if (data.output !== lastOutput) {
+                    setTerminalOutput(data.output);
+                    lastOutput = data.output;
+                }
+            } catch (err) {
+                console.debug('fetchTerminalOutput error:', err);
+            } finally {
+                fetchInProgress = false;
+            }
+        }
+
+        async function sendTerminalCommand(cmd) {
+            if (sendInProgress) return;
+            sendInProgress = true;
+            try {
+                await fetch('/api/cmd/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: cmd })
+                });
+                await fetchTerminalOutput();
+            } catch (err) {
+                console.debug('sendTerminalCommand error:', err);
+            } finally {
+                sendInProgress = false;
+            }
+        }
+
+        terminalCommand.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const cmd = terminalCommand.value;
+                if (cmd.trim() !== '') {
+                    setTerminalOutput(lastOutput + '$ ' + cmd + '\n');
+                    lastOutput += '$ ' + cmd + '\n';
+                    sendTerminalCommand(cmd);
+                    terminalCommand.value = '';
+                }
+            }
+        });
+
+        fetchTerminalOutput();
+        setInterval(fetchTerminalOutput, 200);
+    </script>
 </body>
 </html>
