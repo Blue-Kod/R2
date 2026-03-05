@@ -2,3 +2,6 @@ flask
 psutil
 requests
 ptyprocess
+opencv-python
+opencv-contrib-python
+numpy
