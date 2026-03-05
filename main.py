@@ -250,8 +250,7 @@ def cmd_output():
     output = shell_manager.get_output()
     return jsonify({'output': output})
 
-# API для камеры
-@app.route('/video_feed')
+# API для камеры@app.route('/video_feed')
 def video_feed():
     def gen():
         while True:
@@ -269,12 +268,15 @@ def video_feed():
 @app.route('/update', methods=['POST'])
 def update_camera():
     d = request.json
-    engine.update_params(
-        nD=d.get('nD', 7),
-        a_depth=d.get('a_depth', 30),
-        m_left=d.get('m_left', True)
-    )
-    return jsonify(ok=True)
+    if engine is not None:  # <-- добавлена проверка
+        engine.update_params(
+            nD=d.get('nD', 7),
+            a_depth=d.get('a_depth', 30),
+            m_left=d.get('m_left', True)
+        )
+        return jsonify(ok=True)
+    else:
+        return jsonify(error='Camera not initialized'), 500
 
 @app.route('/get_fps')
 def get_fps():
