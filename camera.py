@@ -6,9 +6,11 @@ import numpy as np
 import json
 import threading
 import time
+import os
 
 class StereoEngine:
     def __init__(self, config_path, source=0):
+        print(f"Инициализация камеры, источник {source}")
         with open(config_path, "r") as f:
             cfg = json.load(f)
 
@@ -46,6 +48,7 @@ class StereoEngine:
         self.fps = 0
         self.running = True
         self.lock = threading.Lock()
+        self.frame_count = 0
 
         if os.name == 'nt':
             backend = cv2.CAP_DSHOW
@@ -56,11 +59,12 @@ class StereoEngine:
         if not self.cap.isOpened():
             raise IOError(f"Не удалось открыть камеру {source}")
 
+        # Пытаемся установить нужное разрешение (без принудительного FOURCC)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
+        # Проверяем реальное разрешение
         w = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         h = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         print(f"Реальное разрешение камеры: {w} x {h}")
@@ -87,21 +91,29 @@ class StereoEngine:
             self.matcher_r = None
 
     def _capture_loop(self):
+        print("Запуск захвата кадров")
         while self.running:
             ret, frame = self.cap.read()
             if ret:
+                self.frame_count += 1
+                # Поворот на 180°
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
                 self.raw_frame = frame
+                if self.frame_count % 30 == 0:
+                    print(f"Получен кадр #{self.frame_count}")
             else:
-                time.sleep(0.001)
+                print("Ошибка чтения кадра")
+                time.sleep(0.1)
+            time.sleep(0.001)
 
     def _processing_loop(self):
+        print("Запуск обработки")
         last_time = time.time()
         H, W = self.img_size[1], self.img_size[0]
 
         while self.running:
             if self.raw_frame is None:
-                time.sleep(0.005)
+                time.sleep(0.01)
                 continue
 
             frame = self.raw_frame
@@ -118,7 +130,7 @@ class StereoEngine:
             rectL = cv2.remap(imgL, self.mapL1, self.mapL2, cv2.INTER_LINEAR)
             rectR = cv2.remap(imgR, self.mapR1, self.mapR2, cv2.INTER_LINEAR)
 
-            main_view = rectL  # всегда левый глаз для основного вида
+            main_view = rectL
 
             lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
             lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
@@ -153,7 +165,6 @@ class StereoEngine:
             if nD != self.num_disp:
                 self.num_disp = nD
                 self._init_matchers()
-            # m_left пока не используется, но можно расширить позже
 
     def get_depth_at(self, x, y):
         if self.points_3d is None:
