@@ -117,6 +117,10 @@
             width: 60%;
             accent-color: #00ff00;
         }
+        .control-row input[type="radio"] {
+            accent-color: #00ff00;
+            margin-left: 10px;
+        }
         #terminal-output {
             flex: 1;
             overflow-y: auto;
@@ -147,14 +151,16 @@
         }
         .depth-tooltip {
             position: absolute;
-            background: rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.85);
             color: #00ff00;
             padding: 4px 8px;
             border-radius: 4px;
             font-size: 12px;
+            font-family: 'Ubuntu Sans Mono', monospace;
             pointer-events: none;
             border: 1px solid #00ff00;
-            z-index: 100;
+            z-index: 1000;
+            box-shadow: 0 2px 5px rgba(0,255,0,0.2);
         }
         .hidden {
             display: none;
@@ -185,17 +191,17 @@
                 <div class="control-row">
                     <label>Основной глаз:</label>
                     <div>
-                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateCamParams()"> <label for="eyeLeft">Левый</label>
-                        <input type="radio" name="mainEye" id="eyeRight" onchange="updateCamParams()"> <label for="eyeRight">Правый</label>
+                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateParams()"> <label for="eyeLeft">Левый</label>
+                        <input type="radio" name="mainEye" id="eyeRight" onchange="updateParams()"> <label for="eyeRight">Правый</label>
                     </div>
                 </div>
                 <div class="control-row">
                     <label>Показывать глубину:</label>
-                    <input type="checkbox" id="showDepth" checked onchange="updateCamParams()">
+                    <input type="checkbox" id="showDepth" checked onchange="updateParams()">
                 </div>
                 <div class="control-row">
                     <label>Прозрачность глубины:</label>
-                    <input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateCamParams()">
+                    <input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()">
                 </div>
             </div>
         </div>
@@ -237,35 +243,32 @@
         setInterval(fetchLogs, 2000);
 
         // ---------- Управление камерой ----------
-        const eyeLeft = document.getElementById('eyeLeft');
-        const eyeRight = document.getElementById('eyeRight');
-        const showDepth = document.getElementById('showDepth');
-        const depthAlpha = document.getElementById('depthAlpha');
-
-        function updateCamParams() {
+        function updateParams() {
             const params = {
-                nD: 7,  // фиксированное значение, можно не менять
-                a_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0,
-                a_seg: 0, // AI отключён для простоты
-                ai_on: false,
-                m_left: eyeLeft.checked
+                alpha_depth: document.getElementById('showDepth').checked ? parseInt(document.getElementById('depthAlpha').value) : 0,
+                show_left: document.getElementById('eyeLeft').checked,
+                num_disp: 7  // можно добавить слайдер позже
             };
             fetch('/update', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(params)
-            }).catch(err => console.error('Ошибка отправки параметров:', err));
+            }).catch(err => console.error(err));
         }
 
-        // ---------- Отображение глубины при наведении ----------
+        // ---------- Глубина при наведении ----------
         const video = document.getElementById('video-feed');
         const tooltip = document.getElementById('depth-tooltip');
+        const showDepthCheckbox = document.getElementById('showDepth');
 
         video.addEventListener('mousemove', (e) => {
+            if (!showDepthCheckbox.checked) {
+                tooltip.classList.add('hidden');
+                return;
+            }
             const rect = video.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const y = e.clientY - rect.top;
-            // Нормализуем координаты относительно естественного размера видео
             const scaleX = video.naturalWidth / rect.width;
             const scaleY = video.naturalHeight / rect.height;
             const imgX = Math.round(x * scaleX);
