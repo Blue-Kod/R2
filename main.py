@@ -382,7 +382,7 @@ def main():
     shell_manager.start()
     
     # Инициализация камеры
-    config_path = "GXVISION_120_fisheye_params.json"
+    config_path = "cam_params.json"
     if os.path.exists(config_path):
         try:
             engine = StereoEngine(config_path, source=0)
