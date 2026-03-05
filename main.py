@@ -22,6 +22,8 @@ from camera import SimpleStereoFix
 
 HTTP_PORT = 80
 LOG_FILE = "logs.txt"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+config_path = os.path.join(BASE_DIR, "cam_params.json")
 
 # Глобальные объекты
 shell_manager = None
@@ -363,7 +365,9 @@ def main():
     shell_manager.start()
     
     # Инициализация камеры
-    config_path = "cam_params.json"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "cam_params.json")
+    
     if os.path.exists(config_path):
         try:
             camera = SimpleStereoFix(config_path, source=0)
@@ -372,7 +376,13 @@ def main():
             log_message(f"Ошибка инициализации камеры: {e}")
             camera = None
     else:
-        log_message(f"Файл калибровки {config_path} не найден, камера недоступна")
+        log_message(f"Файл калибровки {config_path} не найден")
+        # Выведем список файлов в папке для диагностики
+        try:
+            files = os.listdir(script_dir)
+            log_message(f"Файлы в {script_dir}: {files}")
+        except:
+            pass
         camera = None
 
     # Запуск браузера (опционально)
