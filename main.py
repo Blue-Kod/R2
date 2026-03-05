@@ -18,15 +18,7 @@ from collections import deque
 import psutil
 from flask import Flask, render_template, jsonify, request, Response
 
-# Попытка импорта AI-компонентов (если не установлены, AI будет отключён)
-try:
-    from ultralytics import YOLO
-    AI_AVAILABLE = True
-except ImportError:
-    AI_AVAILABLE = False
-    print("AI modules not found. Running without AI.")
-
-# ---------- Класс стерео-движка (из camera_test.py) ----------
+# ---------- Класс стерео-движка (упрощённый, без AI) ----------
 class StereoEngine:
     def __init__(self, config_path, source=0):
         with open(config_path, "r") as f:
@@ -40,33 +32,25 @@ class StereoEngine:
         self.Kr, self.Dr = np.array(cfg['Kr']), np.array(cfg['Dr'])
         self.R, self.T = np.array(cfg['R']), np.array(cfg['T'])
 
-        # Ректификация
+        # Ректификация (исправление дисторсии и выравнивание камер)
         self.R1, self.R2, self.P1, self.P2, self.Q = cv2.fisheye.stereoRectify(
             self.Kl, self.Dl, self.Kr, self.Dr, self.img_size, self.R, self.T, flags=0
         )
-        self.mapL1, self.mapL2 = cv2.fisheye.initUndistortRectifyMap(self.Kl, self.Dl, self.R1, self.P1, self.img_size,
-                                                                     cv2.CV_16SC2)
-        self.mapR1, self.mapR2 = cv2.fisheye.initUndistortRectifyMap(self.Kr, self.Dr, self.R2, self.P2, self.img_size,
-                                                                     cv2.CV_16SC2)
+        self.mapL1, self.mapL2 = cv2.fisheye.initUndistortRectifyMap(
+            self.Kl, self.Dl, self.R1, self.P1, self.img_size, cv2.CV_16SC2
+        )
+        self.mapR1, self.mapR2 = cv2.fisheye.initUndistortRectifyMap(
+            self.Kr, self.Dr, self.R2, self.P2, self.img_size, cv2.CV_16SC2
+        )
 
+        # Матрица Q для преобразования диспаритета в 3D (уменьшенное разрешение)
         self.Q_low = self.Q.copy()
         self.Q_low[:2, :3] *= 0.5
 
-        # AI: YOLOv8-seg на CPU (если доступно)
-        self.ai_enabled = AI_AVAILABLE
-        if AI_AVAILABLE:
-            print("Initializing YOLOv8-seg on CPU...")
-            self.model = YOLO('yolov8n-seg.pt')
-            self.model.to('cpu')
-        else:
-            self.model = None
-
-        # Параметры управления
+        # Параметры стерео матчинга
         self.num_disp = 7          # будет умножено на 16
         self.block_size = 11
-        self.alpha_depth = 0.3
-        self.alpha_seg = 0.5
-        self.mainLeft = True
+        self.alpha_depth = 0.3     # прозрачность наложения глубины
 
         self._init_matchers()
 
@@ -108,7 +92,7 @@ class StereoEngine:
             P1=8 * 3 * self.block_size ** 2, P2=32 * 3 * self.block_size ** 2,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
-        # Для WLS нужен правый матчер
+        # Попытка использовать WLS фильтр (если opencv-contrib установлен)
         try:
             self.matcher_r = cv2.ximgproc.createRightMatcher(self.matcher_l)
             self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(self.matcher_l)
@@ -124,6 +108,8 @@ class StereoEngine:
         while self.running:
             ret, frame = self.cap.read()
             if ret:
+                # Поворот кадра на 180 градусов (камера перевёрнута)
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
                 self.raw_frame = frame
             else:
                 time.sleep(0.001)
@@ -148,16 +134,12 @@ class StereoEngine:
                 imgL = cv2.resize(imgL, self.img_size)
                 imgR = cv2.resize(imgR, self.img_size)
 
+            # Ректификация
             rectL = cv2.remap(imgL, self.mapL1, self.mapL2, cv2.INTER_LINEAR)
             rectR = cv2.remap(imgR, self.mapR1, self.mapR2, cv2.INTER_LINEAR)
 
-            main_view = rectL if self.mainLeft else rectR
-
-            # AI Инференс
-            results = None
-            if self.ai_enabled and self.model is not None:
-                small_main = cv2.resize(main_view, (640, 360))
-                results = self.model.predict(small_main, stream=False, verbose=False, imgsz=640)[0]
+            # Всегда используем левый глаз для основного вида (можно переключать позже)
+            main_view = rectL
 
             # Стерео матчинг на половинном разрешении
             lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
@@ -182,68 +164,42 @@ class StereoEngine:
                 disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
 
+                # Смешивание основного вида с цветовой картой глубины
                 canvas = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
-
-                # AI Маски (если есть)
-                if self.ai_enabled and results is not None and results.masks is not None:
-                    masks_np = results.masks.data.cpu().numpy()
-                    for i, mask in enumerate(masks_np):
-                        mask_resized = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
-                        mask_bool = mask_resized > 0.5
-                        cls_id = int(results.boxes[i].cls[0])
-                        color = [int(c) for c in np.random.RandomState(cls_id).randint(60, 255, 3)]
-
-                        obj_layer = canvas.copy()
-                        obj_layer[mask_bool] = color
-                        cv2.addWeighted(obj_layer, self.alpha_seg, canvas, 1.0 - self.alpha_seg, 0, canvas)
-
-                        # Расстояние до объекта
-                        m_low = cv2.resize(mask_bool.astype(np.uint8), self.low_size,
-                                           interpolation=cv2.INTER_NEAREST).astype(bool)
-                        z_vals = self.points_3d[m_low, 2]
-                        valid = z_vals[(z_vals > 50) & (z_vals < 15000)]
-                        if len(valid) > 0:
-                            mz = np.median(valid) / 10.0
-                            coords = np.argwhere(mask_bool)
-                            if len(coords) > 0:
-                                cy, cx = coords.mean(axis=0).astype(int)
-                                cv2.putText(canvas, f"{results.names[cls_id].upper()} {mz:.1f}cm", (cx - 50, cy),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
                 self.processed_view = canvas
                 self.fps = 1.0 / (time.time() - last_time)
                 last_time = time.time()
 
-    def update_params(self, nD, a_depth, a_seg, ai_on, m_left):
+    def update_params(self, nD, a_depth, m_left):
+        """Обновление параметров (число диспаритетов, прозрачность, выбор глаза)."""
         with self.lock:
             self.alpha_depth = a_depth / 100
-            self.alpha_seg = a_seg / 100
-            self.ai_enabled = ai_on and AI_AVAILABLE
-            self.mainLeft = m_left
             if nD != self.num_disp:
                 self.num_disp = nD
                 self._init_matchers()
+            # Пока не реализовано переключение глаза для основного вида, но можно добавить позже
 
     def get_depth_at(self, x, y):
         """Возвращает расстояние в см для пикселя (x, y) на основном виде."""
         if self.points_3d is None:
             return None
-        # Преобразуем координаты из full-resolution в low-resolution (points_3d хранится в low_size)
+        # Преобразуем координаты из full-resolution в low-resolution
         scale_x = self.low_size[0] / self.img_size[0]
         scale_y = self.low_size[1] / self.img_size[1]
         lx = int(x * scale_x)
         ly = int(y * scale_y)
         if lx < 0 or lx >= self.low_size[0] or ly < 0 or ly >= self.low_size[1]:
             return None
-        z = self.points_3d[ly, lx, 2]  # Z координата в миллиметрах (из Q матрицы)
+        z = self.points_3d[ly, lx, 2]  # Z координата в миллиметрах
         if z > 0 and z < 15000:
             return z / 10.0  # в см
         return None
 
 # ---------- Глобальные объекты ----------
 LOG_FILE = "logs.txt"
-shell_manager = None  # будет инициализирован позже
-engine = None         # будет инициализирован после создания app
+shell_manager = None
+engine = None
 
 # ---------- Вспомогательные функции ----------
 def log_message(*args):
@@ -300,7 +256,6 @@ def get_recent_logs(n=500):
     return ["Нет доступа к системным логам"]
 
 def get_ip_address():
-    """Возвращает локальный IP-адрес (первый не loopback)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(('8.8.8.8', 80))
@@ -443,7 +398,6 @@ class ShellManager:
             except:
                 pass
 
-# ---------- API для терминала ----------
 @app.route('/api/cmd/send', methods=['POST'])
 def cmd_send():
     data = request.get_json()
@@ -477,13 +431,24 @@ def video_feed():
             if engine and engine.processed_view is not None:
                 _, buf = cv2.imencode('.jpg', engine.processed_view, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.01)
+            else:
+                # Если кадра нет, отправляем чёрный кадр с текстом "No Signal"
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(img, "No Signal", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                _, buf = cv2.imencode('.jpg', img)
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.03)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/update', methods=['POST'])
 def update_camera():
     d = request.json
-    engine.update_params(d['nD'], d['a_depth'], d['a_seg'], d['ai_on'], d['m_left'])
+    # Пока поддерживаем только nD, a_depth, m_left (остальные игнорируем)
+    engine.update_params(
+        nD=d.get('nD', 7),
+        a_depth=d.get('a_depth', 30),
+        m_left=d.get('m_left', True)
+    )
     return jsonify(ok=True)
 
 @app.route('/get_fps')
@@ -492,7 +457,6 @@ def get_fps():
 
 @app.route('/api/depth', methods=['POST'])
 def depth_at():
-    """Возвращает расстояние в см для точки (x, y) на изображении."""
     data = request.get_json()
     x = data.get('x')
     y = data.get('y')
@@ -586,12 +550,12 @@ def main():
     global shell_manager, engine
     log_message("Запуск веб-сервера R2")
     
-    # Инициализация глобальных компонентов
+    # Инициализация shell
     shell_manager = ShellManager()
     shell_manager.start()
     
-    # Инициализация камеры (путь к файлу калибровки)
-    config_path = "cam_params.json"  # Убедитесь, что файл существует
+    # Инициализация камеры
+    config_path = "GXVISION_120_fisheye_params.json"
     if os.path.exists(config_path):
         try:
             engine = StereoEngine(config_path, source=0)
@@ -606,7 +570,6 @@ def main():
     # Запуск браузера в режиме киоска (если нужно)
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
 
-    # Запуск Flask
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
 
 if __name__ == "__main__":
