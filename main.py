@@ -17,73 +17,16 @@ from flask import Flask, render_template, jsonify, request, Response
 import cv2
 import numpy as np
 
-# Импортируем новый класс камеры
 from camera import StereoCamera
 
 HTTP_PORT = 80
 LOG_FILE = "logs.txt"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-config_path = os.path.join(BASE_DIR, "cam_params.json")
 
 # Глобальные объекты
 shell_manager = None
 camera = None
 
 # ---------- Вспомогательные функции ----------
-@app.route('/update', methods=['POST'])
-def update_camera():
-    data = request.json
-    if camera is not None:
-        alpha = data.get('alpha_depth')
-        if alpha is not None:
-            alpha = float(alpha) / 100.0  # если приходит в процентах
-        show_left = data.get('show_left')
-        num_disp = data.get('num_disp')
-        camera.update_params(alpha_depth=alpha, show_left=show_left, num_disp=num_disp)
-        return jsonify(ok=True)
-    return jsonify(error='Camera not initialized'), 500
-
-@app.route('/get_fps')
-def get_fps():
-    if camera:
-        return jsonify(fps=f"{camera.fps:.1f}")
-    return jsonify(fps="0.0")
-
-@app.route('/api/depth', methods=['POST'])
-def depth_at():
-    data = request.json
-    x = data.get('x')
-    y = data.get('y')
-    if x is None or y is None:
-        return jsonify({'error': 'Missing coordinates'}), 400
-    if camera is None:
-        return jsonify({'depth': None})
-    depth = camera.get_depth_at(int(x), int(y))
-    return jsonify({'depth': depth})
-
-# В видео_feed используйте camera.get_frame()
-@app.route('/video_feed')
-def video_feed():
-    def generate():
-        while True:
-            if camera:
-                frame = camera.get_frame()
-                if frame is not None:
-                    _, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-                else:
-                    # чёрный экран
-                    black = np.zeros((720, 1280, 3), dtype=np.uint8)
-                    _, jpeg = cv2.imencode('.jpg', black)
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-            else:
-                black = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(black, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
-                _, jpeg = cv2.imencode('.jpg', black)
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-            time.sleep(0.03)
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-    
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -305,31 +248,58 @@ def cmd_output():
     output = shell_manager.get_output()
     return jsonify({'output': output})
 
-# ---------- Видеопоток (MJPEG) ----------
+# ---------- Видеопоток (MJPEG) и управление камерой ----------
 @app.route('/video_feed')
 def video_feed():
     def generate():
         while True:
-            if camera is not None:
+            if camera:
                 frame = camera.get_frame()
                 if frame is not None:
                     _, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
                 else:
-                    # Если кадра нет, отправляем чёрный
-                    black = np.zeros((720, 2560, 3), dtype=np.uint8)
+                    black = np.zeros((720, 1280, 3), dtype=np.uint8)
                     _, jpeg = cv2.imencode('.jpg', black)
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
             else:
                 black = np.zeros((480, 640, 3), dtype=np.uint8)
                 cv2.putText(black, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
                 _, jpeg = cv2.imencode('.jpg', black)
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
             time.sleep(0.03)
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/update', methods=['POST'])
+def update_camera():
+    data = request.json
+    if camera is not None:
+        alpha = data.get('alpha_depth')
+        if alpha is not None:
+            alpha = float(alpha) / 100.0
+        show_left = data.get('show_left')
+        num_disp = data.get('num_disp')
+        camera.update_params(alpha_depth=alpha, show_left=show_left, num_disp=num_disp)
+        return jsonify(ok=True)
+    return jsonify(error='Camera not initialized'), 500
+
+@app.route('/get_fps')
+def get_fps():
+    if camera:
+        return jsonify(fps=f"{camera.fps:.1f}")
+    return jsonify(fps="0.0")
+
+@app.route('/api/depth', methods=['POST'])
+def depth_at():
+    data = request.json
+    x = data.get('x')
+    y = data.get('y')
+    if x is None or y is None:
+        return jsonify({'error': 'Missing coordinates'}), 400
+    if camera is None:
+        return jsonify({'depth': None})
+    depth = camera.get_depth_at(int(x), int(y))
+    return jsonify({'depth': depth})
 
 # ---------- Запуск сервера ----------
 def get_display_user():
@@ -431,7 +401,6 @@ def main():
             camera = None
     else:
         log_message(f"Файл калибровки {config_path} не найден")
-        # Выведем список файлов в папке для диагностики
         try:
             files = os.listdir(script_dir)
             log_message(f"Файлы в {script_dir}: {files}")
