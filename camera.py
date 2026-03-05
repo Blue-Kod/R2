@@ -16,8 +16,6 @@ class StereoEngine:
 
         self.img_size = tuple(cfg['imSize'])  # 1280x720
         self.low_size = (self.img_size[0] // 2, self.img_size[1] // 2)  # 640x360
-        self.source = source
-        self.config_path = config_path
 
         # Матрицы калибровки
         self.Kl, self.Dl = np.array(cfg['Kl']), np.array(cfg['Dl'])
@@ -51,31 +49,18 @@ class StereoEngine:
         self.running = True
         self.lock = threading.Lock()
         self.frame_count = 0
-        self.error_count = 0
-        self.cap = None
 
-        self._open_camera()
-
-        threading.Thread(target=self._capture_loop, daemon=True).start()
-        threading.Thread(target=self._processing_loop, daemon=True).start()
-
-    def _open_camera(self):
-        """Попытка открыть камеру с базовыми настройками."""
         if os.name == 'nt':
             backend = cv2.CAP_DSHOW
         else:
             backend = cv2.CAP_V4L2
 
-        if self.cap is not None:
-            self.cap.release()
-
-        self.cap = cv2.VideoCapture(self.source, backend)
+        self.cap = cv2.VideoCapture(source, backend)
         if not self.cap.isOpened():
-            raise IOError(f"Не удалось открыть камеру {self.source}")
+            raise IOError(f"Не удалось открыть камеру {source}")
 
-        # Устанавливаем параметры захвата
+        # Пытаемся установить нужное разрешение (без принудительного FOURCC)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        # Не используем FOURCC, пусть камера сама выбирает формат
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
@@ -83,6 +68,9 @@ class StereoEngine:
         w = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         h = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         print(f"Реальное разрешение камеры: {w} x {h}")
+
+        threading.Thread(target=self._capture_loop, daemon=True).start()
+        threading.Thread(target=self._processing_loop, daemon=True).start()
 
     def _init_matchers(self):
         max_d = self.num_disp * 16
@@ -105,18 +93,8 @@ class StereoEngine:
     def _capture_loop(self):
         print("Запуск захвата кадров")
         while self.running:
-            if self.cap is None or not self.cap.isOpened():
-                print("Камера не открыта, попытка переоткрыть...")
-                try:
-                    self._open_camera()
-                except Exception as e:
-                    print(f"Не удалось открыть камеру: {e}")
-                    time.sleep(2)
-                    continue
-
             ret, frame = self.cap.read()
             if ret:
-                self.error_count = 0
                 self.frame_count += 1
                 # Поворот на 180°
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
@@ -124,15 +102,8 @@ class StereoEngine:
                 if self.frame_count % 30 == 0:
                     print(f"Получен кадр #{self.frame_count}")
             else:
-                self.error_count += 1
-                print(f"Ошибка чтения кадра #{self.error_count}")
-                if self.error_count > 10:
-                    print("Слишком много ошибок, перезапуск камеры...")
-                    self.cap.release()
-                    self.cap = None
-                    self.error_count = 0
+                print("Ошибка чтения кадра")
                 time.sleep(0.1)
-
             time.sleep(0.001)
 
     def _processing_loop(self):
@@ -211,5 +182,5 @@ class StereoEngine:
 
     def stop(self):
         self.running = False
-        if self.cap is not None:
+        if hasattr(self, 'cap'):
             self.cap.release()
