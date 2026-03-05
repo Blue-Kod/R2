@@ -11,21 +11,21 @@ import datetime
 import pwd
 import shutil
 from collections import deque
-import numpy as np
-import cv2
+
 import psutil
 from flask import Flask, render_template, jsonify, request, Response
+import cv2
+import numpy as np
 
-# Импортируем класс камеры
-from camera import StereoEngine
+# Импортируем новый класс камеры
+from camera import SimpleStereoFix
 
-# Константы
 HTTP_PORT = 80
 LOG_FILE = "logs.txt"
 
 # Глобальные объекты
 shell_manager = None
-engine = None
+camera = None
 
 # ---------- Вспомогательные функции ----------
 def log_message(*args):
@@ -91,6 +91,71 @@ def get_ip_address():
     finally:
         s.close()
     return ip
+
+# ---------- Flask приложение ----------
+app = Flask(__name__)
+
+# Маршруты страниц
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/screen')
+def screen():
+    return render_template('screen.html')
+
+@app.route('/terminal')
+def terminal():
+    return render_template('terminal.html')
+
+@app.route('/logs')
+def logs():
+    return render_template('logs.html')
+
+# API для данных и управления
+@app.route('/api/data')
+def api_data():
+    cpu = psutil.cpu_percent()
+    ram = psutil.virtual_memory().percent
+    temp = get_cpu_temp()
+    logs = get_recent_logs(500)
+    return jsonify({
+        'cpu': cpu,
+        'ram': ram,
+        'temp': temp,
+        'logs': logs
+    })
+
+@app.route('/api/ip')
+def api_ip():
+    return jsonify({'ip': get_ip_address()})
+
+@app.route('/api/update', methods=['POST'])
+def api_update():
+    try:
+        launcher_path = os.path.join(os.path.dirname(__file__), "launcher.py")
+        if os.path.exists(launcher_path):
+            subprocess.Popen([sys.executable, launcher_path])
+            log_message("Запущен процесс обновления")
+            def shutdown():
+                time.sleep(1)
+                os._exit(0)
+            threading.Thread(target=shutdown, daemon=True).start()
+            return jsonify({'status': 'ok', 'message': 'Обновление запущено'})
+        else:
+            return jsonify({'status': 'error', 'message': 'launcher.py не найден'}), 404
+    except Exception as e:
+        log_message(f"Ошибка запуска лаунчера: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/shutdown', methods=['POST'])
+def api_shutdown():
+    log_message("Получена команда на завершение")
+    def shutdown():
+        time.sleep(1)
+        os._exit(0)
+    threading.Thread(target=shutdown, daemon=True).start()
+    return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
 # ---------- Терминал (shell) ----------
 class ShellManager:
@@ -159,72 +224,6 @@ class ShellManager:
             except:
                 pass
 
-# ---------- Flask приложение ----------
-app = Flask(__name__)
-
-# Маршруты страниц
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/screen')
-def screen():
-    return render_template('screen.html')
-
-@app.route('/terminal')
-def terminal():
-    return render_template('terminal.html')
-
-@app.route('/logs')
-def logs():
-    return render_template('logs.html')
-
-# API для данных и управления
-@app.route('/api/data')
-def api_data():
-    cpu = psutil.cpu_percent()
-    ram = psutil.virtual_memory().percent
-    temp = get_cpu_temp()
-    logs = get_recent_logs(500)
-    return jsonify({
-        'cpu': cpu,
-        'ram': ram,
-        'temp': temp,
-        'logs': logs
-    })
-
-@app.route('/api/ip')
-def api_ip():
-    return jsonify({'ip': get_ip_address()})
-
-@app.route('/api/update', methods=['POST'])
-def api_update():
-    try:
-        launcher_path = os.path.join(os.path.dirname(__file__), "launcher.py")
-        if os.path.exists(launcher_path):
-            subprocess.Popen([sys.executable, launcher_path])
-            log_message("Запущен процесс обновления")
-            def shutdown():
-                time.sleep(1)
-                os._exit(0)
-            threading.Thread(target=shutdown, daemon=True).start()
-            return jsonify({'status': 'ok', 'message': 'Обновление запущено'})
-        else:
-            return jsonify({'status': 'error', 'message': 'launcher.py не найден'}), 404
-    except Exception as e:
-        log_message(f"Ошибка запуска лаунчера: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/api/shutdown', methods=['POST'])
-def api_shutdown():
-    log_message("Получена команда на завершение")
-    def shutdown():
-        time.sleep(1)
-        os._exit(0)
-    threading.Thread(target=shutdown, daemon=True).start()
-    return jsonify({'status': 'ok', 'message': 'Завершение работы'})
-
-# API для терминала
 @app.route('/api/cmd/send', methods=['POST'])
 def cmd_send():
     data = request.get_json()
@@ -250,49 +249,31 @@ def cmd_output():
     output = shell_manager.get_output()
     return jsonify({'output': output})
 
-# API для камеры@app.route('/video_feed')
+# ---------- Видеопоток (MJPEG) ----------
+@app.route('/video_feed')
 def video_feed():
-    def gen():
+    def generate():
         while True:
-            if engine and engine.processed_view is not None:
-                _, buf = cv2.imencode('.jpg', engine.processed_view, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            if camera is not None:
+                frame = camera.get_frame()
+                if frame is not None:
+                    _, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                else:
+                    # Если кадра нет, отправляем чёрный
+                    black = np.zeros((720, 2560, 3), dtype=np.uint8)
+                    _, jpeg = cv2.imencode('.jpg', black)
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
             else:
-                img = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(img, "No Signal", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
-                _, buf = cv2.imencode('.jpg', img)
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+                black = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(black, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                _, jpeg = cv2.imencode('.jpg', black)
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
             time.sleep(0.03)
-    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-@app.route('/update', methods=['POST'])
-def update_camera():
-    d = request.json
-    if engine is not None:  # <-- добавлена проверка
-        engine.update_params(
-            nD=d.get('nD', 7),
-            a_depth=d.get('a_depth', 30),
-            m_left=d.get('m_left', True)
-        )
-        return jsonify(ok=True)
-    else:
-        return jsonify(error='Camera not initialized'), 500
-
-@app.route('/get_fps')
-def get_fps():
-    return jsonify(fps=f"{engine.fps:.1f}" if engine else "0.0")
-
-@app.route('/api/depth', methods=['POST'])
-def depth_at():
-    data = request.get_json()
-    x = data.get('x')
-    y = data.get('y')
-    if x is None or y is None:
-        return jsonify({'error': 'Missing coordinates'}), 400
-    if engine is None:
-        return jsonify({'depth': None})
-    depth = engine.get_depth_at(int(x), int(y))
-    return jsonify({'depth': depth})
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 # ---------- Запуск сервера ----------
 def get_display_user():
@@ -374,7 +355,7 @@ def start_browser_when_ready():
         log_message("Сервер не запустился вовремя, браузер не открыт.")
 
 def main():
-    global shell_manager, engine
+    global shell_manager, camera
     log_message("Запуск веб-сервера R2")
     
     # Инициализация shell
@@ -385,16 +366,16 @@ def main():
     config_path = "cam_params.json"
     if os.path.exists(config_path):
         try:
-            engine = StereoEngine(config_path, source=0)
+            camera = SimpleStereoFix(config_path, source=0)
             log_message("Камера инициализирована")
         except Exception as e:
             log_message(f"Ошибка инициализации камеры: {e}")
-            engine = None
+            camera = None
     else:
         log_message(f"Файл калибровки {config_path} не найден, камера недоступна")
-        engine = None
+        camera = None
 
-    # Запуск браузера в режиме киоска (если нужно)
+    # Запуск браузера (опционально)
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
 
     app.run(host='0.0.0.0', port=HTTP_PORT, debug=False, threaded=True)
