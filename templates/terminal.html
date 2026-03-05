@@ -70,9 +70,6 @@
         #command::placeholder {
             color: #006600;
         }
-        .error {
-            color: #ff5555;
-        }
     </style>
 </head>
 <body>
@@ -92,22 +89,25 @@
         const outputDiv = document.getElementById('output');
         const commandInput = document.getElementById('command');
         let lastOutput = '';
-        let pollInterval = 100; // миллисекунд
-        let fetchInProgress = false; // защита от одновременных запросов
+        let pollInterval = 200; // миллисекунд
+        let fetchInProgress = false;
         let sendInProgress = false;
 
-        // Улучшенная функция удаления ANSI escape-последовательностей
+        // Удаление ANSI-последовательностей и нормализация переводов строк
         function stripAnsi(str) {
             if (!str) return '';
-            // Удаляем CSI последовательности: \x1b\[[0-9;?]*[a-zA-Z]
-            // Удаляем OSC (установка заголовка): \x1b\][0-9;]*[a-zA-Z]?.*?\x07
-            // Удаляем одиночные \x07 (BEL)
-            // Удаляем \x1b\\ (ST)
-            return str
-                .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')           // CSI с ? 
-                .replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')    // OSC до BEL
-                .replace(/\x1b\\/g, '')                            // ST
-                .replace(/\x07/g, '');                             // BEL
+            // Удаляем CSI: \x1b\[[0-9;?]*[a-zA-Z]
+            // Удаляем OSC: \x1b\][0-9;]*[a-zA-Z]?.*?\x07
+            // Удаляем ST: \x1b\\
+            // Удаляем BEL: \x07
+            let cleaned = str
+                .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+                .replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')
+                .replace(/\x1b\\/g, '')
+                .replace(/\x07/g, '');
+            // Нормализуем переводы строк: заменяем \r\n на \n, одиночные \r на \n
+            cleaned = cleaned.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            return cleaned;
         }
 
         function escapeHtml(unsafe) {
@@ -120,17 +120,13 @@
             });
         }
 
-        function appendOutput(text) {
-            outputDiv.innerHTML += escapeHtml(stripAnsi(text));
-            outputDiv.scrollTop = outputDiv.scrollHeight;
-        }
-
         function setOutput(text) {
             outputDiv.innerHTML = escapeHtml(stripAnsi(text));
             outputDiv.scrollTop = outputDiv.scrollHeight;
         }
 
-        async function fetchOutput() {
+        // Функция запроса вывода с повторными попытками при ошибке
+        async function fetchOutput(retries = 5) {
             if (fetchInProgress) return;
             fetchInProgress = true;
             try {
@@ -142,14 +138,17 @@
                     lastOutput = data.output;
                 }
             } catch (err) {
-                // Тихая ошибка — ничего не показываем пользователю
                 console.debug('fetchOutput error:', err);
+                if (retries > 0) {
+                    setTimeout(() => fetchOutput(retries - 1), 500);
+                }
             } finally {
                 fetchInProgress = false;
             }
         }
 
-        async function sendCommand(cmd) {
+        // Отправка команды с повторными попытками
+        async function sendCommand(cmd, retries = 3) {
             if (sendInProgress) return;
             sendInProgress = true;
             try {
@@ -161,14 +160,16 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 if (data.error) {
-                    // Можно показать, но скроем
                     console.debug('sendCommand error:', data.error);
                 } else {
-                    // После отправки сразу обновим вывод
+                    // После успешной отправки сразу обновляем вывод
                     await fetchOutput();
                 }
             } catch (err) {
                 console.debug('sendCommand fetch error:', err);
+                if (retries > 0) {
+                    setTimeout(() => sendCommand(cmd, retries - 1), 500);
+                }
             } finally {
                 sendInProgress = false;
             }
@@ -178,16 +179,26 @@
             if (e.key === 'Enter') {
                 const cmd = commandInput.value;
                 if (cmd.trim() !== '') {
-                    appendOutput(cmd + '\r\n');
+                    // Добавляем команду в вывод (локально)
+                    setOutput(lastOutput + '$ ' + cmd + '\n');
+                    lastOutput += '$ ' + cmd + '\n';
                     sendCommand(cmd);
                     commandInput.value = '';
                 }
             }
         });
 
-        // Запускаем опрос вывода
+        // Запускаем регулярный опрос
         fetchOutput();
-        setInterval(fetchOutput, pollInterval);
+        setInterval(() => fetchOutput(), pollInterval);
+
+        // При потере соединения пробуем переподключиться
+        window.addEventListener('offline', () => {
+            console.log('offline');
+        });
+        window.addEventListener('online', () => {
+            fetchOutput();
+        });
     </script>
 </body>
 </html>
