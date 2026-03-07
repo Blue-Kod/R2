@@ -47,6 +47,24 @@ class StereoCamera:
         self.alpha_depth = 0.3      # прозрачность наложения глубины (0 - только видео, 1 - только глубина)
         self.show_left = True       # True - левый глаз, False - правый
 
+        # ----- Новые параметры -----
+        self.depth_enabled = True            # вкл/выкл вычисление глубины
+        self.face_tracking_enabled = False   # вкл/выкл отслеживание лиц
+        self.tracking_scale_x = 50.0         # макс. смещение по X (пиксели) при лице у края
+        self.tracking_scale_y = 30.0         # макс. смещение по Y
+        self.tracking_offset_x = 0.0          # смещение по X (пиксели) – offset_x_cm в пикселях
+        self.tracking_offset_y = 0.0          # смещение по Y – offset_y_cm в пикселях
+        self.face_dx = 0.0                    # текущее вычисленное смещение для глаз (X)
+        self.face_dy = 0.0                    # текущее вычисленное смещение для глаз (Y)
+
+        # Загрузка каскада Хаара для лиц
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        self.face_cascade = cv2.CascadeClassifier(cascade_path)
+        if self.face_cascade.empty():
+            print("Предупреждение: не удалось загрузить каскад лиц. Face tracking отключён.")
+            self.face_cascade = None
+        # ---------------------------
+
         self._init_matchers()
 
         # Открытие камеры
@@ -137,36 +155,73 @@ class StereoCamera:
             # Выбор основного глаза
             main_view = rectL if self.show_left else rectR
 
-            # Стерео матчинг на половинном разрешении
-            lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
-            lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
+            # ---- Face Tracking (если включено) ----
+            if self.face_tracking_enabled and self.face_cascade is not None:
+                gray = cv2.cvtColor(main_view, cv2.COLOR_BGR2GRAY)
+                faces = self.face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100,100))
+                if len(faces) > 0:
+                    # Берём самое большое лицо (по площади)
+                    (x, y, w, h) = max(faces, key=lambda f: f[2]*f[3])
+                    face_center_x = x + w/2
+                    face_center_y = y + h/2
+                    # Нормализованные координаты от -1 до 1 (0 = центр кадра)
+                    norm_x = (face_center_x / self.img_size[0]) * 2 - 1
+                    norm_y = (face_center_y / self.img_size[1]) * 2 - 1
+                    # Вычисляем смещение для глаз
+                    dx = norm_x * self.tracking_scale_x + self.tracking_offset_x
+                    dy = norm_y * self.tracking_scale_y + self.tracking_offset_y
+                    # Ограничиваем, чтобы глаза не «убегали» слишком далеко
+                    dx = max(-self.tracking_scale_x * 2, min(self.tracking_scale_x * 2, dx))
+                    dy = max(-self.tracking_scale_y * 2, min(self.tracking_scale_y * 2, dy))
+                    with self.lock:
+                        self.face_dx = dx
+                        self.face_dy = dy
+                else:
+                    with self.lock:
+                        self.face_dx = 0.0
+                        self.face_dy = 0.0
+            # ---------------------------------------
 
-            grayL = cv2.cvtColor(lowL, cv2.COLOR_BGR2GRAY)
-            grayR = cv2.cvtColor(lowR, cv2.COLOR_BGR2GRAY)
+            # ---- Depth computation (if enabled) ----
+            if self.depth_enabled:
+                # Стерео матчинг на половинном разрешении
+                lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
+                lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
 
-            dispL = self.matcher_l.compute(grayL, grayR).astype(np.float32) / 16.0
+                grayL = cv2.cvtColor(lowL, cv2.COLOR_BGR2GRAY)
+                grayR = cv2.cvtColor(lowR, cv2.COLOR_BGR2GRAY)
 
-            if self.wls_available and self.matcher_r is not None:
-                dispR = self.matcher_r.compute(grayR, grayL).astype(np.float32) / 16.0
-                filtered = self.wls_filter.filter(dispL, lowL, disparity_map_right=dispR)
-                d_float = filtered
+                dispL = self.matcher_l.compute(grayL, grayR).astype(np.float32) / 16.0
+
+                if self.wls_available and self.matcher_r is not None:
+                    dispR = self.matcher_r.compute(grayR, grayL).astype(np.float32) / 16.0
+                    filtered = self.wls_filter.filter(dispL, lowL, disparity_map_right=dispR)
+                    d_float = filtered
+                else:
+                    d_float = dispL
+
+                # Преобразование в 3D
+                points = cv2.reprojectImageTo3D(d_float, self.Q_low)
+
+                # Визуализация глубины (цветная карта)
+                disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
+                disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
+
+                # Смешивание основного вида с картой глубины
+                output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
+
+                with self.lock:
+                    self.points_3d = points
             else:
-                d_float = dispL
-
-            # Преобразование в 3D
-            points = cv2.reprojectImageTo3D(d_float, self.Q_low)
-
-            # Визуализация глубины (цветная карта)
-            disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
-            disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
-
-            # Смешивание основного вида с картой глубины
-            output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
+                # Глубина отключена – просто показываем видео
+                output = main_view
+                with self.lock:
+                    self.points_3d = None
+            # ----------------------------------------
 
             # Обновление общих данных
             with self.lock:
                 self.frame = output
-                self.points_3d = points
                 self.fps = 1.0 / (time.time() - last_time)
                 last_time = time.time()
 
@@ -194,7 +249,15 @@ class StereoCamera:
                 return z / 10.0  # в см
             return None
 
-    def update_params(self, alpha_depth=None, show_left=None, num_disp=None):
+    def get_eye_offsets(self):
+        """Возвращает текущие смещения для глаз (dx, dy) в пикселях."""
+        with self.lock:
+            return self.face_dx, self.face_dy
+
+    def update_params(self, alpha_depth=None, show_left=None, num_disp=None,
+                      depth_enabled=None, face_tracking_enabled=None,
+                      tracking_scale_x=None, tracking_scale_y=None,
+                      tracking_offset_x=None, tracking_offset_y=None):
         """Обновление параметров."""
         with self.lock:
             if alpha_depth is not None:
@@ -204,6 +267,18 @@ class StereoCamera:
             if num_disp is not None and num_disp != self.num_disp:
                 self.num_disp = num_disp
                 self._init_matchers()
+            if depth_enabled is not None:
+                self.depth_enabled = depth_enabled
+            if face_tracking_enabled is not None:
+                self.face_tracking_enabled = face_tracking_enabled
+            if tracking_scale_x is not None:
+                self.tracking_scale_x = tracking_scale_x
+            if tracking_scale_y is not None:
+                self.tracking_scale_y = tracking_scale_y
+            if tracking_offset_x is not None:
+                self.tracking_offset_x = tracking_offset_x
+            if tracking_offset_y is not None:
+                self.tracking_offset_y = tracking_offset_y
 
     def stop(self):
         self.running = False
