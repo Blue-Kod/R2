@@ -21,16 +21,14 @@ from camera import StereoCamera
 from servo import ServoController   # импортируем класс
 
 HTTP_PORT = 80
-# Убрали LOG_FILE – логируем только в консоль
 
 # Глобальные объекты
 shell_manager = None
 camera = None
 servo_controller = None
 
-# ---------- Вспомогательные функции (без записи в файл) ----------
+# ---------- Вспомогательные функции ----------
 def log_message(*args):
-    """Вывод в консоль с временной меткой (без сохранения в файл)."""
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {msg}")
@@ -298,7 +296,7 @@ def depth_at():
     depth = camera.get_depth_at(int(x), int(y))
     return jsonify({'depth': depth})
 
-# ---------- Новые API для управления камерой и трекингом ----------
+# ---------- API для управления камерой и трекингом ----------
 @app.route('/api/camera/params', methods=['GET', 'POST'])
 def camera_params():
     """Получить или установить параметры камеры (depth_enabled, tracking и т.д.)"""
@@ -350,7 +348,7 @@ def set_servo(channel, angle):
         return jsonify({'error': 'Servo controller not initialized'}), 500
     if channel not in servo_controller.channel_configs:
         return jsonify({'error': f'Channel {channel} not configured'}), 400
-    # Проверка, что угол в пределах настроек канала (на всякий случай)
+    # Проверка, что угол в пределах настроек канала
     min_angle, max_angle, _, _ = servo_controller.channel_configs[channel]
     if angle < min_angle or angle > max_angle:
         return jsonify({'error': f'Angle must be {min_angle}-{max_angle} for channel {channel}'}), 400
@@ -359,30 +357,6 @@ def set_servo(channel, angle):
         return jsonify({'status': 'ok', 'channel': channel, 'angle': angle})
     else:
         return jsonify({'error': 'Failed to set servo'}), 500
-
-@app.route('/api/servo/test', methods=['POST'])
-def servo_test():
-    """Запуск тестового цикла для всех четырёх сервоприводов."""
-    if servo_controller is None:
-        return jsonify({'error': 'Servo controller not initialized'}), 500
-    def run_test():
-        servo_controller.test_cycle(channels=[0,1,2,3], delay=1)
-    threading.Thread(target=run_test, daemon=True).start()
-    return jsonify({'status': 'ok', 'message': 'Test cycle started'})
-
-@app.route('/api/servo/calibrate', methods=['POST'])
-def servo_calibrate():
-    """Калибровка импульсов для конкретного канала."""
-    data = request.json
-    if servo_controller is None:
-        return jsonify({'error': 'Servo controller not initialized'}), 500
-    channel = data.get('channel')
-    if channel is None:
-        return jsonify({'error': 'Missing channel'}), 400
-    min_pulse = data.get('min_pulse')
-    max_pulse = data.get('max_pulse')
-    min_new, max_new = servo_controller.calibrate_channel(channel, min_pulse, max_pulse)
-    return jsonify({'status': 'ok', 'channel': channel, 'min': min_new, 'max': max_new})
 
 # ---------- Запуск сервера ----------
 def get_display_user():
@@ -491,12 +465,17 @@ def main():
             pass
         camera = None
 
-    # Инициализация сервоприводов с новой конфигурацией
+    # Инициализация сервоприводов
     try:
         servo_controller = ServoController(bus=0, address=0x40, freq=50)
-        log_message("Сервоконтроллер инициализирован с конфигурацией:")
-        for ch, (min_a, max_a, min_p, max_p) in servo_controller.channel_configs.items():
-            log_message(f"  Канал {ch}: {min_a}–{max_a}°, импульсы {min_p}–{max_p}")
+        log_message("Сервоконтроллер инициализирован")
+
+        # Установка сервоприводов в углы по умолчанию
+        default_angles = {0: 90, 1: 135, 2: 135, 3: 90}
+        for ch, angle in default_angles.items():
+            if ch in servo_controller.channel_configs:
+                servo_controller.set_servo(ch, angle)
+                log_message(f"Серво {ch} установлено в {angle}°")
     except Exception as e:
         log_message(f"Ошибка инициализации сервоконтроллера: {e}")
         servo_controller = None
