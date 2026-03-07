@@ -3,24 +3,7 @@
 
 """
 Launcher для автообновления приложения из GitHub репозитория.
-Для работы этого скрипта требуется установить библиотеку requests:
-    pip3 install requests
-
-Скрипт скачивает последнюю версию репозитория https://github.com/Blue-Kod/R2,
-обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt.
-При отсутствии интернета или ошибке обновления просто завершается (без запуска main.py).
-Работает без использования виртуального окружения (venv).
-
-Поддерживает установку/удаление автозапуска в Linux через .desktop файл:
-    python3 launcher.py                      # обычный запуск + автоустановка автозагрузки (если ещё не установлена)
-    python3 launcher.py --dont-install-autostart   # запуск без автоматической установки автозагрузки
-    python3 launcher.py --install-autostart        # принудительно установить в автозагрузку
-    python3 launcher.py --remove-autostart         # удалить из автозагрузки
-
-Обновление самого себя:
-    Скрипт умеет обновлять собственный код. При обнаружении новой версии launcher.py
-    в репозитории он создаёт временную копию, сравнивает содержимое, и если оно отличается,
-    заменяет текущий файл новой версией и перезапускается с теми же аргументами.
+... (оставляем документацию)
 """
 
 import os
@@ -33,31 +16,23 @@ import requests
 import argparse
 import platform
 import filecmp
-import shlex
 import datetime
 from pathlib import Path
 
 # Константы
 REPO_URL = "https://github.com/Blue-Kod/R2"
-ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"  # предполагаем ветку main
+ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
-LAUNCHER_LOG = "logs.txt"
+# Убрали LAUNCHER_LOG – логируем только в консоль
 
-# Для автозапуска в Linux (только .desktop, без systemd)
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 
 def log_message(*args):
-    """Выводит сообщение в консоль и дописывает в лог-файл с временной меткой."""
+    """Вывод в консоль с временной меткой (без файла)."""
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"[{timestamp}] {msg}"
-    print(line)
-    try:
-        with open(LAUNCHER_LOG, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception as e:
-        print(f"[!] Не удалось записать в лог-файл {LAUNCHER_LOG}: {e}")
+    print(f"[{timestamp}] {msg}")
 
 def check_python_version():
     if sys.version_info.major < 3:
@@ -170,8 +145,14 @@ def install_requirements():
 def setup_autostart_linux():
     """Устанавливает .desktop файл для автозапуска main.py после старта графической сессии."""
     script_path = os.path.abspath(__file__)
-    # Команда для запуска: сначала ждём 10 секунд (для полной инициализации), затем запускаем main.py
-    cmd = f"/bin/bash -c 'sleep 10 && {sys.executable} {os.path.dirname(script_path)}/{MAIN_SCRIPT}'"
+    main_path = os.path.join(os.path.dirname(script_path), MAIN_SCRIPT)
+
+    if not os.path.exists(main_path):
+        log_message(f"[!] {MAIN_SCRIPT} не найден по пути {main_path}, автозапуск не установлен.")
+        return False
+
+    # Команда: запускаем main.py через тот же интерпретатор, с небольшой задержкой
+    cmd = f"/bin/bash -c 'sleep 10 && {sys.executable} {main_path}'"
     user_home = os.path.expanduser("~")
     autostart_dir = os.path.join(user_home, ".config", "autostart")
     os.makedirs(autostart_dir, exist_ok=True)
@@ -180,7 +161,7 @@ def setup_autostart_linux():
 Type=Application
 Name=Orange Pi Monitor
 Exec={cmd}
-Path={os.path.dirname(script_path)}
+Path={os.path.dirname(main_path)}
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
@@ -197,7 +178,6 @@ X-GNOME-Autostart-Phase=Applications
         return False
 
 def remove_autostart_linux():
-    """Удаляет .desktop файл автозапуска."""
     user_home = os.path.expanduser("~")
     desktop_file_path = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     try:
@@ -208,7 +188,6 @@ def remove_autostart_linux():
         log_message(f"[!] Ошибка при удалении .desktop файла: {e}")
 
 def is_autostart_installed():
-    """Проверяет, установлен ли .desktop файл."""
     if platform.system() != "Linux":
         return False
     user_home = os.path.expanduser("~")
@@ -224,7 +203,6 @@ def main():
     parser.add_argument("--dont-install-autostart", action="store_true", help="Не устанавливать автозапуск автоматически")
     args, unknown = parser.parse_known_args()
 
-    # Обработка специальных команд автозапуска
     if args.install_autostart or args.remove_autostart:
         if platform.system() != "Linux":
             log_message("[!] Автозапуск поддерживается только в Linux.")
@@ -235,7 +213,6 @@ def main():
             remove_autostart_linux()
         sys.exit(0)
 
-    # Основной запуск (только обновление кода и зависимостей)
     log_message("""
   _____     ___  
   |  __ \  |__ \ 
@@ -274,7 +251,6 @@ def main():
     else:
         log_message("[*] Нет интернета, пропускаем обновление.")
 
-    # Лаунчер завершает работу, не запуская main.py (он будет запущен через автозапуск или вручную)
     log_message("[L] Работа лаунчера завершена. main.py будет запущен автоматически при следующем входе в графическую сессию (или вручную).")
 
 if __name__ == "__main__":
