@@ -3,26 +3,7 @@
 
 """
 Launcher для автообновления и запуска приложения из GitHub репозитория.
-Для работы этого скрипта требуется установить библиотеку requests:
-    pip3 install requests
-
-Скрипт скачивает последнюю версию репозитория https://github.com/Blue-Kod/R2,
-обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt,
-а затем запускает main.py.
-
-При отсутствии интернета или ошибке обновления main.py всё равно запускается.
-
-Поддерживает установку/удаление автозапуска в Linux через .desktop файл, открывающий Terminator:
-    python3 launcher.py                      # обновление + запуск main.py, а также автоматическая установка автозагрузки (если ещё не установлена)
-    python3 launcher.py --no-start            # только обновление, без запуска main.py
-    python3 launcher.py --install-autostart   # принудительно установить в автозагрузку (без запуска)
-    python3 launcher.py --remove-autostart    # удалить из автозагрузки
-    python3 launcher.py --dont-install-autostart   # запуск без автоматической установки автозагрузки
-
-Обновление самого себя:
-    Скрипт умеет обновлять собственный код. При обнаружении новой версии launcher.py
-    в репозитории он создаёт временную копию, сравнивает содержимое, и если оно отличается,
-    заменяет текущий файл новой версией и перезапускается с теми же аргументами.
+Поддерживает запуск с sudo: после обновления возвращает права пользователю.
 """
 
 import os
@@ -47,10 +28,9 @@ ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
-INTERNET_CHECK_HOST = "8.8.8.8"  # для проверки интернета через ping, можно также github.com
+INTERNET_CHECK_HOST = "8.8.8.8"
 
 def log_message(*args):
-    """Вывод в консоль с временной меткой (без файла)."""
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {msg}")
@@ -61,9 +41,7 @@ def check_python_version():
         sys.exit(1)
 
 def is_internet_available(timeout=3):
-    """Проверка доступа к интернету через DNS или HTTP."""
     try:
-        # Пробуем подключиться к Google DNS
         socket.create_connection((INTERNET_CHECK_HOST, 53), timeout=timeout)
         return True
     except OSError:
@@ -75,7 +53,6 @@ def is_internet_available(timeout=3):
         return False
 
 def wait_for_internet(max_wait=60):
-    """Ожидание появления интернета до max_wait секунд."""
     log_message(f"[L] Ожидание интернета до {max_wait} сек...")
     start = time.time()
     while time.time() - start < max_wait:
@@ -87,6 +64,63 @@ def wait_for_internet(max_wait=60):
     log_message("[L] Интернет не появился за отведённое время.")
     return False
 
+def get_target_user():
+    """
+    Возвращает имя пользователя, которому должны принадлежать файлы проекта.
+    Приоритет:
+    1. Если переопределено через переменную окружения (R2_USER).
+    2. Реальный пользователь (логин в графической сессии) – get_display_user().
+    3. Текущий пользователь (если не root) или 'orangepi' (fallback).
+    """
+    # 1. Из переменной окружения
+    env_user = os.environ.get('R2_USER')
+    if env_user:
+        return env_user
+
+    # 2. Из графической сессии
+    display_user = get_display_user()
+    if display_user:
+        return display_user
+
+    # 3. Текущий пользователь (если не root)
+    if os.geteuid() != 0:
+        return os.environ.get('USER') or os.environ.get('LOGNAME') or 'orangepi'
+
+    # 4. Если всё ещё root – fallback
+    return 'orangepi'
+
+def get_display_user():
+    """Возвращает имя пользователя, от которого запущена графическая сессия."""
+    if os.geteuid() != 0:
+        return os.environ.get('USER') or os.environ.get('LOGNAME') or None
+    user = os.environ.get('SUDO_USER')
+    if user and user != 'root':
+        return user
+    try:
+        for u in pwd.getpwall():
+            if 1000 <= u.pw_uid < 65534:
+                return u.pw_name
+    except:
+        pass
+    return None
+
+def fix_permissions(path, user):
+    """Рекурсивно меняет владельца файлов в path на user."""
+    if os.geteuid() != 0:
+        return  # не root – ничего не делаем
+    try:
+        pw = pwd.getpwnam(user)
+        uid, gid = pw.pw_uid, pw.pw_gid
+        log_message(f"[L] Меняем владельца {path} на {user} ({uid}:{gid})")
+        for root, dirs, files in os.walk(path):
+            for d in dirs:
+                os.chown(os.path.join(root, d), uid, gid)
+            for f in files:
+                os.chown(os.path.join(root, f), uid, gid)
+        os.chown(path, uid, gid)
+    except Exception as e:
+        log_message(f"[!] Не удалось изменить владельца: {e}")
+
 def apply_self_update(new_launcher_path):
     current_script = os.path.abspath(__file__)
     if filecmp.cmp(current_script, new_launcher_path, shallow=False):
@@ -96,16 +130,10 @@ def apply_self_update(new_launcher_path):
 
     log_message("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
     try:
-        # Проверим, можем ли мы писать в текущий скрипт
-        if not os.access(current_script, os.W_OK):
-            log_message(f"[!] Нет прав на запись в {current_script}. Пропускаем обновление лаунчера.")
-            os.unlink(new_launcher_path)
-            return False
         shutil.move(new_launcher_path, current_script)
         st = os.stat(current_script)
         os.chmod(current_script, st.st_mode)
         log_message("[L] Лаунчер успешно обновлён. Перезапускаю...")
-        # Перезапускаем с теми же аргументами
         os.execv(sys.executable, [sys.executable, current_script] + sys.argv[1:])
     except Exception as e:
         log_message(f"[!] Ошибка при самообновлении: {e}")
@@ -115,7 +143,7 @@ def apply_self_update(new_launcher_path):
             pass
         return False
 
-def download_and_extract_repo(target_dir, script_name):
+def download_and_extract_repo(target_dir, script_name, target_user):
     try:
         log_message("[L] Скачивание репозитория...")
         response = requests.get(ARCHIVE_URL, stream=True)
@@ -162,14 +190,15 @@ def download_and_extract_repo(target_dir, script_name):
                         continue
 
                     dest_file = os.path.join(dest_dir, file)
-                    # Проверим, можем ли мы писать в целевой файл (или его директорию)
-                    if os.path.exists(dest_file) and not os.access(dest_file, os.W_OK):
-                        log_message(f"[!] Нет прав на запись {dest_file}, пропускаем.")
-                        continue
                     shutil.copy2(src_file, dest_file)
                     log_message(f"[L] Скопирован: {os.path.join(rel_path, file) if rel_path != '.' else file}")
 
         os.unlink(tmp_zip)
+
+        # После успешного обновления меняем владельца на target_user (если мы root)
+        if os.geteuid() == 0:
+            fix_permissions(target_dir, target_user)
+
         if new_launcher_tmp:
             apply_self_update(new_launcher_tmp)
         return True
@@ -178,7 +207,7 @@ def download_and_extract_repo(target_dir, script_name):
         log_message(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
 
-def install_requirements():
+def install_requirements(target_user):
     req_path = Path(REQUIREMENTS_FILE)
     if not req_path.exists():
         log_message("[*] Файл requirements.txt не найден, пропускаем установку зависимостей.")
@@ -186,46 +215,29 @@ def install_requirements():
 
     try:
         log_message("[L] Установка зависимостей...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE])
+        # Определяем, от какого пользователя запускать pip
+        if os.geteuid() == 0:
+            # Мы root – выполняем pip от имени target_user с флагом --user
+            cmd = ['sudo', '-u', target_user, sys.executable, '-m', 'pip', 'install', '--user', '-r', REQUIREMENTS_FILE]
+        else:
+            # Обычный пользователь – просто --user
+            cmd = [sys.executable, '-m', 'pip', 'install', '--user', '-r', REQUIREMENTS_FILE]
+
+        subprocess.check_call(cmd)
         log_message("[L] Зависимости успешно установлены/обновлены.")
         return True
     except subprocess.CalledProcessError as e:
         log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
-def get_display_user():
-    """Возвращает имя пользователя, от которого нужно запускать графические приложения."""
-    if os.geteuid() != 0:
-        return os.environ.get('USER') or os.environ.get('LOGNAME') or None
-    # Если мы root, пытаемся найти реального пользователя
-    user = os.environ.get('SUDO_USER')
-    if user and user != 'root':
-        return user
-    # Пробуем получить пользователя по сессии (UID от 1000 до 65534)
-    try:
-        for u in pwd.getpwall():
-            if 1000 <= u.pw_uid < 65534:
-                return u.pw_name
-    except:
-        pass
-    return None
-
 def get_terminal_command(script_path, user):
-    """
-    Возвращает команду для запуска терминала, который выполнит скрипт и останется открытым.
-    Приоритет: terminator, gnome-terminal, x-terminal-emulator, xterm.
-    """
     launcher_cmd = f"cd {os.path.dirname(script_path)} && {sys.executable} {script_path}"
-    # После выполнения лаунчера ожидаем нажатия клавиши
     hold_cmd = 'echo; echo "Launcher finished. Press any key to close this window."; read'
-
     full_cmd = f"{launcher_cmd}; {hold_cmd}"
 
-    # Проверяем доступные терминалы
     if shutil.which("terminator"):
         return ["terminator", "-e", f"bash -c '{full_cmd}'"]
     elif shutil.which("gnome-terminal"):
-        # gnome-terminal требует немного другого синтаксиса
         return ["gnome-terminal", "--", "bash", "-c", full_cmd]
     elif shutil.which("x-terminal-emulator"):
         return ["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"]
@@ -234,39 +246,28 @@ def get_terminal_command(script_path, user):
     else:
         return None
 
-def setup_autostart_linux():
-    """Устанавливает .desktop файл для автозапуска лаунчера в Terminator."""
+def setup_autostart_linux(target_user):
     script_path = os.path.abspath(__file__)
-    user = get_display_user()
-    if not user:
-        log_message("[!] Не удалось определить пользователя для автозапуска.")
-        return False
-
-    # Определяем домашнюю директорию пользователя
     try:
-        pw = pwd.getpwnam(user)
+        pw = pwd.getpwnam(target_user)
         user_home = pw.pw_dir
-        uid = pw.pw_uid
-        gid = pw.pw_gid
+        uid, gid = pw.pw_uid, pw.pw_gid
     except KeyError:
-        log_message(f"[!] Пользователь {user} не найден в системе.")
+        log_message(f"[!] Пользователь {target_user} не найден в системе.")
         return False
 
     autostart_dir = os.path.join(user_home, ".config", "autostart")
     os.makedirs(autostart_dir, exist_ok=True)
     desktop_file_path = os.path.join(autostart_dir, AUTOSTART_DESKTOP_FILE)
 
-    # Получаем команду для терминала
-    terminal_cmd = get_terminal_command(script_path, user)
+    terminal_cmd = get_terminal_command(script_path, target_user)
     if not terminal_cmd:
-        log_message("[!] Не найден подходящий терминал (terminator, gnome-terminal, xterm). Автозапуск невозможен.")
+        log_message("[!] Не найден подходящий терминал.")
         return False
 
-    # Команда для .desktop файла (список преобразуем в строку с экранированием)
     import shlex
     cmd_str = " ".join(shlex.quote(arg) for arg in terminal_cmd)
 
-    # Переменные окружения для графической сессии
     display = os.environ.get('DISPLAY', ':0')
     xauth = os.environ.get('XAUTHORITY', f"{user_home}/.Xauthority")
 
@@ -282,46 +283,34 @@ X-GNOME-Autostart-enabled=true
 X-GNOME-Autostart-Phase=Applications
 """
     try:
-        # Записываем временный файл
         with open(desktop_file_path, 'w') as f:
             f.write(desktop_content)
-        # Если мы root, меняем владельца на пользователя
         if os.geteuid() == 0:
             os.chown(desktop_file_path, uid, gid)
-        log_message(f"[L] Автозапуск через .desktop файл установлен: {desktop_file_path}")
-        log_message(f"[L] Команда: {cmd_str}")
+        log_message(f"[L] Автозапуск установлен: {desktop_file_path}")
         return True
     except Exception as e:
-        log_message(f"[!] Не удалось создать .desktop файл: {e}")
+        log_message(f"[!] Ошибка создания .desktop файла: {e}")
         return False
 
-def remove_autostart_linux():
-    user = get_display_user()
-    if not user:
-        log_message("[!] Не удалось определить пользователя для удаления автозапуска.")
-        return
+def remove_autostart_linux(target_user):
     try:
-        pw = pwd.getpwnam(user)
+        pw = pwd.getpwnam(target_user)
         user_home = pw.pw_dir
     except KeyError:
-        log_message(f"[!] Пользователь {user} не найден в системе.")
+        log_message(f"[!] Пользователь {target_user} не найден.")
         return
-    desktop_file_path = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
-    try:
-        if os.path.exists(desktop_file_path):
-            os.remove(desktop_file_path)
-            log_message(f"[L] .desktop файл {desktop_file_path} удалён.")
-    except Exception as e:
-        log_message(f"[!] Ошибка при удалении .desktop файла: {e}")
+    desktop_file = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
+    if os.path.exists(desktop_file):
+        try:
+            os.remove(desktop_file)
+            log_message(f"[L] .desktop файл удалён.")
+        except Exception as e:
+            log_message(f"[!] Ошибка удаления: {e}")
 
-def is_autostart_installed():
-    if platform.system() != "Linux":
-        return False
-    user = get_display_user()
-    if not user:
-        return False
+def is_autostart_installed(target_user):
     try:
-        pw = pwd.getpwnam(user)
+        pw = pwd.getpwnam(target_user)
         user_home = pw.pw_dir
     except KeyError:
         return False
@@ -329,39 +318,40 @@ def is_autostart_installed():
     return os.path.exists(desktop_file)
 
 def start_main():
-    """Запускает main.py в фоновом режиме."""
     main_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), MAIN_SCRIPT)
     if not os.path.exists(main_path):
-        log_message(f"[!] {MAIN_SCRIPT} не найден по пути {main_path}, запуск невозможен.")
+        log_message(f"[!] {MAIN_SCRIPT} не найден.")
         return False
     try:
         log_message(f"[L] Запуск {MAIN_SCRIPT}...")
-        # Запускаем в отдельном процессе, чтобы лаунчер мог завершиться
         subprocess.Popen([sys.executable, main_path])
         return True
     except Exception as e:
-        log_message(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
+        log_message(f"[!] Ошибка запуска {MAIN_SCRIPT}: {e}")
         return False
 
 def main():
     check_python_version()
 
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
-    parser.add_argument("--install-autostart", action="store_true", help="Установить автозапуск (.desktop)")
-    parser.add_argument("--remove-autostart", action="store_true", help="Удалить автозапуск")
-    parser.add_argument("--no-start", action="store_true", help="Не запускать main.py после обновления")
-    parser.add_argument("--dont-install-autostart", action="store_true", help="Не устанавливать автозапуск автоматически")
+    parser.add_argument("--install-autostart", action="store_true")
+    parser.add_argument("--remove-autostart", action="store_true")
+    parser.add_argument("--no-start", action="store_true")
+    parser.add_argument("--dont-install-autostart", action="store_true")
     args, unknown = parser.parse_known_args()
 
-    # Обработка специальных команд автозапуска
+    # Определяем целевого пользователя (того, кому должны принадлежать файлы)
+    target_user = get_target_user()
+    log_message(f"[L] Целевой пользователь: {target_user}")
+
     if args.install_autostart or args.remove_autostart:
         if platform.system() != "Linux":
-            log_message("[!] Автозапуск поддерживается только в Linux.")
+            log_message("[!] Автозапуск только для Linux.")
             sys.exit(1)
         if args.install_autostart:
-            setup_autostart_linux()
+            setup_autostart_linux(target_user)
         elif args.remove_autostart:
-            remove_autostart_linux()
+            remove_autostart_linux(target_user)
         sys.exit(0)
 
     log_message("""
@@ -380,43 +370,41 @@ def main():
     script_name = os.path.basename(__file__)
     os.chdir(script_dir)
     log_message(f"[L] Рабочая директория: {script_dir}")
-    log_message(f"[L] Используемый интерпретатор: {sys.executable}")
 
-    # Проверим права на запись в текущую директорию
+    # Проверка прав (информативно)
     if not os.access(script_dir, os.W_OK):
-        log_message(f"[!] ВНИМАНИЕ: Нет прав на запись в {script_dir}. Обновление файлов будет невозможно.")
+        log_message(f"[!] ВНИМАНИЕ: нет прав на запись в {script_dir}. Обновление может не сработать.")
     else:
-        log_message("[L] Права на запись в директорию есть.")
+        log_message("[L] Права на запись есть (сейчас).")
 
-    # Автоматическая установка автозапуска (только Linux и если не запрещено)
+    # Автоматическая установка автозапуска (Linux, не запрещено)
     if platform.system() == "Linux" and not args.dont_install_autostart:
-        if not is_autostart_installed():
+        if not is_autostart_installed(target_user):
             log_message("[L] Автозапуск не обнаружен. Устанавливаем...")
-            setup_autostart_linux()
+            setup_autostart_linux(target_user)
         else:
             log_message("[L] Автозапуск уже установлен.")
 
-    # Ожидание интернета перед попыткой обновления (до 60 секунд)
+    # Ожидание интернета
     internet_ok = wait_for_internet(max_wait=60)
     if internet_ok:
         log_message("[L] Пробуем обновить репозиторий...")
-        success = download_and_extract_repo(script_dir, script_name)
+        success = download_and_extract_repo(script_dir, script_name, target_user)
         if success:
-            install_requirements()
+            install_requirements(target_user)
         else:
             log_message("[*] Обновление не удалось.")
     else:
         log_message("[*] Интернет отсутствует, пропускаем обновление.")
 
-    # Запуск main.py, если не запрещено
+    # Запуск main.py
     if not args.no_start:
-        # Небольшая пауза, чтобы всё устаканилось
         time.sleep(2)
         start_main()
     else:
-        log_message("[L] Запуск main.py пропущен по флагу --no-start.")
+        log_message("[L] Запуск main.py пропущен.")
 
-    log_message("[L] Работа лаунчера завершена. Окно можно закрыть по нажатии любой клавиши.")
+    log_message("[L] Работа лаунчера завершена. Окно можно закрыть.")
 
 if __name__ == "__main__":
     main()
