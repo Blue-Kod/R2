@@ -18,27 +18,22 @@ import cv2
 import numpy as np
 
 from camera import StereoCamera
-from servo import ServoController   # <-- импортируем класс
+from servo import ServoController   # импортируем класс
 
 HTTP_PORT = 80
-LOG_FILE = "logs.txt"
+# Убрали LOG_FILE – логируем только в консоль
 
 # Глобальные объекты
 shell_manager = None
 camera = None
-servo_controller = None   # <-- добавили
+servo_controller = None
 
-# ---------- Вспомогательные функции ----------
+# ---------- Вспомогательные функции (без записи в файл) ----------
 def log_message(*args):
+    """Вывод в консоль с временной меткой (без сохранения в файл)."""
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"[{timestamp}] {msg}"
-    print(line)
-    try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+    print(f"[{timestamp}] {msg}")
 
 def get_cpu_temp():
     try:
@@ -50,6 +45,7 @@ def get_cpu_temp():
         return "N/A"
 
 def get_recent_logs(n=500):
+    # (без изменений, оставляем как есть – читает системные логи)
     log_files = ['/var/log/syslog', '/var/log/messages']
     for log_file in log_files:
         if os.path.exists(log_file) and os.access(log_file, os.R_OK):
@@ -96,7 +92,7 @@ def get_ip_address():
 # ---------- Flask приложение ----------
 app = Flask(__name__)
 
-# Маршруты страниц
+# Маршруты страниц (без изменений)
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -113,7 +109,7 @@ def terminal():
 def logs():
     return render_template('logs.html')
 
-# API для данных и управления
+# API для данных и управления (без изменений)
 @app.route('/api/data')
 def api_data():
     cpu = psutil.cpu_percent()
@@ -160,6 +156,7 @@ def api_shutdown():
 
 # ---------- Терминал (shell) ----------
 class ShellManager:
+    # (без изменений, только log_message теперь без файла)
     def __init__(self):
         self.proc = None
         self.output_buffer = deque(maxlen=2000)
@@ -250,7 +247,7 @@ def cmd_output():
     output = shell_manager.get_output()
     return jsonify({'output': output})
 
-# ---------- Видеопоток (MJPEG) и управление камерой ----------
+# ---------- Видеопоток и управление камерой (без изменений) ----------
 @app.route('/video_feed')
 def video_feed():
     def generate():
@@ -303,16 +300,18 @@ def depth_at():
     depth = camera.get_depth_at(int(x), int(y))
     return jsonify({'depth': depth})
 
-# ---------- API для сервоприводов ----------
+# ---------- API для сервоприводов (обновлено) ----------
 @app.route('/api/servo/<int:channel>/<int:angle>', methods=['POST'])
 def set_servo(channel, angle):
-    """Установка угла сервопривода (0-270)."""
+    """Установка угла сервопривода. Диапазон определяется конфигурацией канала."""
     if servo_controller is None:
         return jsonify({'error': 'Servo controller not initialized'}), 500
-    if channel < 0 or channel > 15:
-        return jsonify({'error': 'Channel must be 0-15'}), 400
-    if angle < 0 or angle > 270:
-        return jsonify({'error': 'Angle must be 0-270'}), 400
+    if channel not in servo_controller.channel_configs:
+        return jsonify({'error': f'Channel {channel} not configured'}), 400
+    # Проверка, что угол в пределах настроек канала (на всякий случай)
+    min_angle, max_angle, _, _ = servo_controller.channel_configs[channel]
+    if angle < min_angle or angle > max_angle:
+        return jsonify({'error': f'Angle must be {min_angle}-{max_angle} for channel {channel}'}), 400
     success = servo_controller.set_servo(channel, angle)
     if success:
         return jsonify({'status': 'ok', 'channel': channel, 'angle': angle})
@@ -321,26 +320,29 @@ def set_servo(channel, angle):
 
 @app.route('/api/servo/test', methods=['POST'])
 def servo_test():
-    """Запуск тестового цикла для сервоприводов 0 и 1."""
+    """Запуск тестового цикла для всех четырёх сервоприводов."""
     if servo_controller is None:
         return jsonify({'error': 'Servo controller not initialized'}), 500
     def run_test():
-        servo_controller.test_cycle(channels=[0,1], delay=1)
+        servo_controller.test_cycle(channels=[0,1,2,3], delay=1)
     threading.Thread(target=run_test, daemon=True).start()
     return jsonify({'status': 'ok', 'message': 'Test cycle started'})
 
 @app.route('/api/servo/calibrate', methods=['POST'])
 def servo_calibrate():
-    """Калибровка: установка min и max pulse."""
+    """Калибровка импульсов для конкретного канала."""
     data = request.json
     if servo_controller is None:
         return jsonify({'error': 'Servo controller not initialized'}), 500
+    channel = data.get('channel')
+    if channel is None:
+        return jsonify({'error': 'Missing channel'}), 400
     min_pulse = data.get('min_pulse')
     max_pulse = data.get('max_pulse')
-    min_new, max_new = servo_controller.calibrate(min_pulse, max_pulse)
-    return jsonify({'status': 'ok', 'min': min_new, 'max': max_new})
+    min_new, max_new = servo_controller.calibrate_channel(channel, min_pulse, max_pulse)
+    return jsonify({'status': 'ok', 'channel': channel, 'min': min_new, 'max': max_new})
 
-# ---------- Запуск сервера ----------
+# ---------- Запуск сервера (без изменений) ----------
 def get_display_user():
     if os.geteuid() != 0:
         return None
@@ -422,15 +424,15 @@ def start_browser_when_ready():
 def main():
     global shell_manager, camera, servo_controller
     log_message("Запуск веб-сервера R2")
-    
+
     # Инициализация shell
     shell_manager = ShellManager()
     shell_manager.start()
-    
+
     # Инициализация камеры
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "cam_params.json")
-    
+
     if os.path.exists(config_path):
         try:
             camera = StereoCamera(config_path, source=0)
@@ -447,10 +449,13 @@ def main():
             pass
         camera = None
 
-    # Инициализация сервоприводов
+    # Инициализация сервоприводов с новой конфигурацией
     try:
+        # Можно явно передать конфигурацию, но используем умолчания из класса
         servo_controller = ServoController(bus=0, address=0x40, freq=50)
-        log_message("Сервоконтроллер инициализирован")
+        log_message("Сервоконтроллер инициализирован с конфигурацией:")
+        for ch, (min_a, max_a, min_p, max_p) in servo_controller.channel_configs.items():
+            log_message(f"  Канал {ch}: {min_a}–{max_a}°, импульсы {min_p}–{max_p}")
     except Exception as e:
         log_message(f"Ошибка инициализации сервоконтроллера: {e}")
         servo_controller = None
