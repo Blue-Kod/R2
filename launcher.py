@@ -2,8 +2,27 @@
 # -*- coding: utf-8 -*-
 
 """
-Launcher для автообновления приложения из GitHub репозитория.
-... (оставляем документацию)
+Launcher для автообновления и запуска приложения из GitHub репозитория.
+Для работы этого скрипта требуется установить библиотеку requests:
+    pip3 install requests
+
+Скрипт скачивает последнюю версию репозитория https://github.com/Blue-Kod/R2,
+обновляет файлы в своей папке (включая самого себя), устанавливает/обновляет зависимости из requirements.txt,
+а затем запускает main.py.
+
+При отсутствии интернета или ошибке обновления main.py всё равно запускается.
+
+Поддерживает установку/удаление автозапуска в Linux через .desktop файл:
+    python3 launcher.py                      # обновление + запуск main.py, а также автоматическая установка автозагрузки (если ещё не установлена)
+    python3 launcher.py --no-start            # только обновление, без запуска main.py
+    python3 launcher.py --install-autostart   # принудительно установить в автозагрузку (без запуска)
+    python3 launcher.py --remove-autostart    # удалить из автозагрузки
+    python3 launcher.py --dont-install-autostart   # запуск без автоматической установки автозагрузки
+
+Обновление самого себя:
+    Скрипт умеет обновлять собственный код. При обнаружении новой версии launcher.py
+    в репозитории он создаёт временную копию, сравнивает содержимое, и если оно отличается,
+    заменяет текущий файл новой версией и перезапускается с теми же аргументами.
 """
 
 import os
@@ -17,6 +36,7 @@ import argparse
 import platform
 import filecmp
 import datetime
+import time
 from pathlib import Path
 
 # Константы
@@ -24,8 +44,6 @@ REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
-# Убрали LAUNCHER_LOG – логируем только в консоль
-
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 
 def log_message(*args):
@@ -59,6 +77,7 @@ def apply_self_update(new_launcher_path):
         st = os.stat(current_script)
         os.chmod(current_script, st.st_mode)
         log_message("[L] Лаунчер успешно обновлён. Перезапускаю...")
+        # Перезапускаем с теми же аргументами
         os.execv(sys.executable, [sys.executable, current_script] + sys.argv[1:])
     except Exception as e:
         log_message(f"[!] Ошибка при самообновлении: {e}")
@@ -142,26 +161,53 @@ def install_requirements():
         log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
-def setup_autostart_linux():
-    """Устанавливает .desktop файл для автозапуска main.py после старта графической сессии."""
-    script_path = os.path.abspath(__file__)
-    main_path = os.path.join(os.path.dirname(script_path), MAIN_SCRIPT)
+def get_display_user():
+    """Возвращает имя пользователя, от которого нужно запускать графические приложения."""
+    # Если мы уже не root, возвращаем текущего пользователя
+    if os.geteuid() != 0:
+        return os.environ.get('USER') or os.environ.get('LOGNAME') or None
+    # Иначе пытаемся найти реального пользователя
+    user = os.environ.get('SUDO_USER')
+    if user and user != 'root':
+        return user
+    # Пробуем получить пользователя по сессии
+    try:
+        import pwd
+        for u in pwd.getpwall():
+            if 1000 <= u.pw_uid < 65534:
+                return u.pw_name
+    except:
+        pass
+    return None
 
-    if not os.path.exists(main_path):
-        log_message(f"[!] {MAIN_SCRIPT} не найден по пути {main_path}, автозапуск не установлен.")
+def setup_autostart_linux():
+    """Устанавливает .desktop файл для автозапуска лаунчера (который затем запустит main.py)."""
+    script_path = os.path.abspath(__file__)
+    user = get_display_user()
+    if not user:
+        log_message("[!] Не удалось определить пользователя для автозапуска.")
         return False
 
-    # Команда: запускаем main.py через тот же интерпретатор, с небольшой задержкой
-    cmd = f"/bin/bash -c 'sleep 10 && {sys.executable} {main_path}'"
-    user_home = os.path.expanduser("~")
+    # Путь к .desktop файлу в домашней директории пользователя
+    user_home = os.path.expanduser(f"~{user}")
     autostart_dir = os.path.join(user_home, ".config", "autostart")
     os.makedirs(autostart_dir, exist_ok=True)
     desktop_file_path = os.path.join(autostart_dir, AUTOSTART_DESKTOP_FILE)
+
+    # Команда: запускаем лаунчер (без специальных флагов, он сам запустит main.py после обновления)
+    # Ждём 10 секунд, чтобы графическая сессия полностью загрузилась
+    cmd = f"/bin/bash -c 'sleep 10 && {sys.executable} {script_path}'"
+
+    # Получаем DISPLAY и XAUTHORITY для пользователя (если они известны)
+    display = os.environ.get('DISPLAY', ':0')
+    xauth = os.environ.get('XAUTHORITY', f"{user_home}/.Xauthority")
+
     desktop_content = f"""[Desktop Entry]
 Type=Application
-Name=Orange Pi Monitor
+Name=Orange Pi Monitor (Launcher)
 Exec={cmd}
-Path={os.path.dirname(main_path)}
+Path={os.path.dirname(script_path)}
+Environment="DISPLAY={display}" "XAUTHORITY={xauth}"
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
@@ -178,7 +224,11 @@ X-GNOME-Autostart-Phase=Applications
         return False
 
 def remove_autostart_linux():
-    user_home = os.path.expanduser("~")
+    user = get_display_user()
+    if not user:
+        log_message("[!] Не удалось определить пользователя для удаления автозапуска.")
+        return
+    user_home = os.path.expanduser(f"~{user}")
     desktop_file_path = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     try:
         if os.path.exists(desktop_file_path):
@@ -190,9 +240,27 @@ def remove_autostart_linux():
 def is_autostart_installed():
     if platform.system() != "Linux":
         return False
-    user_home = os.path.expanduser("~")
+    user = get_display_user()
+    if not user:
+        return False
+    user_home = os.path.expanduser(f"~{user}")
     desktop_file = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     return os.path.exists(desktop_file)
+
+def start_main():
+    """Запускает main.py в фоновом режиме."""
+    main_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), MAIN_SCRIPT)
+    if not os.path.exists(main_path):
+        log_message(f"[!] {MAIN_SCRIPT} не найден по пути {main_path}, запуск невозможен.")
+        return False
+    try:
+        log_message(f"[L] Запуск {MAIN_SCRIPT}...")
+        # Запускаем в отдельном процессе, чтобы лаунчер мог завершиться
+        subprocess.Popen([sys.executable, main_path])
+        return True
+    except Exception as e:
+        log_message(f"[!] Ошибка при запуске {MAIN_SCRIPT}: {e}")
+        return False
 
 def main():
     check_python_version()
@@ -200,9 +268,11 @@ def main():
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
     parser.add_argument("--install-autostart", action="store_true", help="Установить автозапуск (.desktop)")
     parser.add_argument("--remove-autostart", action="store_true", help="Удалить автозапуск")
+    parser.add_argument("--no-start", action="store_true", help="Не запускать main.py после обновления")
     parser.add_argument("--dont-install-autostart", action="store_true", help="Не устанавливать автозапуск автоматически")
     args, unknown = parser.parse_known_args()
 
+    # Обработка специальных команд автозапуска
     if args.install_autostart or args.remove_autostart:
         if platform.system() != "Linux":
             log_message("[!] Автозапуск поддерживается только в Linux.")
@@ -251,7 +321,15 @@ def main():
     else:
         log_message("[*] Нет интернета, пропускаем обновление.")
 
-    log_message("[L] Работа лаунчера завершена. main.py будет запущен автоматически при следующем входе в графическую сессию (или вручную).")
+    # Запуск main.py, если не запрещено
+    if not args.no_start:
+        # Небольшая пауза, чтобы всё устаканилось
+        time.sleep(2)
+        start_main()
+    else:
+        log_message("[L] Запуск main.py пропущен по флагу --no-start.")
+
+    log_message("[L] Работа лаунчера завершена.")
 
 if __name__ == "__main__":
     main()
