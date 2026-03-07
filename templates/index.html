@@ -60,6 +60,7 @@
             width: 25%;
             background: #0a0a0a;
             border-left: 1px solid #333;
+            overflow-y: auto;
         }
         .panel-title {
             color: #00ff00;
@@ -117,10 +118,6 @@
             width: 60%;
             accent-color: #00ff00;
         }
-        .control-row input[type="radio"] {
-            accent-color: #00ff00;
-            margin-left: 10px;
-        }
         #terminal-output {
             flex: 1;
             overflow-y: auto;
@@ -132,6 +129,7 @@
             padding: 5px;
             border: 1px solid #333;
             margin-bottom: 5px;
+            min-height: 200px;
         }
         #terminal-input-line {
             display: flex;
@@ -165,6 +163,47 @@
         .hidden {
             display: none;
         }
+        .servo-controls {
+            margin-top: 10px;
+            padding: 10px;
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+        .servo-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .servo-row label {
+            width: 80px;
+            font-size: 12px;
+            color: #00ff00;
+        }
+        .servo-row input[type="range"] {
+            flex: 1;
+            min-width: 150px;
+            accent-color: #00ff00;
+        }
+        .servo-row span {
+            width: 45px;
+            text-align: center;
+            font-size: 12px;
+        }
+        .servo-row button {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .servo-row button:hover {
+            background: #555;
+        }
     </style>
 </head>
 <body>
@@ -181,7 +220,7 @@
             <div id="logs"></div>
         </div>
 
-        <!-- Центральная панель: видео -->
+        <!-- Центральная панель: видео и управление камерой -->
         <div class="panel panel-center">
             <div id="video-container">
                 <img id="video-feed" src="/video_feed" alt="Video Stream">
@@ -206,13 +245,36 @@
             </div>
         </div>
 
-        <!-- Правая панель: терминал -->
+        <!-- Правая панель: терминал и сервоприводы -->
         <div class="panel panel-right">
             <div class="panel-title">Терминал</div>
             <div id="terminal-output"></div>
             <div id="terminal-input-line">
                 <span id="terminal-prompt">$</span>
                 <input type="text" id="terminal-command" placeholder="Введите команду..." autofocus>
+            </div>
+
+            <div class="panel-title" style="margin-top: 20px;">Сервоприводы</div>
+            <div class="servo-controls">
+                <div class="servo-row">
+                    <label>Серво 1 (канал 0):</label>
+                    <input type="range" id="servo0" min="0" max="270" value="135" oninput="updateServoValue(0, this.value)" onchange="setServo(0, this.value)">
+                    <span id="servo0_val">135°</span>
+                    <button onclick="setServo(0, 0)">0°</button>
+                    <button onclick="setServo(0, 135)">135°</button>
+                    <button onclick="setServo(0, 270)">270°</button>
+                </div>
+                <div class="servo-row">
+                    <label>Серво 2 (канал 1):</label>
+                    <input type="range" id="servo1" min="0" max="270" value="135" oninput="updateServoValue(1, this.value)" onchange="setServo(1, this.value)">
+                    <span id="servo1_val">135°</span>
+                    <button onclick="setServo(1, 0)">0°</button>
+                    <button onclick="setServo(1, 135)">135°</button>
+                    <button onclick="setServo(1, 270)">270°</button>
+                </div>
+                <div class="servo-row">
+                    <button onclick="testServos()">Тестовый цикл</button>
+                </div>
             </div>
         </div>
     </div>
@@ -243,11 +305,16 @@
         setInterval(fetchLogs, 2000);
 
         // ---------- Управление камерой ----------
+        const eyeLeft = document.getElementById('eyeLeft');
+        const eyeRight = document.getElementById('eyeRight');
+        const showDepth = document.getElementById('showDepth');
+        const depthAlpha = document.getElementById('depthAlpha');
+
         function updateParams() {
             const params = {
-                alpha_depth: document.getElementById('showDepth').checked ? parseInt(document.getElementById('depthAlpha').value) : 0,
-                show_left: document.getElementById('eyeLeft').checked,
-                num_disp: 7  // можно добавить слайдер позже
+                alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0,
+                show_left: eyeLeft.checked,
+                num_disp: 7
             };
             fetch('/update', {
                 method: 'POST',
@@ -259,10 +326,9 @@
         // ---------- Глубина при наведении ----------
         const video = document.getElementById('video-feed');
         const tooltip = document.getElementById('depth-tooltip');
-        const showDepthCheckbox = document.getElementById('showDepth');
 
         video.addEventListener('mousemove', (e) => {
-            if (!showDepthCheckbox.checked) {
+            if (!showDepth.checked) {
                 tooltip.classList.add('hidden');
                 return;
             }
@@ -371,6 +437,37 @@
 
         fetchTerminalOutput();
         setInterval(fetchTerminalOutput, 200);
+
+        // ---------- Управление сервоприводами ----------
+        function updateServoValue(channel, value) {
+            document.getElementById(`servo${channel}_val`).innerText = value + '°';
+        }
+
+        function setServo(channel, angle) {
+            fetch(`/api/servo/${channel}/${angle}`, { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error('Ошибка серво:', data.error);
+                    } else {
+                        console.log(`Серво ${channel} установлен в ${angle}°`);
+                    }
+                })
+                .catch(err => console.error(err));
+        }
+
+        function testServos() {
+            fetch('/api/servo/test', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error('Ошибка теста:', data.error);
+                    } else {
+                        console.log('Тест запущен');
+                    }
+                })
+                .catch(err => console.error(err));
+        }
     </script>
 </body>
 </html>
