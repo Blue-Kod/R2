@@ -3,7 +3,8 @@
 
 """
 Launcher для автообновления и запуска приложения из GitHub репозитория.
-Поддерживает запуск с sudo: после обновления возвращает права пользователю.
+ВНИМАНИЕ: Этот скрипт должен запускаться с правами root (через sudo).
+Если запущен обычным пользователем – он сообщит об ошибке и завершится.
 """
 
 import os
@@ -35,9 +36,11 @@ def log_message(*args):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {msg}")
 
-def check_python_version():
-    if sys.version_info.major < 3:
-        log_message("[!] Ошибка: требуется Python 3")
+def check_root():
+    """Проверяет, запущен ли скрипт с правами root."""
+    if os.geteuid() != 0:
+        log_message("[!] Этот скрипт должен запускаться с sudo!")
+        log_message("[!] Запустите: sudo python3 launcher.py")
         sys.exit(1)
 
 def is_internet_available(timeout=3):
@@ -64,35 +67,8 @@ def wait_for_internet(max_wait=60):
     log_message("[L] Интернет не появился за отведённое время.")
     return False
 
-def get_target_user():
-    """
-    Возвращает имя пользователя, которому должны принадлежать файлы проекта.
-    Приоритет:
-    1. Если переопределено через переменную окружения (R2_USER).
-    2. Реальный пользователь (логин в графической сессии) – get_display_user().
-    3. Текущий пользователь (если не root) или 'orangepi' (fallback).
-    """
-    # 1. Из переменной окружения
-    env_user = os.environ.get('R2_USER')
-    if env_user:
-        return env_user
-
-    # 2. Из графической сессии
-    display_user = get_display_user()
-    if display_user:
-        return display_user
-
-    # 3. Текущий пользователь (если не root)
-    if os.geteuid() != 0:
-        return os.environ.get('USER') or os.environ.get('LOGNAME') or 'orangepi'
-
-    # 4. Если всё ещё root – fallback
-    return 'orangepi'
-
 def get_display_user():
-    """Возвращает имя пользователя, от которого запущена графическая сессия."""
-    if os.geteuid() != 0:
-        return os.environ.get('USER') or os.environ.get('LOGNAME') or None
+    """Возвращает имя пользователя, от которого запущена графическая сессия (реальный человек)."""
     user = os.environ.get('SUDO_USER')
     if user and user != 'root':
         return user
@@ -102,12 +78,10 @@ def get_display_user():
                 return u.pw_name
     except:
         pass
-    return None
+    return 'orangepi'  # fallback
 
 def fix_permissions(path, user):
     """Рекурсивно меняет владельца файлов в path на user."""
-    if os.geteuid() != 0:
-        return  # не root – ничего не делаем
     try:
         pw = pwd.getpwnam(user)
         uid, gid = pw.pw_uid, pw.pw_gid
@@ -195,9 +169,8 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
         os.unlink(tmp_zip)
 
-        # После успешного обновления меняем владельца на target_user (если мы root)
-        if os.geteuid() == 0:
-            fix_permissions(target_dir, target_user)
+        # После успешного обновления меняем владельца на target_user
+        fix_permissions(target_dir, target_user)
 
         if new_launcher_tmp:
             apply_self_update(new_launcher_tmp)
@@ -207,23 +180,15 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         log_message(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
 
-def install_requirements(target_user):
+def install_requirements():
     req_path = Path(REQUIREMENTS_FILE)
     if not req_path.exists():
         log_message("[*] Файл requirements.txt не найден, пропускаем установку зависимостей.")
         return True
 
     try:
-        log_message("[L] Установка зависимостей...")
-        # Определяем, от какого пользователя запускать pip
-        if os.geteuid() == 0:
-            # Мы root – выполняем pip от имени target_user с флагом --user
-            cmd = ['sudo', '-u', target_user, sys.executable, '-m', 'pip', 'install', '--user', '-r', REQUIREMENTS_FILE]
-        else:
-            # Обычный пользователь – просто --user
-            cmd = [sys.executable, '-m', 'pip', 'install', '--user', '-r', REQUIREMENTS_FILE]
-
-        subprocess.check_call(cmd)
+        log_message("[L] Установка зависимостей (глобально)...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE])
         log_message("[L] Зависимости успешно установлены/обновлены.")
         return True
     except subprocess.CalledProcessError as e:
@@ -231,7 +196,7 @@ def install_requirements(target_user):
         return False
 
 def get_terminal_command(script_path, user):
-    launcher_cmd = f"cd {os.path.dirname(script_path)} && {sys.executable} {script_path}"
+    launcher_cmd = f"sudo {sys.executable} {script_path}"
     hold_cmd = 'echo; echo "Launcher finished. Press any key to close this window."; read'
     full_cmd = f"{launcher_cmd}; {hold_cmd}"
 
@@ -273,7 +238,7 @@ def setup_autostart_linux(target_user):
 
     desktop_content = f"""[Desktop Entry]
 Type=Application
-Name=Orange Pi Monitor (Terminal)
+Name=Orange Pi Monitor (Terminal with sudo)
 Exec={cmd_str}
 Path={os.path.dirname(script_path)}
 Environment="DISPLAY={display}" "XAUTHORITY={xauth}"
@@ -285,9 +250,10 @@ X-GNOME-Autostart-Phase=Applications
     try:
         with open(desktop_file_path, 'w') as f:
             f.write(desktop_content)
-        if os.geteuid() == 0:
-            os.chown(desktop_file_path, uid, gid)
+        # Файл должен принадлежать пользователю, чтобы система автозапуска его увидела
+        os.chown(desktop_file_path, uid, gid)
         log_message(f"[L] Автозапуск установлен: {desktop_file_path}")
+        log_message(f"[L] Команда: {cmd_str}")
         return True
     except Exception as e:
         log_message(f"[!] Ошибка создания .desktop файла: {e}")
@@ -331,7 +297,8 @@ def start_main():
         return False
 
 def main():
-    check_python_version()
+    # Проверяем, что запущены с root
+    check_root()
 
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
     parser.add_argument("--install-autostart", action="store_true")
@@ -340,9 +307,9 @@ def main():
     parser.add_argument("--dont-install-autostart", action="store_true")
     args, unknown = parser.parse_known_args()
 
-    # Определяем целевого пользователя (того, кому должны принадлежать файлы)
-    target_user = get_target_user()
-    log_message(f"[L] Целевой пользователь: {target_user}")
+    # Пользователь, которому будут принадлежать файлы после обновления (обычный юзер)
+    target_user = get_display_user()
+    log_message(f"[L] Целевой пользователь для прав: {target_user}")
 
     if args.install_autostart or args.remove_autostart:
         if platform.system() != "Linux":
@@ -371,12 +338,6 @@ def main():
     os.chdir(script_dir)
     log_message(f"[L] Рабочая директория: {script_dir}")
 
-    # Проверка прав (информативно)
-    if not os.access(script_dir, os.W_OK):
-        log_message(f"[!] ВНИМАНИЕ: нет прав на запись в {script_dir}. Обновление может не сработать.")
-    else:
-        log_message("[L] Права на запись есть (сейчас).")
-
     # Автоматическая установка автозапуска (Linux, не запрещено)
     if platform.system() == "Linux" and not args.dont_install_autostart:
         if not is_autostart_installed(target_user):
@@ -391,7 +352,7 @@ def main():
         log_message("[L] Пробуем обновить репозиторий...")
         success = download_and_extract_repo(script_dir, script_name, target_user)
         if success:
-            install_requirements(target_user)
+            install_requirements()
         else:
             log_message("[*] Обновление не удалось.")
     else:
