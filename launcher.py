@@ -332,7 +332,7 @@ def main():
  >  Launcher.py  <
  -----------------
  """)
-
+    subprocess.Popen(["unclutter", "--timeout", "1", "--start-hidden", "--fork"])
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_name = os.path.basename(__file__)
     os.chdir(script_dir)
