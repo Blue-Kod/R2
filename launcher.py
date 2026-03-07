@@ -38,6 +38,7 @@ import filecmp
 import datetime
 import time
 import pwd
+import socket
 from pathlib import Path
 
 # Константы
@@ -46,6 +47,7 @@ ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
+INTERNET_CHECK_HOST = "8.8.8.8"  # для проверки интернета через ping, можно также github.com
 
 def log_message(*args):
     """Вывод в консоль с временной меткой (без файла)."""
@@ -59,11 +61,31 @@ def check_python_version():
         sys.exit(1)
 
 def is_internet_available(timeout=3):
+    """Проверка доступа к интернету через DNS или HTTP."""
+    try:
+        # Пробуем подключиться к Google DNS
+        socket.create_connection((INTERNET_CHECK_HOST, 53), timeout=timeout)
+        return True
+    except OSError:
+        pass
     try:
         requests.get("https://github.com", timeout=timeout)
         return True
     except requests.RequestException:
         return False
+
+def wait_for_internet(max_wait=60):
+    """Ожидание появления интернета до max_wait секунд."""
+    log_message(f"[L] Ожидание интернета до {max_wait} сек...")
+    start = time.time()
+    while time.time() - start < max_wait:
+        if is_internet_available(timeout=2):
+            log_message("[L] Интернет доступен.")
+            return True
+        log_message("[L] Интернет недоступен, ждём 5 сек...")
+        time.sleep(5)
+    log_message("[L] Интернет не появился за отведённое время.")
+    return False
 
 def apply_self_update(new_launcher_path):
     current_script = os.path.abspath(__file__)
@@ -74,6 +96,11 @@ def apply_self_update(new_launcher_path):
 
     log_message("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
     try:
+        # Проверим, можем ли мы писать в текущий скрипт
+        if not os.access(current_script, os.W_OK):
+            log_message(f"[!] Нет прав на запись в {current_script}. Пропускаем обновление лаунчера.")
+            os.unlink(new_launcher_path)
+            return False
         shutil.move(new_launcher_path, current_script)
         st = os.stat(current_script)
         os.chmod(current_script, st.st_mode)
@@ -135,6 +162,10 @@ def download_and_extract_repo(target_dir, script_name):
                         continue
 
                     dest_file = os.path.join(dest_dir, file)
+                    # Проверим, можем ли мы писать в целевой файл (или его директорию)
+                    if os.path.exists(dest_file) and not os.access(dest_file, os.W_OK):
+                        log_message(f"[!] Нет прав на запись {dest_file}, пропускаем.")
+                        continue
                     shutil.copy2(src_file, dest_file)
                     log_message(f"[L] Скопирован: {os.path.join(rel_path, file) if rel_path != '.' else file}")
 
@@ -351,6 +382,12 @@ def main():
     log_message(f"[L] Рабочая директория: {script_dir}")
     log_message(f"[L] Используемый интерпретатор: {sys.executable}")
 
+    # Проверим права на запись в текущую директорию
+    if not os.access(script_dir, os.W_OK):
+        log_message(f"[!] ВНИМАНИЕ: Нет прав на запись в {script_dir}. Обновление файлов будет невозможно.")
+    else:
+        log_message("[L] Права на запись в директорию есть.")
+
     # Автоматическая установка автозапуска (только Linux и если не запрещено)
     if platform.system() == "Linux" and not args.dont_install_autostart:
         if not is_autostart_installed():
@@ -359,17 +396,17 @@ def main():
         else:
             log_message("[L] Автозапуск уже установлен.")
 
-    # Проверка интернета и обновление
-    internet_ok = is_internet_available()
+    # Ожидание интернета перед попыткой обновления (до 60 секунд)
+    internet_ok = wait_for_internet(max_wait=60)
     if internet_ok:
-        log_message("[L] Интернет доступен, пробуем обновить репозиторий...")
+        log_message("[L] Пробуем обновить репозиторий...")
         success = download_and_extract_repo(script_dir, script_name)
         if success:
             install_requirements()
         else:
             log_message("[*] Обновление не удалось.")
     else:
-        log_message("[*] Нет интернета, пропускаем обновление.")
+        log_message("[*] Интернет отсутствует, пропускаем обновление.")
 
     # Запуск main.py, если не запрещено
     if not args.no_start:
