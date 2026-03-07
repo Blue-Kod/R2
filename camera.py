@@ -47,13 +47,13 @@ class StereoCamera:
         self.alpha_depth = 0.3      # прозрачность наложения глубины (0 - только видео, 1 - только глубина)
         self.show_left = True       # True - левый глаз, False - правый
 
-        # ----- Новые параметры -----
+        # ----- Параметры трекинга -----
         self.depth_enabled = True            # вкл/выкл вычисление глубины
         self.face_tracking_enabled = False   # вкл/выкл отслеживание лиц
         self.tracking_scale_x = 50.0         # макс. смещение по X (пиксели) при лице у края
         self.tracking_scale_y = 30.0         # макс. смещение по Y
-        self.tracking_offset_x = 0.0          # смещение по X (пиксели) – offset_x_cm в пикселях
-        self.tracking_offset_y = 0.0          # смещение по Y – offset_y_cm в пикселях
+        self.tracking_offset_x = 0.0          # смещение по X (пиксели)
+        self.tracking_offset_y = 0.0          # смещение по Y
         self.face_dx = 0.0                    # текущее вычисленное смещение для глаз (X)
         self.face_dy = 0.0                    # текущее вычисленное смещение для глаз (Y)
 
@@ -63,7 +63,6 @@ class StereoCamera:
         if self.face_cascade.empty():
             print("Предупреждение: не удалось загрузить каскад лиц. Face tracking отключён.")
             self.face_cascade = None
-        # ---------------------------
 
         self._init_matchers()
 
@@ -167,8 +166,8 @@ class StereoCamera:
                     # Нормализованные координаты от -1 до 1 (0 = центр кадра)
                     norm_x = (face_center_x / self.img_size[0]) * 2 - 1
                     norm_y = (face_center_y / self.img_size[1]) * 2 - 1
-                    # Вычисляем смещение для глаз
-                    dx = norm_x * self.tracking_scale_x + self.tracking_offset_x
+                    # Вычисляем смещение для глаз (знак по X инвертирован для правильного направления)
+                    dx = -norm_x * self.tracking_scale_x + self.tracking_offset_x
                     dy = norm_y * self.tracking_scale_y + self.tracking_offset_y
                     # Ограничиваем, чтобы глаза не «убегали» слишком далеко
                     dx = max(-self.tracking_scale_x * 2, min(self.tracking_scale_x * 2, dx))
