@@ -201,7 +201,7 @@ def get_terminal_command(script_path, user):
     full_cmd = f"{launcher_cmd}; {hold_cmd}"
 
     if shutil.which("terminator"):
-        return ["terminator", "-e", f"bash -c '{full_cmd}'"]
+        return ["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"]
     elif shutil.which("gnome-terminal"):
         return ["gnome-terminal", "--", "bash", "-c", full_cmd]
     elif shutil.which("x-terminal-emulator"):
