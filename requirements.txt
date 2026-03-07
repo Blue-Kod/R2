@@ -5,3 +5,4 @@ ptyprocess
 opencv-python
 opencv-contrib-python
 numpy
+PCA9685-smbus2
