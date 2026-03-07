@@ -19,7 +19,7 @@
             width: 100vw;
             overflow: hidden;
             position: relative;
-                cursor: none !important;
+            cursor: none !important;
         }
         .eyes-container {
             position: absolute;
@@ -40,11 +40,14 @@
             height: 560px;
             background-color: #fff;
             border-radius: 120px;
-            transition: transform 0.15s ease; /* плавность */
+            transition: transform 0.15s ease;
             transform-origin: center center;
+            /* По умолчанию без сдвига, scaleY = 1 */
+            transform: translate(var(--shake-x, 0px), var(--shake-y, 0px)) scaleY(1);
         }
         .eye.blink {
-            transform: scaleY(0.1);
+            /* При моргании добавляем scaleY(0.1) поверх сдвига */
+            transform: translate(var(--shake-x, 0px), var(--shake-y, 0px)) scaleY(0.1);
         }
         .logs-overlay {
             position: absolute;
@@ -195,13 +198,15 @@
         }
         scheduleBlink();
 
-        // Дрожание
+        // Дрожание через CSS-переменные (не перебивает моргание)
         function randomShake() {
             const x = (Math.random() * 6 - 3).toFixed(1);
             const y = (Math.random() * 6 - 3).toFixed(1);
-            const transform = `translate(${x}px, ${y}px)`;
-            leftEye.style.transform = transform;
-            rightEye.style.transform = transform;
+            // Устанавливаем переменные для обоих глаз
+            leftEye.style.setProperty('--shake-x', x + 'px');
+            leftEye.style.setProperty('--shake-y', y + 'px');
+            rightEye.style.setProperty('--shake-x', x + 'px');
+            rightEye.style.setProperty('--shake-y', y + 'px');
         }
         setInterval(randomShake, 500);
 
