@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from camera import StereoCamera
+from servo import ServoController   # <-- импортируем класс
 
 HTTP_PORT = 80
 LOG_FILE = "logs.txt"
@@ -25,6 +26,7 @@ LOG_FILE = "logs.txt"
 # Глобальные объекты
 shell_manager = None
 camera = None
+servo_controller = None   # <-- добавили
 
 # ---------- Вспомогательные функции ----------
 def log_message(*args):
@@ -301,6 +303,43 @@ def depth_at():
     depth = camera.get_depth_at(int(x), int(y))
     return jsonify({'depth': depth})
 
+# ---------- API для сервоприводов ----------
+@app.route('/api/servo/<int:channel>/<int:angle>', methods=['POST'])
+def set_servo(channel, angle):
+    """Установка угла сервопривода (0-270)."""
+    if servo_controller is None:
+        return jsonify({'error': 'Servo controller not initialized'}), 500
+    if channel < 0 or channel > 15:
+        return jsonify({'error': 'Channel must be 0-15'}), 400
+    if angle < 0 or angle > 270:
+        return jsonify({'error': 'Angle must be 0-270'}), 400
+    success = servo_controller.set_servo(channel, angle)
+    if success:
+        return jsonify({'status': 'ok', 'channel': channel, 'angle': angle})
+    else:
+        return jsonify({'error': 'Failed to set servo'}), 500
+
+@app.route('/api/servo/test', methods=['POST'])
+def servo_test():
+    """Запуск тестового цикла для сервоприводов 0 и 1."""
+    if servo_controller is None:
+        return jsonify({'error': 'Servo controller not initialized'}), 500
+    def run_test():
+        servo_controller.test_cycle(channels=[0,1], delay=1)
+    threading.Thread(target=run_test, daemon=True).start()
+    return jsonify({'status': 'ok', 'message': 'Test cycle started'})
+
+@app.route('/api/servo/calibrate', methods=['POST'])
+def servo_calibrate():
+    """Калибровка: установка min и max pulse."""
+    data = request.json
+    if servo_controller is None:
+        return jsonify({'error': 'Servo controller not initialized'}), 500
+    min_pulse = data.get('min_pulse')
+    max_pulse = data.get('max_pulse')
+    min_new, max_new = servo_controller.calibrate(min_pulse, max_pulse)
+    return jsonify({'status': 'ok', 'min': min_new, 'max': max_new})
+
 # ---------- Запуск сервера ----------
 def get_display_user():
     if os.geteuid() != 0:
@@ -381,7 +420,7 @@ def start_browser_when_ready():
         log_message("Сервер не запустился вовремя, браузер не открыт.")
 
 def main():
-    global shell_manager, camera
+    global shell_manager, camera, servo_controller
     log_message("Запуск веб-сервера R2")
     
     # Инициализация shell
@@ -407,6 +446,14 @@ def main():
         except:
             pass
         camera = None
+
+    # Инициализация сервоприводов
+    try:
+        servo_controller = ServoController(bus=0, address=0x40, freq=50)
+        log_message("Сервоконтроллер инициализирован")
+    except Exception as e:
+        log_message(f"Ошибка инициализации сервоконтроллера: {e}")
+        servo_controller = None
 
     # Запуск браузера (опционально)
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
