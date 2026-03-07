@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>R2 - Главная</title>
     <style>
-        /* (стили без изменений) */
+        /* Стили без изменений (оставлены как в предыдущей версии) */
         * {
             margin: 0;
             padding: 0;
@@ -203,18 +203,6 @@
             text-align: center;
             font-size: 12px;
         }
-        .servo-row button {
-            background: #333;
-            color: white;
-            border: none;
-            padding: 4px 8px;
-            font-size: 12px;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .servo-row button:hover {
-            background: #555;
-        }
     </style>
 </head>
 <body>
@@ -272,13 +260,13 @@
                     <div class="panel-title" style="font-size:12px; margin:10px 0 5px;">🎯 Параметры трекинга</div>
                     <div class="control-row">
                         <label>Scale X (пикс):</label>
-                        <input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="scaleXVal">50</span>
+                        <input type="range" id="trackingScaleX" min="0" max="200" value="100" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
+                        <span id="scaleXVal">100</span>
                     </div>
                     <div class="control-row">
                         <label>Scale Y (пикс):</label>
-                        <input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="scaleYVal">30</span>
+                        <input type="range" id="trackingScaleY" min="0" max="200" value="200" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
+                        <span id="scaleYVal">200</span>
                     </div>
                     <div class="control-row">
                         <label>Offset X (пикс):</label>
@@ -297,7 +285,7 @@
             </div>
         </div>
 
-        <!-- Правая панель: терминал и сервоприводы (без изменений) -->
+        <!-- Правая панель: терминал и сервоприводы (кнопки убраны) -->
         <div class="panel panel-right">
             <div class="panel-title">Терминал</div>
             <div id="terminal-output"></div>
@@ -313,47 +301,31 @@
                     <label>Серво 1 (канал 0):</label>
                     <input type="range" id="servo0" min="0" max="180" value="90" oninput="updateServoValue(0, this.value)" onchange="setServo(0, this.value)">
                     <span id="servo0_val">90°</span>
-                    <button onclick="setServo(0, 0)">0°</button>
-                    <button onclick="setServo(0, 90)">90°</button>
-                    <button onclick="setServo(0, 180)">180°</button>
                 </div>
                 <!-- Канал 1: 0-270° -->
                 <div class="servo-row">
                     <label>Серво 2 (канал 1):</label>
                     <input type="range" id="servo1" min="0" max="270" value="135" oninput="updateServoValue(1, this.value)" onchange="setServo(1, this.value)">
                     <span id="servo1_val">135°</span>
-                    <button onclick="setServo(1, 0)">0°</button>
-                    <button onclick="setServo(1, 135)">135°</button>
-                    <button onclick="setServo(1, 270)">270°</button>
                 </div>
                 <!-- Канал 2: 0-270° -->
                 <div class="servo-row">
                     <label>Серво 3 (канал 2):</label>
                     <input type="range" id="servo2" min="0" max="270" value="135" oninput="updateServoValue(2, this.value)" onchange="setServo(2, this.value)">
                     <span id="servo2_val">135°</span>
-                    <button onclick="setServo(2, 0)">0°</button>
-                    <button onclick="setServo(2, 135)">135°</button>
-                    <button onclick="setServo(2, 270)">270°</button>
                 </div>
                 <!-- Канал 3: 0-180° -->
                 <div class="servo-row">
                     <label>Серво 4 (канал 3):</label>
                     <input type="range" id="servo3" min="0" max="180" value="90" oninput="updateServoValue(3, this.value)" onchange="setServo(3, this.value)">
                     <span id="servo3_val">90°</span>
-                    <button onclick="setServo(3, 0)">0°</button>
-                    <button onclick="setServo(3, 90)">90°</button>
-                    <button onclick="setServo(3, 180)">180°</button>
-                </div>
-
-                <div class="servo-row">
-                    <button onclick="testServos()">Тестовый цикл (все 4)</button>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        // ---------- Логи (без изменений) ----------
+        // ---------- Логи ----------
         const logsDiv = document.getElementById('logs');
         async function fetchLogs() {
             try {
@@ -396,7 +368,7 @@
             }).catch(err => console.error(err));
         }
 
-        // ---------- Глубина при наведении (без изменений) ----------
+        // ---------- Глубина при наведении ----------
         const video = document.getElementById('video-feed');
         const tooltip = document.getElementById('depth-tooltip');
 
@@ -439,7 +411,7 @@
             tooltip.classList.add('hidden');
         });
 
-        // ---------- Терминал (без изменений) ----------
+        // ---------- Терминал ----------
         const terminalOutput = document.getElementById('terminal-output');
         const terminalCommand = document.getElementById('terminal-command');
         let lastOutput = '';
@@ -511,7 +483,7 @@
         fetchTerminalOutput();
         setInterval(fetchTerminalOutput, 200);
 
-        // ---------- НОВЫЕ ФУНКЦИИ: Параметры камеры и трекинга ----------
+        // ---------- Параметры камеры и трекинга ----------
         const depthEnabledChk = document.getElementById('depthEnabled');
         const faceTrackingChk = document.getElementById('faceTrackingEnabled');
         const trackingScaleX = document.getElementById('trackingScaleX');
@@ -566,10 +538,9 @@
             }
         }
 
-        // Загружаем параметры при старте
         loadCameraParams();
 
-        // ---------- Управление сервоприводами (без изменений) ----------
+        // ---------- Управление сервоприводами (без кнопок) ----------
         function updateServoValue(channel, value) {
             document.getElementById(`servo${channel}_val`).innerText = value + '°';
         }
@@ -580,25 +551,16 @@
                 .then(data => {
                     if (data.error) {
                         console.error('Ошибка серво:', data.error);
-                    } else {
-                        console.log(`Серво ${channel} установлен в ${angle}°`);
                     }
                 })
                 .catch(err => console.error(err));
         }
 
-        function testServos() {
-            fetch('/api/servo/test', { method: 'POST' })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.error) {
-                        console.error('Ошибка теста:', data.error);
-                    } else {
-                        console.log('Тест всех сервоприводов запущен');
-                    }
-                })
-                .catch(err => console.error(err));
-        }
+        // При загрузке синхронизируем отображаемые значения
+        window.addEventListener('load', () => {
+            // Уже установлены в HTML, но можно дополнительно запросить с сервера, если нужно
+            // Для простоты оставляем как есть, сервоприводы уже установлены в main.py при старте
+        });
     </script>
 </body>
 </html>
