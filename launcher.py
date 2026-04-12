@@ -214,20 +214,19 @@ def install_requirements():
         return False
 
 def get_terminal_command(script_path, user):
-    launcher_cmd = f"sudo {sys.executable} {script_path}"
-    hold_cmd = 'echo; echo "Launcher finished. Press any key to close this window."; read'
+    # Убираем лишние обертки, чтобы sudo подхватил NOPASSWD из sudoers
+    launcher_cmd = f"sudo /usr/bin/python3 {script_path}"
+    hold_cmd = 'echo; echo "Launcher finished. Press any key to close."; read'
     full_cmd = f"{launcher_cmd}; {hold_cmd}"
 
-    if shutil.which("terminator"):
-        return ["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"]
-    elif shutil.which("gnome-terminal"):
-        return ["gnome-terminal", "--", "bash", "-c", full_cmd]
-    elif shutil.which("x-terminal-emulator"):
-        return ["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"]
-    elif shutil.which("xterm"):
-        return ["xterm", "-hold", "-e", f"bash -c '{full_cmd}'"]
-    else:
-        return None
+    # Список терминалов по приоритету
+    for term in ["terminator", "gnome-terminal", "x-terminal-emulator", "xterm"]:
+        if shutil.which(term):
+            if term == "gnome-terminal":
+                return [term, "--", "bash", "-c", full_cmd]
+            else:
+                return [term, "-e", f"bash -c '{full_cmd}'"]
+    return None
 
 def setup_autostart_linux(target_user):
     script_path = os.path.abspath(__file__)
