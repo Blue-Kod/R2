@@ -31,7 +31,8 @@ REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 INTERNET_CHECK_HOST = "8.8.8.8"
-LAST_COMMIT_FILE = ".last_commit"          # файл для хранения SHA последнего обновления
+LAST_COMMIT_FILE = ".last_commit"
+DEPS_UPDATED_FLAG = ".deps_updated"      # флаг, что зависимости уже проверены для текущего коммита
 
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
@@ -120,10 +121,6 @@ def apply_self_update(new_launcher_path):
         return False
 
 def get_remote_head_commit_info(owner, repo, branch='main'):
-    """
-    Возвращает (sha, commit_date) последнего коммита в ветке branch.
-    При ошибке возвращает (None, None).
-    """
     api_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}"
     try:
         response = requests.get(api_url, timeout=10)
@@ -135,7 +132,6 @@ def get_remote_head_commit_info(owner, repo, branch='main'):
         date_str = data.get('commit', {}).get('committer', {}).get('date')
         commit_date = None
         if date_str:
-            # Пример: "2025-03-15T12:34:56Z"
             commit_date = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
         return sha, commit_date
     except Exception as e:
@@ -143,37 +139,20 @@ def get_remote_head_commit_info(owner, repo, branch='main'):
         return None, None
 
 def is_repo_up_to_date(target_dir):
-    """
-    Проверяет, совпадает ли SHA последнего коммита на GitHub
-    с сохранённым в файле .last_commit.
-    Возвращает True, если обновление не требуется.
-    """
     last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
     if not os.path.exists(last_commit_path):
-        log_message("[L] Локальный файл .last_commit отсутствует, требуется обновление.")
         return False
-
     try:
         with open(last_commit_path, 'r') as f:
             local_sha = f.read().strip()
     except:
-        log_message("[!] Не удалось прочитать .last_commit, требуется обновление.")
         return False
-
     remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
     if remote_sha is None:
-        log_message("[!] Не удалось получить информацию о последнем коммите, пропускаем проверку.")
         return False
-
-    if local_sha == remote_sha:
-        log_message(f"[L] Репозиторий уже актуален (SHA: {local_sha[:8]}).")
-        return True
-    else:
-        log_message(f"[L] Доступно обновление (локальный SHA: {local_sha[:8]}, удалённый: {remote_sha[:8]}).")
-        return False
+    return local_sha == remote_sha
 
 def save_last_commit_info(target_dir, sha):
-    """Сохраняет SHA последнего коммита в файл .last_commit."""
     last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
     try:
         with open(last_commit_path, 'w') as f:
@@ -183,25 +162,14 @@ def save_last_commit_info(target_dir, sha):
         log_message(f"[!] Ошибка сохранения .last_commit: {e}")
 
 def download_and_extract_repo(target_dir, script_name, target_user):
-    """
-    Проверяет актуальность репозитория через GitHub API.
-    Если требуется обновление – скачивает архив, распаковывает,
-    обновляет лаунчер при необходимости и записывает новый SHA.
-    """
-    # 1. Проверяем, нужно ли обновление
     if is_repo_up_to_date(target_dir):
-        # Репозиторий актуален, но может быть новый лаунчер внутри архива?
-        # Мы не скачиваем архив, поэтому не проверяем обновление лаунчера.
-        # Считаем, что если репозиторий актуален, то и лаунчер тоже.
         return True
 
-    # 2. Получаем SHA удалённого коммита для будущего сохранения
     remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
     if remote_sha is None:
         log_message("[!] Не удалось получить SHA удалённого коммита, обновление прервано.")
         return False
 
-    # 3. Скачиваем архив
     try:
         log_message("[L] Скачивание репозитория...")
         response = requests.get(ARCHIVE_URL, stream=True)
@@ -253,10 +221,13 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
         os.unlink(tmp_zip)
 
-        # После успешного обновления меняем владельца на target_user
-        fix_permissions(target_dir, target_user)
+        # После обновления удаляем флаг зависимостей, чтобы при следующей проверке они перепроверились
+        deps_flag = os.path.join(target_dir, DEPS_UPDATED_FLAG)
+        if os.path.exists(deps_flag):
+            os.remove(deps_flag)
+            log_message("[L] Флаг зависимостей сброшен.")
 
-        # Сохраняем SHA коммита
+        fix_permissions(target_dir, target_user)
         save_last_commit_info(target_dir, remote_sha)
 
         if new_launcher_tmp:
@@ -267,16 +238,103 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         log_message(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
 
-def install_requirements():
-    """Устанавливает pip‑зависимости, только если версии не совпадают."""
+def get_outdated_packages():
+    """Возвращает множество имён пакетов, которые устарели (согласно pip)."""
+    try:
+        # Используем --format=json для быстрого парсинга
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "list", "--outdated", "--format=json"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            log_message(f"[!] pip list --outdated завершился с ошибкой: {result.stderr}")
+            return None
+        outdated = json.loads(result.stdout)
+        return {pkg["name"].lower() for pkg in outdated}
+    except Exception as e:
+        log_message(f"[!] Не удалось получить список устаревших пакетов: {e}")
+        return None
+
+def parse_requirements(file_path):
+    """Парсит requirements.txt и возвращает словарь {имя_пакета: спецификация}."""
+    reqs = {}
+    if not os.path.exists(file_path):
+        return reqs
+    with open(file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            # Упрощённый парсинг: берём имя до первого '=', '<', '>', '!', '['
+            import re
+            match = re.match(r'^([a-zA-Z0-9_\-]+)', line)
+            if match:
+                pkg_name = match.group(1).lower()
+                reqs[pkg_name] = line
+    return reqs
+
+def are_dependencies_uptodate():
+    """
+    Проверяет, нужно ли обновлять зависимости.
+    Возвращает True, если все требуемые пакеты актуальны.
+    """
+    reqs = parse_requirements(REQUIREMENTS_FILE)
+    if not reqs:
+        return True  # нет требований
+
+    outdated = get_outdated_packages()
+    if outdated is None:
+        # В случае ошибки pip считаем, что требуется обновление (для безопасности)
+        return False
+
+    # Проверяем, есть ли пересечение между требуемыми пакетами и устаревшими
+    needed_update = any(pkg in outdated for pkg in reqs)
+    return not needed_update
+
+def mark_dependencies_updated():
+    """Создаёт файл-флаг, указывающий что зависимости для текущего коммита обновлены."""
+    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DEPS_UPDATED_FLAG)
+    try:
+        with open(flag_path, 'w') as f:
+            f.write(datetime.datetime.now().isoformat())
+        log_message("[L] Флаг обновления зависимостей установлен.")
+    except Exception as e:
+        log_message(f"[!] Не удалось создать флаг: {e}")
+
+def install_requirements(force=False):
+    """
+    Устанавливает pip-зависимости.
+    force=True — принудительная установка (например, после обновления репозитория).
+    Если force=False, проверяет флаг и список устаревших пакетов.
+    """
     if not os.path.exists(REQUIREMENTS_FILE):
         return True
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    flag_path = os.path.join(script_dir, DEPS_UPDATED_FLAG)
+
+    # Если не принудительно, проверяем, нужно ли обновлять
+    if not force:
+        # Проверяем флаг: если есть и репозиторий не обновлялся, пропускаем
+        if os.path.exists(flag_path):
+            log_message("[L] Зависимости уже проверялись для этой версии, пропускаем.")
+            return True
+
+        # Быстрая проверка устаревших пакетов
+        log_message("[L] Проверка актуальности pip-зависимостей...")
+        if are_dependencies_uptodate():
+            log_message("[L] Все зависимости актуальны.")
+            mark_dependencies_updated()
+            return True
+        else:
+            log_message("[L] Обнаружены устаревшие пакеты, запускаем установку.")
+
+    # Установка
     try:
-        log_message("[L] Проверка и установка pip‑зависимостей (только при необходимости)...")
+        log_message("[L] Установка/обновление pip-зависимостей...")
         env = os.environ.copy()
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 
-        # Используем стратегию only-if-needed, чтобы не переустанавливать актуальные пакеты
         cmd = [
             sys.executable, "-m", "pip", "install",
             "--no-cache-dir",
@@ -285,25 +343,24 @@ def install_requirements():
             "-r", REQUIREMENTS_FILE
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
         if result.returncode != 0:
             log_message(f"[!] Ошибка PIP (Code {result.returncode}):")
             log_message(result.stderr)
             return False
 
-        log_message("[L] Зависимости актуальны или успешно установлены.")
+        log_message("[L] Зависимости успешно установлены.")
+        mark_dependencies_updated()
         return True
     except Exception as e:
         log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
 def get_terminal_command(script_path, user):
-    # Убираем лишние обертки, чтобы sudo подхватил NOPASSWD из sudoers
     launcher_cmd = f"sudo /usr/bin/python3 {script_path}"
     hold_cmd = 'echo; echo "Launcher finished. Press any key to close."; read'
     full_cmd = f"{launcher_cmd}; {hold_cmd}"
 
-    # Список терминалов по приоритету
     for term in ["terminator", "gnome-terminal", "x-terminal-emulator", "xterm"]:
         if shutil.which(term):
             if term == "gnome-terminal":
@@ -351,7 +408,6 @@ X-GNOME-Autostart-Phase=Applications
     try:
         with open(desktop_file_path, 'w') as f:
             f.write(desktop_content)
-        # Файл должен принадлежать пользователю, чтобы система автозапуска его увидела
         os.chown(desktop_file_path, uid, gid)
         log_message(f"[L] Автозапуск установлен: {desktop_file_path}")
         log_message(f"[L] Команда: {cmd_str}")
@@ -398,7 +454,6 @@ def start_main():
         return False
 
 def main():
-    # Проверяем, что запущены с root
     check_root()
 
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
@@ -408,7 +463,6 @@ def main():
     parser.add_argument("--dont-install-autostart", action="store_true")
     args, unknown = parser.parse_known_args()
 
-    # Пользователь, которому будут принадлежать файлы после обновления (обычный юзер)
     target_user = get_display_user()
     log_message(f"[L] Целевой пользователь для прав: {target_user}")
 
@@ -439,7 +493,6 @@ def main():
     os.chdir(script_dir)
     log_message(f"[L] Рабочая директория: {script_dir}")
 
-    # Автоматическая установка автозапуска (Linux, не запрещено)
     if platform.system() == "Linux" and not args.dont_install_autostart:
         if not is_autostart_installed(target_user):
             log_message("[L] Автозапуск не обнаружен. Устанавливаем...")
@@ -447,19 +500,24 @@ def main():
         else:
             log_message("[L] Автозапуск уже установлен.")
 
-    # Ожидание интернета
     internet_ok = wait_for_internet(max_wait=60)
+    repo_updated = False
     if internet_ok:
         log_message("[L] Пробуем обновить репозиторий...")
-        success = download_and_extract_repo(script_dir, script_name, target_user)
-        if success:
-            install_requirements()
+        repo_updated = download_and_extract_repo(script_dir, script_name, target_user)
+        if repo_updated:
+            # Репозиторий либо был обновлён, либо уже актуален.
+            # force=True только если действительно было скачивание (SHA изменился).
+            # В download_and_extract_repo мы сбрасываем флаг при скачивании, поэтому
+            # install_requirements увидит отсутствие флага и выполнит проверку.
+            install_requirements(force=False)
         else:
-            log_message("[*] Обновление не удалось.")
+            log_message("[*] Обновление репозитория не удалось.")
     else:
         log_message("[*] Интернет отсутствует, пропускаем обновление.")
+        # Даже без интернета можно запустить main.py, если зависимости уже стоят
+        install_requirements(force=False)
 
-    # Запуск main.py
     if not args.no_start:
         time.sleep(2)
         start_main()
