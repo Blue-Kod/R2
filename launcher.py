@@ -182,36 +182,35 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
 def install_requirements():
     if not os.path.exists(REQUIREMENTS_FILE): 
-        log_message("[*] requirements.txt не найден.")
         return True
     try:
         log_message("[L] Установка pip-зависимостей...")
         
-        # Сначала убедимся, что установлены базовые пакеты для сборки (иногда pip падает без них)
-        subprocess.check_call(["apt", "install", "-y", "python3-setuptools", "python3-wheel"], stdout=subprocess.DEVNULL)
-
-        # Вызываем установку с полным набором флагов. 
-        # Добавлен --no-cache-dir, чтобы не было ошибок с правами доступа к кэшу root
+        # Создаем копию текущих переменных окружения и добавляем наш "взлом"
+        env = os.environ.copy()
+        env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+        
+        # Убираем флаг из списка аргументов, так как переменная окружения сделает всё сама
         cmd = [
             sys.executable, "-m", "pip", "install", 
-            "--break-system-packages", 
             "--no-cache-dir",
             "--upgrade",
             "-r", REQUIREMENTS_FILE
         ]
         
-        # Используем выполнение с выводом ошибки в лог, чтобы понять, если что-то не так
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Запускаем с обновленным окружением
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
         
         if result.returncode != 0:
+            # Если всё равно ошибка, выведем её, чтобы понять причину
             log_message(f"[!] Ошибка PIP (Code {result.returncode}):")
-            log_message(result.stderr) # Это покажет реальную причину в консоли
+            log_message(result.stderr)
             return False
             
-        log_message("[L] Зависимости успешно обновлены.")
+        log_message("[L] Зависимости успешно установлены.")
         return True
     except Exception as e:
-        log_message(f"[!] Критическая ошибка при работе с PIP: {e}")
+        log_message(f"[!] Ошибка: {e}")
         return False
 
 def get_terminal_command(script_path, user):
