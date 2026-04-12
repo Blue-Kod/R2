@@ -181,18 +181,37 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         return False
 
 def install_requirements():
-    req_path = Path(REQUIREMENTS_FILE)
-    if not req_path.exists():
-        log_message("[*] Файл requirements.txt не найден, пропускаем установку зависимостей.")
+    if not os.path.exists(REQUIREMENTS_FILE): 
+        log_message("[*] requirements.txt не найден.")
         return True
-
     try:
-        log_message("[L] Установка зависимостей (глобально)...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--break-system-packages", "-r", REQUIREMENTS_FILE])
-        log_message("[L] Зависимости успешно установлены/обновлены.")
+        log_message("[L] Установка pip-зависимостей...")
+        
+        # Сначала убедимся, что установлены базовые пакеты для сборки (иногда pip падает без них)
+        subprocess.check_call(["apt", "install", "-y", "python3-setuptools", "python3-wheel"], stdout=subprocess.DEVNULL)
+
+        # Вызываем установку с полным набором флагов. 
+        # Добавлен --no-cache-dir, чтобы не было ошибок с правами доступа к кэшу root
+        cmd = [
+            sys.executable, "-m", "pip", "install", 
+            "--break-system-packages", 
+            "--no-cache-dir",
+            "--upgrade",
+            "-r", REQUIREMENTS_FILE
+        ]
+        
+        # Используем выполнение с выводом ошибки в лог, чтобы понять, если что-то не так
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            log_message(f"[!] Ошибка PIP (Code {result.returncode}):")
+            log_message(result.stderr) # Это покажет реальную причину в консоли
+            return False
+            
+        log_message("[L] Зависимости успешно обновлены.")
         return True
-    except subprocess.CalledProcessError as e:
-        log_message(f"[!] Ошибка при установке зависимостей: {e}")
+    except Exception as e:
+        log_message(f"[!] Критическая ошибка при работе с PIP: {e}")
         return False
 
 def get_terminal_command(script_path, user):
