@@ -188,7 +188,7 @@ def install_requirements():
 
     try:
         log_message("[L] Установка зависимостей (глобально)...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE])
+        subprocess.check_call([sys.executable, "-m", "pip3", "install", "-r", REQUIREMENTS_FILE])
         log_message("[L] Зависимости успешно установлены/обновлены.")
         return True
     except subprocess.CalledProcessError as e:
