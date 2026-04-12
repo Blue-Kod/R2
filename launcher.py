@@ -21,6 +21,7 @@ import datetime
 import time
 import pwd
 import socket
+import json
 from pathlib import Path
 
 # Константы
@@ -30,6 +31,7 @@ REQUIREMENTS_FILE = "requirements.txt"
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 INTERNET_CHECK_HOST = "8.8.8.8"
+LAST_COMMIT_FILE = ".last_commit"          # файл для хранения SHA последнего обновления
 
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
@@ -117,7 +119,89 @@ def apply_self_update(new_launcher_path):
             pass
         return False
 
+def get_remote_head_commit_info(owner, repo, branch='main'):
+    """
+    Возвращает (sha, commit_date) последнего коммита в ветке branch.
+    При ошибке возвращает (None, None).
+    """
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}"
+    try:
+        response = requests.get(api_url, timeout=10)
+        if response.status_code != 200:
+            log_message(f"[!] GitHub API вернул {response.status_code}")
+            return None, None
+        data = response.json()
+        sha = data.get('sha')
+        date_str = data.get('commit', {}).get('committer', {}).get('date')
+        commit_date = None
+        if date_str:
+            # Пример: "2025-03-15T12:34:56Z"
+            commit_date = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
+        return sha, commit_date
+    except Exception as e:
+        log_message(f"[!] Ошибка получения информации о коммите: {e}")
+        return None, None
+
+def is_repo_up_to_date(target_dir):
+    """
+    Проверяет, совпадает ли SHA последнего коммита на GitHub
+    с сохранённым в файле .last_commit.
+    Возвращает True, если обновление не требуется.
+    """
+    last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
+    if not os.path.exists(last_commit_path):
+        log_message("[L] Локальный файл .last_commit отсутствует, требуется обновление.")
+        return False
+
+    try:
+        with open(last_commit_path, 'r') as f:
+            local_sha = f.read().strip()
+    except:
+        log_message("[!] Не удалось прочитать .last_commit, требуется обновление.")
+        return False
+
+    remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
+    if remote_sha is None:
+        log_message("[!] Не удалось получить информацию о последнем коммите, пропускаем проверку.")
+        return False
+
+    if local_sha == remote_sha:
+        log_message(f"[L] Репозиторий уже актуален (SHA: {local_sha[:8]}).")
+        return True
+    else:
+        log_message(f"[L] Доступно обновление (локальный SHA: {local_sha[:8]}, удалённый: {remote_sha[:8]}).")
+        return False
+
+def save_last_commit_info(target_dir, sha):
+    """Сохраняет SHA последнего коммита в файл .last_commit."""
+    last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
+    try:
+        with open(last_commit_path, 'w') as f:
+            f.write(sha)
+        log_message(f"[L] Сохранён SHA коммита: {sha[:8]}")
+    except Exception as e:
+        log_message(f"[!] Ошибка сохранения .last_commit: {e}")
+
 def download_and_extract_repo(target_dir, script_name, target_user):
+    """
+    Проверяет актуальность репозитория через GitHub API.
+    Если требуется обновление – скачивает архив, распаковывает,
+    обновляет лаунчер при необходимости и записывает новый SHA.
+    """
+    # 1. Проверяем, нужно ли обновление
+    if is_repo_up_to_date(target_dir):
+        # Репозиторий актуален, но может быть новый лаунчер внутри архива?
+        # Мы не скачиваем архив, поэтому не проверяем обновление лаунчера.
+        # Считаем, что если репозиторий актуален, то и лаунчер тоже.
+        return True
+
+    # 2. Получаем SHA удалённого коммита для будущего сохранения
+    remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
+    if remote_sha is None:
+        log_message("[!] Не удалось получить SHA удалённого коммита, обновление прервано.")
+        return False
+
+    # 3. Скачиваем архив
     try:
         log_message("[L] Скачивание репозитория...")
         response = requests.get(ARCHIVE_URL, stream=True)
@@ -172,6 +256,9 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         # После успешного обновления меняем владельца на target_user
         fix_permissions(target_dir, target_user)
 
+        # Сохраняем SHA коммита
+        save_last_commit_info(target_dir, remote_sha)
+
         if new_launcher_tmp:
             apply_self_update(new_launcher_tmp)
         return True
@@ -181,36 +268,33 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         return False
 
 def install_requirements():
-    if not os.path.exists(REQUIREMENTS_FILE): 
+    """Устанавливает pip‑зависимости, только если версии не совпадают."""
+    if not os.path.exists(REQUIREMENTS_FILE):
         return True
     try:
-        log_message("[L] Установка pip-зависимостей...")
-        
-        # Создаем копию текущих переменных окружения и добавляем наш "взлом"
+        log_message("[L] Проверка и установка pip‑зависимостей (только при необходимости)...")
         env = os.environ.copy()
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
-        
-        # Убираем флаг из списка аргументов, так как переменная окружения сделает всё сама
+
+        # Используем стратегию only-if-needed, чтобы не переустанавливать актуальные пакеты
         cmd = [
-            sys.executable, "-m", "pip", "install", 
+            sys.executable, "-m", "pip", "install",
             "--no-cache-dir",
             "--upgrade",
+            "--upgrade-strategy", "only-if-needed",
             "-r", REQUIREMENTS_FILE
         ]
-        
-        # Запускаем с обновленным окружением
+
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        
         if result.returncode != 0:
-            # Если всё равно ошибка, выведем её, чтобы понять причину
             log_message(f"[!] Ошибка PIP (Code {result.returncode}):")
             log_message(result.stderr)
             return False
-            
-        log_message("[L] Зависимости успешно установлены.")
+
+        log_message("[L] Зависимости актуальны или успешно установлены.")
         return True
     except Exception as e:
-        log_message(f"[!] Ошибка: {e}")
+        log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
 def get_terminal_command(script_path, user):
