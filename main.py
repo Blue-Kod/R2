@@ -79,7 +79,7 @@ def get_ip_address():
         s.close()
     return ip
 
-# ---------- Поток сервотрекинга (плавное движение) ----------
+# ---------- Поток сервотрекинга с таймаутом 10 секунд ----------
 def servo_tracking_loop():
     global servo_tracking_enabled, camera, servo_controller
     default_neck = 90
@@ -89,25 +89,63 @@ def servo_tracking_loop():
     last_neck = default_neck
     last_tilt = default_head_tilt
 
+    # Переменные для таймаута
+    last_target_time = time.time()   # время последнего обнаружения цели
+    target_lost = True                # флаг, что цель потеряна (изначально нет цели)
+    timeout_seconds = 10.0            # ждать 10 секунд перед возвратом в центр
+
     while True:
         if servo_tracking_enabled and camera is not None and servo_controller is not None:
             dx, dy = camera.get_eye_offsets()
             scale_x = camera.tracking_scale_x if camera.tracking_scale_x != 0 else 1.0
             scale_y = camera.tracking_scale_y if camera.tracking_scale_y != 0 else 1.0
 
-            neck_angle = default_neck + (dx / scale_x) * max_neck_delta
-            neck_angle = max(default_neck - max_neck_delta, min(default_neck + max_neck_delta, neck_angle))
-            tilt_angle = default_head_tilt + (dy / scale_y) * max_tilt_delta
-            tilt_angle = max(default_head_tilt - max_tilt_delta, min(default_head_tilt + max_tilt_delta, tilt_angle))
+            # Проверяем, есть ли цель (dx, dy != 0)
+            target_present = (dx != 0.0 or dy != 0.0)
 
-            # Плавное движение
-            if abs(neck_angle - last_neck) > 1:
-                servo_controller.set_servo(0, int(round(neck_angle)), smooth=True, step_delay=0.01, step_angle=2)
-                last_neck = neck_angle
-            if abs(tilt_angle - last_tilt) > 1:
-                servo_controller.set_servo(3, int(round(tilt_angle)), smooth=True, step_delay=0.01, step_angle=2)
-                last_tilt = tilt_angle
-        time.sleep(0.05)
+            if target_present:
+                # Цель обнаружена – обновляем время и сбрасываем флаг потери
+                last_target_time = time.time()
+                target_lost = False
+
+                # Вычисляем желаемые углы
+                neck_angle = default_neck + (dx / scale_x) * max_neck_delta
+                neck_angle = max(default_neck - max_neck_delta, min(default_neck + max_neck_delta, neck_angle))
+                tilt_angle = default_head_tilt + (dy / scale_y) * max_tilt_delta
+                tilt_angle = max(default_head_tilt - max_tilt_delta, min(default_head_tilt + max_tilt_delta, tilt_angle))
+
+                # Плавное движение к цели
+                if abs(neck_angle - last_neck) > 1:
+                    servo_controller.set_servo(0, int(round(neck_angle)), smooth=True, step_delay=0.01, step_angle=2)
+                    last_neck = neck_angle
+                if abs(tilt_angle - last_tilt) > 1:
+                    servo_controller.set_servo(3, int(round(tilt_angle)), smooth=True, step_delay=0.01, step_angle=2)
+                    last_tilt = tilt_angle
+            else:
+                # Цель отсутствует
+                if not target_lost:
+                    # Цель только что пропала – начинаем отсчёт таймаута
+                    target_lost = True
+                    last_target_time = time.time()
+                    log_message("Цель потеряна, ожидание {} секунд перед возвратом в центр".format(timeout_seconds))
+                else:
+                    # Цель уже потеряна, проверяем таймаут
+                    elapsed = time.time() - last_target_time
+                    if elapsed >= timeout_seconds:
+                        # Таймаут истёк – возвращаемся в центр, если ещё не там
+                        if abs(last_neck - default_neck) > 1:
+                            servo_controller.set_servo(0, default_neck, smooth=True, step_delay=0.01, step_angle=2)
+                            last_neck = default_neck
+                        if abs(last_tilt - default_head_tilt) > 1:
+                            servo_controller.set_servo(3, default_head_tilt, smooth=True, step_delay=0.01, step_angle=2)
+                            last_tilt = default_head_tilt
+                        # После возврата можно сбросить last_target_time, но не обязательно
+        else:
+            # Если трекинг выключен или нет контроллера – сбрасываем состояние
+            target_lost = True
+            last_target_time = time.time()
+
+        time.sleep(0.05)  # 20 Гц
 
 # ---------- Flask приложение ----------
 app = Flask(__name__)
@@ -173,7 +211,7 @@ def api_shutdown():
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
-# ---------- Терминал (без изменений) ----------
+# ---------- Терминал ----------
 class ShellManager:
     def __init__(self):
         self.proc = None
@@ -326,7 +364,7 @@ def tracking_offsets():
     dx, dy = camera.get_eye_offsets()
     return jsonify({'dx': dx, 'dy': dy})
 
-# ---------- API для сервоприводов (с поддержкой плавности) ----------
+# ---------- API для сервоприводов ----------
 @app.route('/api/servo/<int:channel>/<int:angle>', methods=['POST'])
 def set_servo(channel, angle):
     if servo_controller is None: return jsonify({'error': 'Servo controller not initialized'}), 500
