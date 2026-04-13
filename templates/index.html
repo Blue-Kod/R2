@@ -5,574 +5,164 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>R2 - Главная</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            background: black;
-            color: #00ff00;
-            font-family: 'Ubuntu Sans Mono', monospace;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-        header {
-            background: #111;
-            padding: 10px;
-            text-align: center;
-            border-bottom: 1px solid #333;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        header .nav-links a {
-            color: #fff;
-            text-decoration: none;
-            font-size: 20px;
-            margin: 0 15px;
-        }
-        header .nav-links a:hover {
-            text-decoration: underline;
-        }
-        .stats {
-            display: flex;
-            gap: 20px;
-            font-size: 14px;
-            background: #0a0a0a;
-            padding: 5px 15px;
-            border-radius: 8px;
-        }
-        .stats span {
-            color: #ffaa00;
-        }
-        .container {
-            flex: 1;
-            display: flex;
-            overflow: hidden;
-        }
-        .panel {
-            display: flex;
-            flex-direction: column;
-            padding: 10px;
-            overflow: hidden;
-        }
-        .panel-left {
-            width: 25%;
-            background: #0a0a0a;
-            border-right: 1px solid #333;
-        }
-        .panel-center {
-            width: 50%;
-            background: black;
-            display: flex;
-            flex-direction: column;
-        }
-        .panel-right {
-            width: 25%;
-            background: #0a0a0a;
-            border-left: 1px solid #333;
-            overflow-y: auto;
-        }
-        .panel-title {
-            color: #00ff00;
-            font-size: 14px;
-            text-transform: uppercase;
-            margin-bottom: 10px;
-            padding-bottom: 5px;
-            border-bottom: 1px solid #333;
-        }
-        #logs {
-            flex: 1;
-            overflow-y: auto;
-            font-size: 11px;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            padding-right: 5px;
-        }
-        #logs div {
-            color: #aaa;
-        }
-        #video-container {
-            flex: 1;
-            background: black;
-            position: relative;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        #video-feed {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-            border: 1px solid #333;
-        }
-        #controls {
-            padding: 10px;
-            background: #111;
-            border-top: 1px solid #333;
-            overflow-y: auto;
-            max-height: 40%;
-        }
-        .control-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
-        }
-        .control-row label {
-            color: #00ff00;
-            font-size: 12px;
-        }
-        .control-row input[type="checkbox"] {
-            accent-color: #00ff00;
-        }
-        .control-row input[type="range"] {
-            width: 60%;
-            accent-color: #00ff00;
-        }
-        .control-group {
-            margin-top: 15px;
-            padding-top: 10px;
-            border-top: 1px solid #333;
-        }
-        .control-group .control-row {
-            margin-left: 10px;
-        }
-        #terminal-output {
-            flex: 1;
-            overflow-y: auto;
-            font-size: 12px;
-            line-height: 1.4;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            background: #000;
-            padding: 5px;
-            border: 1px solid #333;
-            margin-bottom: 5px;
-            min-height: 200px;
-        }
-        #terminal-input-line {
-            display: flex;
-        }
-        #terminal-prompt {
-            color: #00ff00;
-            margin-right: 5px;
-        }
-        #terminal-command {
-            flex: 1;
-            background: black;
-            border: none;
-            outline: none;
-            color: #00ff00;
-            font-family: 'Ubuntu Sans Mono', monospace;
-            font-size: 12px;
-        }
-        .depth-tooltip {
-            position: absolute;
-            background: rgba(0,0,0,0.85);
-            color: #00ff00;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-family: 'Ubuntu Sans Mono', monospace;
-            pointer-events: none;
-            border: 1px solid #00ff00;
-            z-index: 1000;
-            box-shadow: 0 2px 5px rgba(0,255,0,0.2);
-        }
-        .hidden {
-            display: none;
-        }
-        .servo-controls {
-            margin-top: 10px;
-            padding: 10px;
-            background: #0a0a0a;
-            border: 1px solid #333;
-            border-radius: 4px;
-        }
-        .servo-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-        }
-        .servo-row label {
-            width: 100px;
-            font-size: 12px;
-            color: #00ff00;
-        }
-        .servo-row input[type="range"] {
-            flex: 1;
-            min-width: 150px;
-            accent-color: #00ff00;
-        }
-        .servo-row span {
-            width: 45px;
-            text-align: center;
-            font-size: 12px;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: black; color: #00ff00; font-family: monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        header { background: #111; padding: 10px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        header .nav-links a { color: #fff; text-decoration: none; font-size: 20px; margin: 0 15px; }
+        .stats { display: flex; gap: 20px; font-size: 14px; background: #0a0a0a; padding: 5px 15px; border-radius: 8px; }
+        .stats span { color: #ffaa00; }
+        .container { flex: 1; display: flex; overflow: hidden; }
+        .panel { display: flex; flex-direction: column; padding: 10px; overflow: hidden; }
+        .panel-left { width: 25%; background: #0a0a0a; border-right: 1px solid #333; }
+        .panel-center { width: 50%; background: black; display: flex; flex-direction: column; }
+        .panel-right { width: 25%; background: #0a0a0a; border-left: 1px solid #333; overflow-y: auto; }
+        .panel-title { color: #00ff00; font-size: 14px; text-transform: uppercase; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #333; }
+        #logs { flex: 1; overflow-y: auto; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+        #logs div { color: #aaa; }
+        #video-container { flex: 1; position: relative; display: flex; justify-content: center; align-items: center; }
+        #video-feed { max-width: 100%; max-height: 100%; object-fit: contain; border: 1px solid #333; }
+        #controls { padding: 10px; background: #111; border-top: 1px solid #333; overflow-y: auto; max-height: 40%; }
+        .control-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        .control-row label { color: #00ff00; font-size: 12px; }
+        .control-row input[type="checkbox"], .control-row select { accent-color: #00ff00; background: black; color: #00ff00; border: 1px solid #333; }
+        .control-row input[type="range"] { width: 60%; accent-color: #00ff00; }
+        .control-group { margin-top: 15px; padding-top: 10px; border-top: 1px solid #333; }
+        #terminal-output { flex: 1; overflow-y: auto; font-size: 12px; background: #000; padding: 5px; border: 1px solid #333; margin-bottom: 5px; min-height: 200px; white-space: pre-wrap; }
+        #terminal-input-line { display: flex; }
+        #terminal-prompt { color: #00ff00; margin-right: 5px; }
+        #terminal-command { flex: 1; background: black; border: none; outline: none; color: #00ff00; font-family: monospace; font-size: 12px; }
+        .depth-tooltip { position: absolute; background: rgba(0,0,0,0.85); color: #00ff00; padding: 4px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; border: 1px solid #00ff00; z-index: 1000; }
+        .hidden { display: none; }
+        .servo-controls { margin-top: 10px; padding: 10px; background: #0a0a0a; border: 1px solid #333; border-radius: 4px; }
+        .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+        .servo-row label { width: 100px; font-size: 12px; color: #00ff00; }
+        .servo-row input[type="range"] { flex: 1; min-width: 150px; accent-color: #00ff00; }
+        .servo-row span { width: 45px; text-align: center; font-size: 12px; }
     </style>
 </head>
 <body>
-    <header>
-        <div class="nav-links">
-            <a href="/">R2</a>
-            <a href="/screen">Экран</a>
-            <a href="/terminal">CMD</a>
-            <a href="/logs">Логи</a>
+<header>
+    <div class="nav-links">
+        <a href="/">R2</a><a href="/screen">Экран</a><a href="/terminal">CMD</a><a href="/logs">Логи</a>
+    </div>
+    <div class="stats">
+        <div>CPU: <span id="cpuStat">0</span>%</div>
+        <div>RAM: <span id="ramStat">0</span>%</div>
+        <div>Темп: <span id="tempStat">--</span></div>
+        <div>FPS: <span id="fpsStat">0</span></div>
+    </div>
+</header>
+<div class="container">
+    <div class="panel panel-left">
+        <div class="panel-title">Системные логи</div>
+        <div id="logs"></div>
+    </div>
+    <div class="panel panel-center">
+        <div id="video-container">
+            <img id="video-feed" src="/video_feed" alt="Video Stream">
+            <div id="depth-tooltip" class="depth-tooltip hidden"></div>
         </div>
-        <div class="stats">
-            <div>CPU: <span id="cpuStat">0</span>%</div>
-            <div>RAM: <span id="ramStat">0</span>%</div>
-            <div>Темп: <span id="tempStat">--</span></div>
-            <div>FPS: <span id="fpsStat">0</span></div>
-        </div>
-    </header>
-    <div class="container">
-        <!-- Левая панель: логи -->
-        <div class="panel panel-left">
-            <div class="panel-title">Системные логи</div>
-            <div id="logs"></div>
-        </div>
-
-        <!-- Центральная панель: видео и управление -->
-        <div class="panel panel-center">
-            <div id="video-container">
-                <img id="video-feed" src="/video_feed" alt="Video Stream">
-                <div id="depth-tooltip" class="depth-tooltip hidden"></div>
+        <div id="controls">
+            <div class="control-row">
+                <label>Основной глаз:</label>
+                <div><input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateParams()"> <label for="eyeLeft">Левый</label>
+                    <input type="radio" name="mainEye" id="eyeRight" onchange="updateParams()"> <label for="eyeRight">Правый</label></div>
             </div>
-            <div id="controls">
-                <div class="control-row">
-                    <label>Основной глаз:</label>
-                    <div>
-                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateParams()"> <label for="eyeLeft">Левый</label>
-                        <input type="radio" name="mainEye" id="eyeRight" onchange="updateParams()"> <label for="eyeRight">Правый</label>
-                    </div>
-                </div>
-                <div class="control-row">
-                    <label>Показывать глубину:</label>
-                    <input type="checkbox" id="showDepth" checked onchange="updateParams()">
-                </div>
-                <div class="control-row">
-                    <label>Прозрачность глубины:</label>
-                    <input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()">
-                </div>
-
-                <div class="control-group">
-                    <div class="panel-title" style="font-size:12px; margin:10px 0 5px;">⚙️ Настройки камеры</div>
-                    <div class="control-row">
-                        <label>Глубина (вычисления):</label>
-                        <input type="checkbox" id="depthEnabled" onchange="sendCameraParams()">
-                    </div>
-                    <div class="control-row">
-                        <label>Отслеживание лиц:</label>
-                        <input type="checkbox" id="faceTrackingEnabled" onchange="sendCameraParams()">
-                    </div>
-                    <div class="control-row">
-                        <label>WLS фильтр (медленно):</label>
-                        <input type="checkbox" id="wlsEnabled" onchange="sendCameraParams()">
-                    </div>
-                </div>
-
-                <div class="control-group">
-                    <div class="panel-title" style="font-size:12px; margin:10px 0 5px;">🎯 Параметры трекинга</div>
-                    <div class="control-row">
-                        <label>Scale X (пикс):</label>
-                        <input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="scaleXVal">50</span>
-                    </div>
-                    <div class="control-row">
-                        <label>Scale Y (пикс):</label>
-                        <input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="scaleYVal">30</span>
-                    </div>
-                    <div class="control-row">
-                        <label>Offset X (пикс):</label>
-                        <input type="range" id="trackingOffsetX" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="offsetXVal">0</span>
-                    </div>
-                    <div class="control-row">
-                        <label>Offset Y (пикс):</label>
-                        <input type="range" id="trackingOffsetY" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="offsetYVal">0</span>
-                    </div>
-                    <div class="control-row">
-                        <label>Авто-серво по лицу:</label>
-                        <input type="checkbox" id="servoTrackingEnabled" onchange="setServoTracking()">
-                    </div>
-                </div>
+            <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked onchange="updateParams()"></div>
+            <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()"></div>
+            <div class="control-group">
+                <div class="panel-title" style="font-size:12px;">⚙️ Настройки камеры</div>
+                <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled" onchange="sendCameraParams()"></div>
+                <div class="control-row"><label>WLS фильтр (медленно):</label><input type="checkbox" id="wlsEnabled" onchange="sendCameraParams()"></div>
             </div>
-        </div>
-
-        <!-- Правая панель: терминал и сервоприводы -->
-        <div class="panel panel-right">
-            <div class="panel-title">Терминал</div>
-            <div id="terminal-output"></div>
-            <div id="terminal-input-line">
-                <span id="terminal-prompt">$</span>
-                <input type="text" id="terminal-command" placeholder="Введите команду..." autofocus>
-            </div>
-
-            <div class="panel-title" style="margin-top: 20px;">Сервоприводы</div>
-            <div class="servo-controls">
-                <div class="servo-row">
-                    <label>Шея (канал 0):</label>
-                    <input type="range" id="servo0" min="0" max="180" value="90" oninput="updateServoValue(0, this.value)" onchange="setServo(0, this.value)">
-                    <span id="servo0_val">90°</span>
+            <div class="control-group">
+                <div class="panel-title" style="font-size:12px;">🎯 Трекинг цели</div>
+                <div class="control-row"><label>Включить трекинг:</label><input type="checkbox" id="trackingEnabled" onchange="sendCameraParams()"></div>
+                <div class="control-row"><label>Тип цели:</label>
+                    <select id="trackingMode" onchange="sendCameraParams()">
+                        <option value="face">👤 Лица людей</option>
+                        <option value="motion">🌀 Всё, что движется</option>
+                    </select>
                 </div>
-                <div class="servo-row">
-                    <label>Правое плечо (1):</label>
-                    <input type="range" id="servo1" min="0" max="270" value="135" oninput="updateServoValue(1, this.value)" onchange="setServo(1, this.value)">
-                    <span id="servo1_val">135°</span>
-                </div>
-                <div class="servo-row">
-                    <label>Левое плечо (2):</label>
-                    <input type="range" id="servo2" min="0" max="270" value="135" oninput="updateServoValue(2, this.value)" onchange="setServo(2, this.value)">
-                    <span id="servo2_val">135°</span>
-                </div>
-                <div class="servo-row">
-                    <label>Наклон головы (3):</label>
-                    <input type="range" id="servo3" min="0" max="180" value="90" oninput="updateServoValue(3, this.value)" onchange="setServo(3, this.value)">
-                    <span id="servo3_val">90°</span>
-                </div>
-                <div class="servo-row">
-                    <label>Поворот прав. плеча (4):</label>
-                    <input type="range" id="servo4" min="0" max="270" value="135" oninput="updateServoValue(4, this.value)" onchange="setServo(4, this.value)">
-                    <span id="servo4_val">135°</span>
-                </div>
-                <div class="servo-row">
-                    <label>Поворот лев. плеча (5):</label>
-                    <input type="range" id="servo5" min="0" max="270" value="135" oninput="updateServoValue(5, this.value)" onchange="setServo(5, this.value)">
-                    <span id="servo5_val">135°</span>
-                </div>
+                <div class="control-row"><label>Scale X (пикс):</label><input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="scaleXVal">50</span></div>
+                <div class="control-row"><label>Scale Y (пикс):</label><input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="scaleYVal">30</span></div>
+                <div class="control-row"><label>Offset X (пикс):</label><input type="range" id="trackingOffsetX" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="offsetXVal">0</span></div>
+                <div class="control-row"><label>Offset Y (пикс):</label><input type="range" id="trackingOffsetY" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="offsetYVal">0</span></div>
+                <div class="control-row"><label>Авто-серво по цели:</label><input type="checkbox" id="servoTrackingEnabled" onchange="setServoTracking()"></div>
             </div>
         </div>
     </div>
+    <div class="panel panel-right">
+        <div class="panel-title">Терминал</div>
+        <div id="terminal-output"></div>
+        <div id="terminal-input-line"><span id="terminal-prompt">$</span><input type="text" id="terminal-command" placeholder="Введите команду..." autofocus></div>
+        <div class="panel-title" style="margin-top:20px;">Сервоприводы</div>
+        <div class="servo-controls">
+            <div class="servo-row"><label>Шея (0):</label><input type="range" id="servo0" min="0" max="180" value="90" oninput="updateServoValue(0, this.value)" onchange="setServo(0, this.value)"><span id="servo0_val">90°</span></div>
+            <div class="servo-row"><label>Правое плечо (1):</label><input type="range" id="servo1" min="0" max="270" value="135" oninput="updateServoValue(1, this.value)" onchange="setServo(1, this.value)"><span id="servo1_val">135°</span></div>
+            <div class="servo-row"><label>Левое плечо (2):</label><input type="range" id="servo2" min="0" max="270" value="135" oninput="updateServoValue(2, this.value)" onchange="setServo(2, this.value)"><span id="servo2_val">135°</span></div>
+            <div class="servo-row"><label>Наклон головы (3):</label><input type="range" id="servo3" min="0" max="180" value="90" oninput="updateServoValue(3, this.value)" onchange="setServo(3, this.value)"><span id="servo3_val">90°</span></div>
+            <div class="servo-row"><label>Поворот прав. плеча (4):</label><input type="range" id="servo4" min="0" max="270" value="135" oninput="updateServoValue(4, this.value)" onchange="setServo(4, this.value)"><span id="servo4_val">135°</span></div>
+            <div class="servo-row"><label>Поворот лев. плеча (5):</label><input type="range" id="servo5" min="0" max="270" value="135" oninput="updateServoValue(5, this.value)" onchange="setServo(5, this.value)"><span id="servo5_val">135°</span></div>
+        </div>
+    </div>
+</div>
+<script>
+    async function fetchSystemStats() {
+        try {
+            const r = await fetch('/api/data');
+            const d = await r.json();
+            document.getElementById('cpuStat').innerText = d.cpu;
+            document.getElementById('ramStat').innerText = d.ram;
+            document.getElementById('tempStat').innerText = d.temp;
+            document.getElementById('fpsStat').innerText = d.fps;
+            document.getElementById('logs').innerHTML = d.logs.map(l => `<div>${escapeHtml(l)}</div>`).join('');
+            document.getElementById('logs').scrollTop = document.getElementById('logs').scrollHeight;
+        } catch(e) { console.error(e); }
+    }
+    function escapeHtml(s) { return s.replace(/[&<>]/g, function(m){ if(m==='&') return '&amp;'; if(m==='<') return '&lt;'; if(m==='>') return '&gt;'; return m;}); }
+    setInterval(fetchSystemStats, 2000);
+    fetchSystemStats();
 
-    <script>
-        // ---------- Логи и системные показатели ----------
-        const logsDiv = document.getElementById('logs');
-        async function fetchSystemStats() {
-            try {
-                const response = await fetch('/api/data');
-                const data = await response.json();
-                document.getElementById('cpuStat').innerText = data.cpu;
-                document.getElementById('ramStat').innerText = data.ram;
-                document.getElementById('tempStat').innerText = data.temp;
-                document.getElementById('fpsStat').innerText = data.fps;
-                logsDiv.innerHTML = data.logs.map(line => `<div>${escapeHtml(line)}</div>`).join('');
-                logsDiv.scrollTop = logsDiv.scrollHeight;
-            } catch (e) {
-                console.error('Ошибка получения данных:', e);
-            }
-        }
-        function escapeHtml(unsafe) {
-            return unsafe.replace(/[&<>"]/g, function(m) {
-                if(m === '&') return '&amp;';
-                if(m === '<') return '&lt;';
-                if(m === '>') return '&gt;';
-                if(m === '"') return '&quot;';
-                return m;
-            });
-        }
-        fetchSystemStats();
-        setInterval(fetchSystemStats, 2000);
+    const eyeLeft = document.getElementById('eyeLeft'), eyeRight = document.getElementById('eyeRight'), showDepth = document.getElementById('showDepth'), depthAlpha = document.getElementById('depthAlpha');
+    function updateParams() {
+        fetch('/update', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0, show_left: eyeLeft.checked, num_disp:5 }) }).catch(console.error);
+    }
+    const video = document.getElementById('video-feed'), tooltip = document.getElementById('depth-tooltip');
+    video.addEventListener('mousemove', (e) => {
+        if(!showDepth.checked) { tooltip.classList.add('hidden'); return; }
+        const rect = video.getBoundingClientRect();
+        const x = e.clientX - rect.left, y = e.clientY - rect.top;
+        const sx = video.naturalWidth/rect.width, sy = video.naturalHeight/rect.height;
+        const ix = Math.round(x*sx), iy = Math.round(y*sy);
+        fetch('/api/depth', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({x:ix, y:iy}) }).then(res=>res.json()).then(data=>{ if(data.depth!==null && data.depth!==undefined) { tooltip.classList.remove('hidden'); tooltip.style.left=(e.clientX+15)+'px'; tooltip.style.top=(e.clientY+15)+'px'; tooltip.textContent=`${data.depth.toFixed(1)} см`; } else tooltip.classList.add('hidden'); }).catch(()=>tooltip.classList.add('hidden'));
+    });
+    video.addEventListener('mouseleave', ()=>tooltip.classList.add('hidden'));
 
-        // ---------- Управление камерой ----------
-        const eyeLeft = document.getElementById('eyeLeft');
-        const eyeRight = document.getElementById('eyeRight');
-        const showDepth = document.getElementById('showDepth');
-        const depthAlpha = document.getElementById('depthAlpha');
+    const terminalOutput = document.getElementById('terminal-output'), terminalCommand = document.getElementById('terminal-command');
+    let lastOutput='', fetchInProgress=false, sendInProgress=false;
+    function stripAnsi(s){ return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x1b\\/g,'').replace(/\x07/g,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n'); }
+    function setTerminalOutput(t){ terminalOutput.innerHTML = stripAnsi(t); terminalOutput.scrollTop = terminalOutput.scrollHeight; }
+    async function fetchTerminalOutput(){ if(fetchInProgress) return; fetchInProgress=true; try{ const r=await fetch('/api/cmd/output'); const d=await r.json(); if(d.output!==lastOutput){ setTerminalOutput(d.output); lastOutput=d.output; } }catch(e){} finally{ fetchInProgress=false; } }
+    async function sendTerminalCommand(cmd){ if(sendInProgress) return; sendInProgress=true; try{ await fetch('/api/cmd/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})}); await fetchTerminalOutput(); }catch(e){} finally{ sendInProgress=false; } }
+    terminalCommand.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ const cmd=terminalCommand.value; if(cmd.trim()!==''){ setTerminalOutput(lastOutput+'$ '+cmd+'\n'); lastOutput+='$ '+cmd+'\n'; sendTerminalCommand(cmd); terminalCommand.value=''; } } });
+    fetchTerminalOutput(); setInterval(fetchTerminalOutput,200);
 
-        function updateParams() {
-            const params = {
-                alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0,
-                show_left: eyeLeft.checked,
-                num_disp: 5   // уменьшено для FPS
-            };
-            fetch('/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
-            }).catch(err => console.error(err));
-        }
+    const depthEnabledChk = document.getElementById('depthEnabled'), wlsEnabledChk = document.getElementById('wlsEnabled'), trackingEnabled = document.getElementById('trackingEnabled'), trackingMode = document.getElementById('trackingMode');
+    const trackingScaleX = document.getElementById('trackingScaleX'), trackingScaleY = document.getElementById('trackingScaleY'), trackingOffsetX = document.getElementById('trackingOffsetX'), trackingOffsetY = document.getElementById('trackingOffsetY');
+    const scaleXVal=document.getElementById('scaleXVal'), scaleYVal=document.getElementById('scaleYVal'), offsetXVal=document.getElementById('offsetXVal'), offsetYVal=document.getElementById('offsetYVal');
+    function updateTrackingDisplay(){ scaleXVal.innerText=trackingScaleX.value; scaleYVal.innerText=trackingScaleY.value; offsetXVal.innerText=trackingOffsetX.value; offsetYVal.innerText=trackingOffsetY.value; }
+    async function loadCameraParams(){ try{ const r=await fetch('/api/camera/params'); const p=await r.json(); depthEnabledChk.checked=p.depth_enabled; wlsEnabledChk.checked=p.wls_enabled; trackingEnabled.checked=p.face_tracking_enabled; trackingMode.value=p.tracking_mode; trackingScaleX.value=p.tracking_scale_x; trackingScaleY.value=p.tracking_scale_y; trackingOffsetX.value=p.tracking_offset_x; trackingOffsetY.value=p.tracking_offset_y; updateTrackingDisplay(); }catch(e){ console.error(e); } }
+    async function sendCameraParams(){ const params={ depth_enabled: depthEnabledChk.checked, face_tracking_enabled: trackingEnabled.checked, tracking_mode: trackingMode.value, wls_enabled: wlsEnabledChk.checked, tracking_scale_x: parseInt(trackingScaleX.value), tracking_scale_y: parseInt(trackingScaleY.value), tracking_offset_x: parseInt(trackingOffsetX.value), tracking_offset_y: parseInt(trackingOffsetY.value) }; try{ await fetch('/api/camera/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)}); }catch(e){ console.error(e); } }
+    loadCameraParams();
 
-        // Глубина при наведении
-        const video = document.getElementById('video-feed');
-        const tooltip = document.getElementById('depth-tooltip');
-        video.addEventListener('mousemove', (e) => {
-            if (!showDepth.checked) {
-                tooltip.classList.add('hidden');
-                return;
-            }
-            const rect = video.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const scaleX = video.naturalWidth / rect.width;
-            const scaleY = video.naturalHeight / rect.height;
-            const imgX = Math.round(x * scaleX);
-            const imgY = Math.round(y * scaleY);
-            fetch('/api/depth', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ x: imgX, y: imgY })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.depth !== null && data.depth !== undefined) {
-                    tooltip.classList.remove('hidden');
-                    tooltip.style.left = (e.clientX + 15) + 'px';
-                    tooltip.style.top = (e.clientY + 15) + 'px';
-                    tooltip.textContent = `${data.depth.toFixed(1)} см`;
-                } else {
-                    tooltip.classList.add('hidden');
-                }
-            })
-            .catch(err => {
-                console.error('Ошибка глубины:', err);
-                tooltip.classList.add('hidden');
-            });
-        });
-        video.addEventListener('mouseleave', () => tooltip.classList.add('hidden'));
-
-        // ---------- Терминал ----------
-        const terminalOutput = document.getElementById('terminal-output');
-        const terminalCommand = document.getElementById('terminal-command');
-        let lastOutput = '';
-        let fetchInProgress = false;
-        let sendInProgress = false;
-
-        function stripAnsi(str) {
-            if (!str) return '';
-            return str.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '').replace(/\x1b\\/g, '').replace(/\x07/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-        }
-        function setTerminalOutput(text) {
-            terminalOutput.innerHTML = stripAnsi(text);
-            terminalOutput.scrollTop = terminalOutput.scrollHeight;
-        }
-        async function fetchTerminalOutput() {
-            if (fetchInProgress) return;
-            fetchInProgress = true;
-            try {
-                const response = await fetch('/api/cmd/output');
-                const data = await response.json();
-                if (data.output !== lastOutput) {
-                    setTerminalOutput(data.output);
-                    lastOutput = data.output;
-                }
-            } catch (err) { console.debug(err); }
-            finally { fetchInProgress = false; }
-        }
-        async function sendTerminalCommand(cmd) {
-            if (sendInProgress) return;
-            sendInProgress = true;
-            try {
-                await fetch('/api/cmd/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: cmd }) });
-                await fetchTerminalOutput();
-            } catch (err) { console.debug(err); }
-            finally { sendInProgress = false; }
-        }
-        terminalCommand.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                const cmd = terminalCommand.value;
-                if (cmd.trim() !== '') {
-                    setTerminalOutput(lastOutput + '$ ' + cmd + '\n');
-                    lastOutput += '$ ' + cmd + '\n';
-                    sendTerminalCommand(cmd);
-                    terminalCommand.value = '';
-                }
-            }
-        });
-        fetchTerminalOutput();
-        setInterval(fetchTerminalOutput, 200);
-
-        // ---------- Параметры камеры и трекинга ----------
-        const depthEnabledChk = document.getElementById('depthEnabled');
-        const faceTrackingChk = document.getElementById('faceTrackingEnabled');
-        const wlsEnabledChk = document.getElementById('wlsEnabled');
-        const trackingScaleX = document.getElementById('trackingScaleX');
-        const trackingScaleY = document.getElementById('trackingScaleY');
-        const trackingOffsetX = document.getElementById('trackingOffsetX');
-        const trackingOffsetY = document.getElementById('trackingOffsetY');
-        const scaleXVal = document.getElementById('scaleXVal');
-        const scaleYVal = document.getElementById('scaleYVal');
-        const offsetXVal = document.getElementById('offsetXVal');
-        const offsetYVal = document.getElementById('offsetYVal');
-
-        function updateTrackingDisplay() {
-            scaleXVal.textContent = trackingScaleX.value;
-            scaleYVal.textContent = trackingScaleY.value;
-            offsetXVal.textContent = trackingOffsetX.value;
-            offsetYVal.textContent = trackingOffsetY.value;
-        }
-        async function loadCameraParams() {
-            try {
-                const resp = await fetch('/api/camera/params');
-                const params = await resp.json();
-                depthEnabledChk.checked = params.depth_enabled;
-                faceTrackingChk.checked = params.face_tracking_enabled;
-                wlsEnabledChk.checked = params.wls_enabled;
-                trackingScaleX.value = params.tracking_scale_x;
-                trackingScaleY.value = params.tracking_scale_y;
-                trackingOffsetX.value = params.tracking_offset_x;
-                trackingOffsetY.value = params.tracking_offset_y;
-                updateTrackingDisplay();
-            } catch (e) { console.error('Ошибка загрузки параметров', e); }
-        }
-        async function sendCameraParams() {
-            const params = {
-                depth_enabled: depthEnabledChk.checked,
-                face_tracking_enabled: faceTrackingChk.checked,
-                wls_enabled: wlsEnabledChk.checked,
-                tracking_scale_x: parseInt(trackingScaleX.value),
-                tracking_scale_y: parseInt(trackingScaleY.value),
-                tracking_offset_x: parseInt(trackingOffsetX.value),
-                tracking_offset_y: parseInt(trackingOffsetY.value)
-            };
-            try {
-                await fetch('/api/camera/params', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
-            } catch (e) { console.error('Ошибка отправки параметров', e); }
-        }
-        loadCameraParams();
-
-        // ---------- Управление сервоприводами и автотрекинг ----------
-        function updateServoValue(channel, value) {
-            document.getElementById(`servo${channel}_val`).innerText = value + '°';
-        }
-        function setServo(channel, angle) {
-            fetch(`/api/servo/${channel}/${angle}`, { method: 'POST' })
-                .then(res => res.json())
-                .then(data => { if (data.error) console.error('Ошибка серво:', data.error); })
-                .catch(err => console.error(err));
-        }
-        const servoTrackingChk = document.getElementById('servoTrackingEnabled');
-        async function setServoTracking() {
-            const enabled = servoTrackingChk.checked;
-            try {
-                await fetch('/api/servo/tracking', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) });
-            } catch (e) { console.error('Ошибка установки трекинга серво', e); }
-        }
-        async function loadServoTracking() {
-            try {
-                const resp = await fetch('/api/servo/tracking');
-                const data = await resp.json();
-                servoTrackingChk.checked = data.enabled;
-            } catch (e) { console.error('Ошибка загрузки статуса трекинга', e); }
-        }
-        loadServoTracking();
-
-        window.addEventListener('load', () => {
-            // Инициализация ползунков серво
-            for (let ch = 0; ch <= 5; ch++) {
-                const slider = document.getElementById(`servo${ch}`);
-                if (slider) updateServoValue(ch, slider.value);
-            }
-        });
-    </script>
+    function updateServoValue(ch,val){ document.getElementById(`servo${ch}_val`).innerText = val+'°'; }
+    function setServo(ch,angle){ fetch(`/api/servo/${ch}/${angle}`,{method:'POST'}).catch(console.error); }
+    const servoTrackingChk = document.getElementById('servoTrackingEnabled');
+    async function setServoTracking(){ const enabled = servoTrackingChk.checked; try{ await fetch('/api/servo/tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); }catch(e){ console.error(e); } }
+    async function loadServoTracking(){ try{ const r=await fetch('/api/servo/tracking'); const d=await r.json(); servoTrackingChk.checked=d.enabled; }catch(e){} }
+    loadServoTracking();
+    window.addEventListener('load',()=>{ for(let ch=0;ch<=5;ch++){ const s=document.getElementById(`servo${ch}`); if(s) updateServoValue(ch,s.value); } });
+</script>
 </body>
 </html>
