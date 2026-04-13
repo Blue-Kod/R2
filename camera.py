@@ -17,7 +17,10 @@ class StereoCamera:
             cfg = json.load(f)
 
         self.img_size = tuple(cfg['imSize'])  # (1280, 720)
-        self.low_size = (self.img_size[0] // 2, self.img_size[1] // 2)  # (640, 360)
+        # Уменьшенное разрешение для вычисления глубины (для повышения FPS)
+        self.depth_scale = 0.25               # коэффициент масштабирования (640x360 -> 320x180)
+        self.low_size = (int(self.img_size[0] * self.depth_scale),
+                         int(self.img_size[1] * self.depth_scale))
 
         # Матрицы калибровки
         self.Kl, self.Dl = np.array(cfg['Kl']), np.array(cfg['Dl'])
@@ -39,23 +42,24 @@ class StereoCamera:
 
         # Матрица Q для преобразования диспаритета в 3D (уменьшенное разрешение)
         self.Q_low = self.Q.copy()
-        self.Q_low[:2, :3] *= 0.5
+        self.Q_low[:2, :3] *= self.depth_scale
 
-        # Параметры стерео матчинга
-        self.num_disp = 7          # будет умножено на 16
-        self.block_size = 11
-        self.alpha_depth = 0.3      # прозрачность наложения глубины (0 - только видео, 1 - только глубина)
-        self.show_left = True       # True - левый глаз, False - правый
+        # Параметры стерео матчинга (уменьшены для скорости)
+        self.num_disp = 5          # будет умножено на 16 → 80 диспаритетов
+        self.block_size = 9
+        self.alpha_depth = 0.3
+        self.show_left = True
+        self.wls_enabled = False   # WLS фильтр отключён по умолчанию (для FPS)
 
-        # ----- Параметры трекинга -----
-        self.depth_enabled = True            # вкл/выкл вычисление глубины
-        self.face_tracking_enabled = False   # вкл/выкл отслеживание лиц
-        self.tracking_scale_x = 50.0         # макс. смещение по X (пиксели) при лице у края
-        self.tracking_scale_y = 30.0         # макс. смещение по Y
-        self.tracking_offset_x = 0.0          # смещение по X (пиксели)
-        self.tracking_offset_y = 0.0          # смещение по Y
-        self.face_dx = 0.0                    # текущее вычисленное смещение для глаз (X)
-        self.face_dy = 0.0                    # текущее вычисленное смещение для глаз (Y)
+        # Параметры трекинга
+        self.depth_enabled = True
+        self.face_tracking_enabled = False
+        self.tracking_scale_x = 50.0
+        self.tracking_scale_y = 30.0
+        self.tracking_offset_x = 0.0
+        self.tracking_offset_y = 0.0
+        self.face_dx = 0.0
+        self.face_dy = 0.0
 
         # Загрузка каскада Хаара для лиц
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -75,14 +79,15 @@ class StereoCamera:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_FPS, 30)   # запрос 30 FPS
 
         # Проверка реального разрешения
         w = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         h = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         print(f"Реальное разрешение камеры: {w} x {h}")
 
-        self.frame = None          # последний обработанный кадр (для показа)
-        self.points_3d = None      # трёхмерные точки (в low разрешении)
+        self.frame = None
+        self.points_3d = None
         self.fps = 0
         self.running = True
         self.lock = threading.Lock()
@@ -97,14 +102,18 @@ class StereoCamera:
             P1=8 * 3 * self.block_size ** 2, P2=32 * 3 * self.block_size ** 2,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
-        try:
-            self.matcher_r = cv2.ximgproc.createRightMatcher(self.matcher_l)
-            self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(self.matcher_l)
-            self.wls_filter.setLambda(8000)
-            self.wls_filter.setSigmaColor(1.2)
-            self.wls_available = True
-        except AttributeError:
-            print("WLS filter not available. Disabling WLS.")
+        if self.wls_enabled:
+            try:
+                self.matcher_r = cv2.ximgproc.createRightMatcher(self.matcher_l)
+                self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(self.matcher_l)
+                self.wls_filter.setLambda(8000)
+                self.wls_filter.setSigmaColor(1.2)
+                self.wls_available = True
+            except AttributeError:
+                print("WLS filter not available. Disabling WLS.")
+                self.wls_available = False
+                self.matcher_r = None
+        else:
             self.wls_available = False
             self.matcher_r = None
 
@@ -119,7 +128,6 @@ class StereoCamera:
             # Поворот на 180°, если камера установлена вверх ногами
             frame = cv2.rotate(frame, cv2.ROTATE_180)
 
-            # Сохраняем сырой кадр для обработки
             with self.lock:
                 self.raw_frame = frame
 
@@ -134,7 +142,7 @@ class StereoCamera:
 
             with self.lock:
                 frame = self.raw_frame.copy()
-                self.raw_frame = None  # освобождаем для захвата
+                self.raw_frame = None
 
             # Разделение на левый и правый кадры
             if frame.shape[1] == 2560 and frame.shape[0] == 720:
@@ -154,22 +162,18 @@ class StereoCamera:
             # Выбор основного глаза
             main_view = rectL if self.show_left else rectR
 
-            # ---- Face Tracking (если включено) ----
+            # Face Tracking
             if self.face_tracking_enabled and self.face_cascade is not None:
                 gray = cv2.cvtColor(main_view, cv2.COLOR_BGR2GRAY)
                 faces = self.face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100,100))
                 if len(faces) > 0:
-                    # Берём самое большое лицо (по площади)
                     (x, y, w, h) = max(faces, key=lambda f: f[2]*f[3])
                     face_center_x = x + w/2
                     face_center_y = y + h/2
-                    # Нормализованные координаты от -1 до 1 (0 = центр кадра)
                     norm_x = (face_center_x / self.img_size[0]) * 2 - 1
                     norm_y = (face_center_y / self.img_size[1]) * 2 - 1
-                    # Вычисляем смещение для глаз (знак по X инвертирован для правильного направления)
                     dx = -norm_x * self.tracking_scale_x + self.tracking_offset_x
                     dy = norm_y * self.tracking_scale_y + self.tracking_offset_y
-                    # Ограничиваем, чтобы глаза не «убегали» слишком далеко
                     dx = max(-self.tracking_scale_x * 2, min(self.tracking_scale_x * 2, dx))
                     dy = max(-self.tracking_scale_y * 2, min(self.tracking_scale_y * 2, dy))
                     with self.lock:
@@ -179,11 +183,9 @@ class StereoCamera:
                     with self.lock:
                         self.face_dx = 0.0
                         self.face_dy = 0.0
-            # ---------------------------------------
 
-            # ---- Depth computation (if enabled) ----
+            # Depth computation (if enabled)
             if self.depth_enabled:
-                # Стерео матчинг на половинном разрешении
                 lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
                 lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
 
@@ -199,65 +201,55 @@ class StereoCamera:
                 else:
                     d_float = dispL
 
-                # Преобразование в 3D
                 points = cv2.reprojectImageTo3D(d_float, self.Q_low)
 
-                # Визуализация глубины (цветная карта)
                 disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
 
-                # Смешивание основного вида с картой глубины
                 output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
 
                 with self.lock:
                     self.points_3d = points
             else:
-                # Глубина отключена – просто показываем видео
                 output = main_view
                 with self.lock:
                     self.points_3d = None
-            # ----------------------------------------
 
-            # Обновление общих данных
             with self.lock:
                 self.frame = output
                 self.fps = 1.0 / (time.time() - last_time)
                 last_time = time.time()
 
     def get_frame(self):
-        """Возвращает последний обработанный кадр."""
         with self.lock:
             if self.frame is None:
                 return None
             return self.frame.copy()
 
     def get_depth_at(self, x, y):
-        """Возвращает расстояние в см для пикселя (x, y) на изображении (полное разрешение)."""
         with self.lock:
             if self.points_3d is None:
                 return None
-            # Координаты в low resolution
             scale_x = self.low_size[0] / self.img_size[0]
             scale_y = self.low_size[1] / self.img_size[1]
             lx = int(x * scale_x)
             ly = int(y * scale_y)
             if lx < 0 or lx >= self.low_size[0] or ly < 0 or ly >= self.low_size[1]:
                 return None
-            z = self.points_3d[ly, lx, 2]  # Z в миллиметрах
+            z = self.points_3d[ly, lx, 2]
             if 0 < z < 15000:
-                return z / 10.0  # в см
+                return z / 10.0
             return None
 
     def get_eye_offsets(self):
-        """Возвращает текущие смещения для глаз (dx, dy) в пикселях."""
         with self.lock:
             return self.face_dx, self.face_dy
 
     def update_params(self, alpha_depth=None, show_left=None, num_disp=None,
                       depth_enabled=None, face_tracking_enabled=None,
                       tracking_scale_x=None, tracking_scale_y=None,
-                      tracking_offset_x=None, tracking_offset_y=None):
-        """Обновление параметров."""
+                      tracking_offset_x=None, tracking_offset_y=None,
+                      wls_enabled=None):
         with self.lock:
             if alpha_depth is not None:
                 self.alpha_depth = max(0.0, min(1.0, alpha_depth))
@@ -278,6 +270,9 @@ class StereoCamera:
                 self.tracking_offset_x = tracking_offset_x
             if tracking_offset_y is not None:
                 self.tracking_offset_y = tracking_offset_y
+            if wls_enabled is not None:
+                self.wls_enabled = wls_enabled
+                self._init_matchers()
 
     def stop(self):
         self.running = False
