@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 from camera import StereoCamera
-from servo import ServoController   # импортируем класс
+from servo import ServoController
 
 HTTP_PORT = 80
 
@@ -26,6 +26,8 @@ HTTP_PORT = 80
 shell_manager = None
 camera = None
 servo_controller = None
+servo_tracking_enabled = False
+servo_tracking_thread = None
 
 # ---------- Вспомогательные функции ----------
 def log_message(*args):
@@ -86,10 +88,41 @@ def get_ip_address():
         s.close()
     return ip
 
+# ---------- Поток управления сервоприводами по трекингу лица ----------
+def servo_tracking_loop():
+    """Поток, который читает смещения лица и управляет сервоприводами шеи и головы."""
+    global servo_tracking_enabled, camera, servo_controller
+
+    # Углы по умолчанию
+    default_neck = 90      # канал 0
+    default_head_tilt = 90 # канал 3
+    # Пределы отклонений
+    max_neck_delta = 30     # ±30°
+    max_tilt_delta = 15     # ±15°
+
+    while True:
+        if servo_tracking_enabled and camera is not None and servo_controller is not None:
+            dx, dy = camera.get_eye_offsets()
+            # Преобразуем смещения в углы
+            # tracking_scale_x/y задают максимальное смещение (пикс), при котором достигается max_delta
+            scale_x = camera.tracking_scale_x if camera.tracking_scale_x != 0 else 1.0
+            scale_y = camera.tracking_scale_y if camera.tracking_scale_y != 0 else 1.0
+
+            neck_angle = default_neck + (dx / scale_x) * max_neck_delta
+            neck_angle = max(default_neck - max_neck_delta, min(default_neck + max_neck_delta, neck_angle))
+
+            tilt_angle = default_head_tilt + (dy / scale_y) * max_tilt_delta
+            tilt_angle = max(default_head_tilt - max_tilt_delta, min(default_head_tilt + max_tilt_delta, tilt_angle))
+
+            # Применяем углы (если они изменились в пределах допустимых)
+            servo_controller.set_servo(0, int(round(neck_angle)))
+            servo_controller.set_servo(3, int(round(tilt_angle)))
+
+        time.sleep(0.1)  # Обновление 10 раз в секунду
+
 # ---------- Flask приложение ----------
 app = Flask(__name__)
 
-# Маршруты страниц
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -106,18 +139,20 @@ def terminal():
 def logs():
     return render_template('logs.html')
 
-# API для данных и управления
 @app.route('/api/data')
 def api_data():
     cpu = psutil.cpu_percent()
     ram = psutil.virtual_memory().percent
     temp = get_cpu_temp()
     logs = get_recent_logs(500)
+    # Добавляем FPS камеры, если доступна
+    fps = camera.fps if camera else 0.0
     return jsonify({
         'cpu': cpu,
         'ram': ram,
         'temp': temp,
-        'logs': logs
+        'logs': logs,
+        'fps': round(fps, 1)
     })
 
 @app.route('/api/ip')
@@ -151,7 +186,7 @@ def api_shutdown():
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
-# ---------- Терминал (shell) ----------
+# ---------- Терминал ----------
 class ShellManager:
     def __init__(self):
         self.proc = None
@@ -243,7 +278,7 @@ def cmd_output():
     output = shell_manager.get_output()
     return jsonify({'output': output})
 
-# ---------- Видеопоток и управление камерой ----------
+# ---------- Видеопоток ----------
 @app.route('/video_feed')
 def video_feed():
     def generate():
@@ -296,10 +331,9 @@ def depth_at():
     depth = camera.get_depth_at(int(x), int(y))
     return jsonify({'depth': depth})
 
-# ---------- API для управления камерой и трекингом ----------
+# ---------- API для параметров камеры и трекинга ----------
 @app.route('/api/camera/params', methods=['GET', 'POST'])
 def camera_params():
-    """Получить или установить параметры камеры (depth_enabled, tracking и т.д.)"""
     if camera is None:
         return jsonify({'error': 'Camera not initialized'}), 500
 
@@ -315,9 +349,10 @@ def camera_params():
                 'alpha_depth': camera.alpha_depth,
                 'show_left': camera.show_left,
                 'num_disp': camera.num_disp,
+                'wls_enabled': camera.wls_enabled,
             }
         return jsonify(params)
-    else:  # POST
+    else:
         data = request.json
         camera.update_params(
             depth_enabled=data.get('depth_enabled'),
@@ -328,27 +363,25 @@ def camera_params():
             tracking_offset_y=data.get('tracking_offset_y'),
             alpha_depth=data.get('alpha_depth'),
             show_left=data.get('show_left'),
-            num_disp=data.get('num_disp')
+            num_disp=data.get('num_disp'),
+            wls_enabled=data.get('wls_enabled')
         )
         return jsonify({'status': 'ok'})
 
 @app.route('/api/tracking/offsets')
 def tracking_offsets():
-    """Возвращает текущие смещения для глаз (dx, dy) в пикселях."""
     if camera is None:
         return jsonify({'dx': 0, 'dy': 0})
     dx, dy = camera.get_eye_offsets()
     return jsonify({'dx': dx, 'dy': dy})
 
-# ---------- API для сервоприводов ----------
+# ---------- API для сервоприводов и трекинга моторами ----------
 @app.route('/api/servo/<int:channel>/<int:angle>', methods=['POST'])
 def set_servo(channel, angle):
-    """Установка угла сервопривода. Диапазон определяется конфигурацией канала."""
     if servo_controller is None:
         return jsonify({'error': 'Servo controller not initialized'}), 500
     if channel not in servo_controller.channel_configs:
         return jsonify({'error': f'Channel {channel} not configured'}), 400
-    # Проверка, что угол в пределах настроек канала
     min_angle, max_angle, _, _ = servo_controller.channel_configs[channel]
     if angle < min_angle or angle > max_angle:
         return jsonify({'error': f'Angle must be {min_angle}-{max_angle} for channel {channel}'}), 400
@@ -358,7 +391,19 @@ def set_servo(channel, angle):
     else:
         return jsonify({'error': 'Failed to set servo'}), 500
 
-# ---------- Запуск сервера ----------
+@app.route('/api/servo/tracking', methods=['GET', 'POST'])
+def servo_tracking():
+    global servo_tracking_enabled
+    if request.method == 'GET':
+        return jsonify({'enabled': servo_tracking_enabled})
+    else:
+        data = request.json
+        enabled = data.get('enabled', False)
+        servo_tracking_enabled = bool(enabled)
+        log_message(f"Сервотрекинг {'включён' if servo_tracking_enabled else 'выключен'}")
+        return jsonify({'status': 'ok', 'enabled': servo_tracking_enabled})
+
+# ---------- Запуск сервера и браузера ----------
 def get_display_user():
     if os.geteuid() != 0:
         return None
@@ -438,7 +483,7 @@ def start_browser_when_ready():
         log_message("Сервер не запустился вовремя, браузер не открыт.")
 
 def main():
-    global shell_manager, camera, servo_controller
+    global shell_manager, camera, servo_controller, servo_tracking_thread
     log_message("Запуск веб-сервера R2")
 
     # Инициализация shell
@@ -458,20 +503,15 @@ def main():
             camera = None
     else:
         log_message(f"Файл калибровки {config_path} не найден")
-        try:
-            files = os.listdir(script_dir)
-            log_message(f"Файлы в {script_dir}: {files}")
-        except:
-            pass
         camera = None
 
-    # Инициализация сервоприводов
+    # Инициализация сервоприводов (6 каналов)
     try:
         servo_controller = ServoController(bus=0, address=0x40, freq=50)
         log_message("Сервоконтроллер инициализирован")
 
         # Установка сервоприводов в углы по умолчанию
-        default_angles = {0: 90, 1: 135, 2: 135, 3: 90}
+        default_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 135, 5: 135}
         for ch, angle in default_angles.items():
             if ch in servo_controller.channel_configs:
                 servo_controller.set_servo(ch, angle)
@@ -479,6 +519,10 @@ def main():
     except Exception as e:
         log_message(f"Ошибка инициализации сервоконтроллера: {e}")
         servo_controller = None
+
+    # Запуск потока сервотрекинга
+    servo_tracking_thread = threading.Thread(target=servo_tracking_loop, daemon=True)
+    servo_tracking_thread.start()
 
     # Запуск браузера (опционально)
     threading.Thread(target=start_browser_when_ready, daemon=True).start()
