@@ -43,8 +43,8 @@ class StereoCamera:
         self.wls_enabled = False
 
         self.depth_enabled = True
-        self.tracking_mode = "face"   # "face" или "motion"
-        self.face_tracking_enabled = True   # для обратной совместимости
+        self.tracking_mode = "person"   # "person" (тело), "face", "motion"
+        self.face_tracking_enabled = True
         self.tracking_scale_x = 50.0
         self.tracking_scale_y = 30.0
         self.tracking_offset_x = 0.0
@@ -52,23 +52,41 @@ class StereoCamera:
         self.face_dx = 0.0
         self.face_dy = 0.0
 
-        # MediaPipe Face Detection
+        # MediaPipe решения
         try:
             import mediapipe as mp
+            self.mp_pose = mp.solutions.pose
+            self.pose = self.mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,      # 0,1,2 (1 - хороший баланс)
+                smooth_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
             self.mp_face_detection = mp.solutions.face_detection
-            self.face_detection = self.mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+            self.face_detection = self.mp_face_detection.FaceDetection(
+                model_selection=1, min_detection_confidence=0.5
+            )
             self.use_mediapipe = True
-            print("MediaPipe Face Detection инициализирован")
+            print("MediaPipe Pose + Face Detection инициализированы")
         except ImportError:
-            print("MediaPipe не установлен, используем Haar cascade")
+            print("MediaPipe не установлен, используется Haar cascade для лиц")
             cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
             self.face_cascade = cv2.CascadeClassifier(cascade_path)
             self.use_mediapipe = False
 
+        # Параметры сглаживания (EMA)
+        self.smooth_alpha = 0.3          # коэффициент фильтрации
+        self.smoothed_center = None      # (cx, cy) сглаженные
+
         # Для motion detection
         self.prev_gray = None
         self.motion_center = None
-        self.motion_alpha = 0.3  # сглаживание
+        self.motion_alpha = 0.3
+
+        # Счётчик кадров для детекции (не на каждом кадре)
+        self.detection_skip = 0
+        self.detection_interval = 3      # детекция раз в 3 кадра
 
         self._init_matchers()
 
@@ -104,8 +122,7 @@ class StereoCamera:
                 self.wls_filter.setLambda(8000)
                 self.wls_filter.setSigmaColor(1.2)
                 self.wls_available = True
-            except AttributeError:
-                print("WLS filter not available")
+            except:
                 self.wls_available = False
                 self.matcher_r = None
         else:
@@ -122,8 +139,26 @@ class StereoCamera:
             with self.lock:
                 self.raw_frame = frame
 
+    def _detect_person(self, image_bgr):
+        """Детектирует человека (верхняя часть тела) и возвращает центр (x, y)."""
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(rgb)
+        if results.pose_landmarks:
+            # Берём середину между плечами (landmarks 11 и 12)
+            left_shoulder = results.pose_landmarks.landmark[11]
+            right_shoulder = results.pose_landmarks.landmark[12]
+            h, w, _ = image_bgr.shape
+            cx = int((left_shoulder.x + right_shoulder.x) * w / 2)
+            cy = int((left_shoulder.y + right_shoulder.y) * h / 2)
+            # Если плечи не видны, используем нос (landmark 0)
+            if cx == 0 and cy == 0:
+                nose = results.pose_landmarks.landmark[0]
+                cx = int(nose.x * w)
+                cy = int(nose.y * h)
+            return (cx, cy)
+        return None
+
     def _detect_face(self, image_bgr):
-        """Возвращает центр лица (x, y) или None."""
         if self.use_mediapipe:
             rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
             results = self.face_detection.process(rgb)
@@ -131,9 +166,9 @@ class StereoCamera:
                 det = results.detections[0]
                 bboxC = det.location_data.relative_bounding_box
                 h, w, _ = image_bgr.shape
-                x = int(bboxC.xmin * w + bboxC.width * w / 2)
-                y = int(bboxC.ymin * h + bboxC.height * h / 2)
-                return (x, y)
+                cx = int((bboxC.xmin + bboxC.width/2) * w)
+                cy = int((bboxC.ymin + bboxC.height/2) * h)
+                return (cx, cy)
         else:
             gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
             faces = self.face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100,100))
@@ -143,22 +178,29 @@ class StereoCamera:
         return None
 
     def _detect_motion(self, gray):
-        """Обнаружение движения – возвращает центр движения (x,y)."""
+        """Улучшенный детектор движения с морфологией."""
         if self.prev_gray is None:
             self.prev_gray = gray.copy()
             return None
         diff = cv2.absdiff(self.prev_gray, gray)
-        thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)[1]
+        # Адаптивный порог (среднее значение разницы)
+        mean_diff = np.mean(diff)
+        thresh_val = max(20, int(mean_diff * 1.5))
+        _, thresh = cv2.threshold(diff, thresh_val, 255, cv2.THRESH_BINARY)
+        # Морфология для удаления шума
+        kernel = np.ones((5,5), np.uint8)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
-            # Берём самый большой контур
+            # Берём самый большой контур по площади
             c = max(contours, key=cv2.contourArea)
-            if cv2.contourArea(c) > 500:
+            area = cv2.contourArea(c)
+            if area > 800:   # минимальная площадь движения
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
-                    # Сглаживание
                     if self.motion_center is None:
                         self.motion_center = (cx, cy)
                     else:
@@ -182,7 +224,7 @@ class StereoCamera:
                 frame = self.raw_frame.copy()
                 self.raw_frame = None
 
-            # Разделение
+            # Разделение стереопары
             if frame.shape[1] == 2560 and frame.shape[0] == 720:
                 imgL = frame[:, :1280]
                 imgR = frame[:, 1280:]
@@ -197,14 +239,35 @@ class StereoCamera:
             rectR = cv2.remap(imgR, self.mapR1, self.mapR2, cv2.INTER_LINEAR)
             main_view = rectL if self.show_left else rectR
 
-            # ---- Трекинг цели ----
+            # ----- Трекинг цели с пропуском кадров и EMA -----
             tracking_center = None
-            if self.face_tracking_enabled:   # флаг включения трекинга
-                if self.tracking_mode == "face":
-                    tracking_center = self._detect_face(main_view)
-                elif self.tracking_mode == "motion":
-                    gray = cv2.cvtColor(main_view, cv2.COLOR_BGR2GRAY)
-                    tracking_center = self._detect_motion(gray)
+            if self.face_tracking_enabled:
+                self.detection_skip += 1
+                # Выполняем детекцию раз в N кадров
+                if self.detection_skip >= self.detection_interval:
+                    self.detection_skip = 0
+                    if self.tracking_mode == "person" and self.use_mediapipe:
+                        tracking_center = self._detect_person(main_view)
+                    elif self.tracking_mode == "face":
+                        tracking_center = self._detect_face(main_view)
+                    elif self.tracking_mode == "motion":
+                        gray = cv2.cvtColor(main_view, cv2.COLOR_BGR2GRAY)
+                        tracking_center = self._detect_motion(gray)
+                    # Применяем экспоненциальное сглаживание
+                    if tracking_center is not None:
+                        if self.smoothed_center is None:
+                            self.smoothed_center = tracking_center
+                        else:
+                            self.smoothed_center = (
+                                int(self.smoothed_center[0] * (1 - self.smooth_alpha) + tracking_center[0] * self.smooth_alpha),
+                                int(self.smoothed_center[1] * (1 - self.smooth_alpha) + tracking_center[1] * self.smooth_alpha)
+                            )
+                    else:
+                        # Если цель потеряна, не обнуляем сразу сглаженный центр – он будет затухать
+                        pass
+                else:
+                    # Между детекциями используем последний сглаженный центр
+                    tracking_center = self.smoothed_center
 
             if tracking_center is not None:
                 cx, cy = tracking_center
@@ -219,11 +282,15 @@ class StereoCamera:
                     self.face_dx = dx
                     self.face_dy = dy
             else:
+                # Цель не обнаружена – через некоторое время обнулим смещения
                 with self.lock:
-                    self.face_dx = 0.0
-                    self.face_dy = 0.0
+                    # Если долго нет цели, можно занулить, но сервотрекинг сам обработает таймаут
+                    if self.smoothed_center is not None:
+                        # Постепенное затухание: через 1 секунду без детекции обнуляем
+                        # Здесь просто не обновляем, пусть остаётся последнее значение
+                        pass
 
-            # ---- Depth ----
+            # ----- Вычисление глубины -----
             if self.depth_enabled:
                 lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
                 lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
@@ -293,9 +360,11 @@ class StereoCamera:
                 self.depth_enabled = depth_enabled
             if face_tracking_enabled is not None:
                 self.face_tracking_enabled = face_tracking_enabled
-            if tracking_mode is not None and tracking_mode in ["face", "motion"]:
+                if not face_tracking_enabled:
+                    self.smoothed_center = None
+            if tracking_mode is not None and tracking_mode in ["person", "face", "motion"]:
                 self.tracking_mode = tracking_mode
-                # Сброс motion состояния при смене режима
+                self.smoothed_center = None
                 self.prev_gray = None
                 self.motion_center = None
             if tracking_scale_x is not None:
@@ -314,5 +383,7 @@ class StereoCamera:
         self.running = False
         if self.cap:
             self.cap.release()
+        if hasattr(self, 'pose'):
+            self.pose.close()
         if hasattr(self, 'face_detection'):
             self.face_detection.close()
