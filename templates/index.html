@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>R2 - Главная</title>
     <style>
-        /* Стили без изменений (оставлены как в предыдущей версии) */
         * {
             margin: 0;
             padding: 0;
@@ -25,15 +24,29 @@
             padding: 10px;
             text-align: center;
             border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        header a {
+        header .nav-links a {
             color: #fff;
             text-decoration: none;
             font-size: 20px;
             margin: 0 15px;
         }
-        header a:hover {
+        header .nav-links a:hover {
             text-decoration: underline;
+        }
+        .stats {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+            background: #0a0a0a;
+            padding: 5px 15px;
+            border-radius: 8px;
+        }
+        .stats span {
+            color: #ffaa00;
         }
         .container {
             flex: 1;
@@ -207,10 +220,18 @@
 </head>
 <body>
     <header>
-        <a href="/">R2</a>
-        <a href="/screen">Экран</a>
-        <a href="/terminal">CMD</a>
-        <a href="/logs">Логи</a>
+        <div class="nav-links">
+            <a href="/">R2</a>
+            <a href="/screen">Экран</a>
+            <a href="/terminal">CMD</a>
+            <a href="/logs">Логи</a>
+        </div>
+        <div class="stats">
+            <div>CPU: <span id="cpuStat">0</span>%</div>
+            <div>RAM: <span id="ramStat">0</span>%</div>
+            <div>Темп: <span id="tempStat">--</span></div>
+            <div>FPS: <span id="fpsStat">0</span></div>
+        </div>
     </header>
     <div class="container">
         <!-- Левая панель: логи -->
@@ -219,14 +240,13 @@
             <div id="logs"></div>
         </div>
 
-        <!-- Центральная панель: видео и управление камерой + трекинг -->
+        <!-- Центральная панель: видео и управление -->
         <div class="panel panel-center">
             <div id="video-container">
                 <img id="video-feed" src="/video_feed" alt="Video Stream">
                 <div id="depth-tooltip" class="depth-tooltip hidden"></div>
             </div>
             <div id="controls">
-                <!-- Существующие контролы -->
                 <div class="control-row">
                     <label>Основной глаз:</label>
                     <div>
@@ -243,7 +263,6 @@
                     <input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()">
                 </div>
 
-                <!-- НОВЫЙ БЛОК: Параметры камеры и трекинга -->
                 <div class="control-group">
                     <div class="panel-title" style="font-size:12px; margin:10px 0 5px;">⚙️ Настройки камеры</div>
                     <div class="control-row">
@@ -254,19 +273,23 @@
                         <label>Отслеживание лиц:</label>
                         <input type="checkbox" id="faceTrackingEnabled" onchange="sendCameraParams()">
                     </div>
+                    <div class="control-row">
+                        <label>WLS фильтр (медленно):</label>
+                        <input type="checkbox" id="wlsEnabled" onchange="sendCameraParams()">
+                    </div>
                 </div>
 
                 <div class="control-group">
                     <div class="panel-title" style="font-size:12px; margin:10px 0 5px;">🎯 Параметры трекинга</div>
                     <div class="control-row">
                         <label>Scale X (пикс):</label>
-                        <input type="range" id="trackingScaleX" min="0" max="200" value="100" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="scaleXVal">100</span>
+                        <input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
+                        <span id="scaleXVal">50</span>
                     </div>
                     <div class="control-row">
                         <label>Scale Y (пикс):</label>
-                        <input type="range" id="trackingScaleY" min="0" max="200" value="200" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
-                        <span id="scaleYVal">200</span>
+                        <input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
+                        <span id="scaleYVal">30</span>
                     </div>
                     <div class="control-row">
                         <label>Offset X (пикс):</label>
@@ -278,14 +301,15 @@
                         <input type="range" id="trackingOffsetY" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()">
                         <span id="offsetYVal">0</span>
                     </div>
-                    <div class="control-row" style="justify-content: center; color:#aaa; font-size:11px;">
-                        📷 Камера наклонена вниз на 30°
+                    <div class="control-row">
+                        <label>Авто-серво по лицу:</label>
+                        <input type="checkbox" id="servoTrackingEnabled" onchange="setServoTracking()">
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Правая панель: терминал и сервоприводы (кнопки убраны) -->
+        <!-- Правая панель: терминал и сервоприводы -->
         <div class="panel panel-right">
             <div class="panel-title">Терминал</div>
             <div id="terminal-output"></div>
@@ -296,45 +320,55 @@
 
             <div class="panel-title" style="margin-top: 20px;">Сервоприводы</div>
             <div class="servo-controls">
-                <!-- Канал 0: 0-180° -->
                 <div class="servo-row">
-                    <label>Серво 1 (канал 0):</label>
+                    <label>Шея (канал 0):</label>
                     <input type="range" id="servo0" min="0" max="180" value="90" oninput="updateServoValue(0, this.value)" onchange="setServo(0, this.value)">
                     <span id="servo0_val">90°</span>
                 </div>
-                <!-- Канал 1: 0-270° -->
                 <div class="servo-row">
-                    <label>Серво 2 (канал 1):</label>
+                    <label>Правое плечо (1):</label>
                     <input type="range" id="servo1" min="0" max="270" value="135" oninput="updateServoValue(1, this.value)" onchange="setServo(1, this.value)">
                     <span id="servo1_val">135°</span>
                 </div>
-                <!-- Канал 2: 0-270° -->
                 <div class="servo-row">
-                    <label>Серво 3 (канал 2):</label>
+                    <label>Левое плечо (2):</label>
                     <input type="range" id="servo2" min="0" max="270" value="135" oninput="updateServoValue(2, this.value)" onchange="setServo(2, this.value)">
                     <span id="servo2_val">135°</span>
                 </div>
-                <!-- Канал 3: 0-180° -->
                 <div class="servo-row">
-                    <label>Серво 4 (канал 3):</label>
+                    <label>Наклон головы (3):</label>
                     <input type="range" id="servo3" min="0" max="180" value="90" oninput="updateServoValue(3, this.value)" onchange="setServo(3, this.value)">
                     <span id="servo3_val">90°</span>
+                </div>
+                <div class="servo-row">
+                    <label>Поворот прав. плеча (4):</label>
+                    <input type="range" id="servo4" min="0" max="270" value="135" oninput="updateServoValue(4, this.value)" onchange="setServo(4, this.value)">
+                    <span id="servo4_val">135°</span>
+                </div>
+                <div class="servo-row">
+                    <label>Поворот лев. плеча (5):</label>
+                    <input type="range" id="servo5" min="0" max="270" value="135" oninput="updateServoValue(5, this.value)" onchange="setServo(5, this.value)">
+                    <span id="servo5_val">135°</span>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        // ---------- Логи ----------
+        // ---------- Логи и системные показатели ----------
         const logsDiv = document.getElementById('logs');
-        async function fetchLogs() {
+        async function fetchSystemStats() {
             try {
                 const response = await fetch('/api/data');
                 const data = await response.json();
+                document.getElementById('cpuStat').innerText = data.cpu;
+                document.getElementById('ramStat').innerText = data.ram;
+                document.getElementById('tempStat').innerText = data.temp;
+                document.getElementById('fpsStat').innerText = data.fps;
                 logsDiv.innerHTML = data.logs.map(line => `<div>${escapeHtml(line)}</div>`).join('');
                 logsDiv.scrollTop = logsDiv.scrollHeight;
             } catch (e) {
-                console.error('Ошибка получения логов:', e);
+                console.error('Ошибка получения данных:', e);
             }
         }
         function escapeHtml(unsafe) {
@@ -346,10 +380,10 @@
                 return m;
             });
         }
-        fetchLogs();
-        setInterval(fetchLogs, 2000);
+        fetchSystemStats();
+        setInterval(fetchSystemStats, 2000);
 
-        // ---------- Управление камерой (существующие) ----------
+        // ---------- Управление камерой ----------
         const eyeLeft = document.getElementById('eyeLeft');
         const eyeRight = document.getElementById('eyeRight');
         const showDepth = document.getElementById('showDepth');
@@ -359,7 +393,7 @@
             const params = {
                 alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0,
                 show_left: eyeLeft.checked,
-                num_disp: 7
+                num_disp: 5   // уменьшено для FPS
             };
             fetch('/update', {
                 method: 'POST',
@@ -368,10 +402,9 @@
             }).catch(err => console.error(err));
         }
 
-        // ---------- Глубина при наведении ----------
+        // Глубина при наведении
         const video = document.getElementById('video-feed');
         const tooltip = document.getElementById('depth-tooltip');
-
         video.addEventListener('mousemove', (e) => {
             if (!showDepth.checked) {
                 tooltip.classList.add('hidden');
@@ -384,7 +417,6 @@
             const scaleY = video.naturalHeight / rect.height;
             const imgX = Math.round(x * scaleX);
             const imgY = Math.round(y * scaleY);
-
             fetch('/api/depth', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -402,14 +434,11 @@
                 }
             })
             .catch(err => {
-                console.error('Ошибка получения глубины:', err);
+                console.error('Ошибка глубины:', err);
                 tooltip.classList.add('hidden');
             });
         });
-
-        video.addEventListener('mouseleave', () => {
-            tooltip.classList.add('hidden');
-        });
+        video.addEventListener('mouseleave', () => tooltip.classList.add('hidden'));
 
         // ---------- Терминал ----------
         const terminalOutput = document.getElementById('terminal-output');
@@ -420,20 +449,12 @@
 
         function stripAnsi(str) {
             if (!str) return '';
-            return str
-                .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
-                .replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')
-                .replace(/\x1b\\/g, '')
-                .replace(/\x07/g, '')
-                .replace(/\r\n/g, '\n')
-                .replace(/\r/g, '\n');
+            return str.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '').replace(/\x1b\\/g, '').replace(/\x07/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         }
-
         function setTerminalOutput(text) {
             terminalOutput.innerHTML = stripAnsi(text);
             terminalOutput.scrollTop = terminalOutput.scrollHeight;
         }
-
         async function fetchTerminalOutput() {
             if (fetchInProgress) return;
             fetchInProgress = true;
@@ -444,30 +465,18 @@
                     setTerminalOutput(data.output);
                     lastOutput = data.output;
                 }
-            } catch (err) {
-                console.debug('fetchTerminalOutput error:', err);
-            } finally {
-                fetchInProgress = false;
-            }
+            } catch (err) { console.debug(err); }
+            finally { fetchInProgress = false; }
         }
-
         async function sendTerminalCommand(cmd) {
             if (sendInProgress) return;
             sendInProgress = true;
             try {
-                await fetch('/api/cmd/send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command: cmd })
-                });
+                await fetch('/api/cmd/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: cmd }) });
                 await fetchTerminalOutput();
-            } catch (err) {
-                console.debug('sendTerminalCommand error:', err);
-            } finally {
-                sendInProgress = false;
-            }
+            } catch (err) { console.debug(err); }
+            finally { sendInProgress = false; }
         }
-
         terminalCommand.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 const cmd = terminalCommand.value;
@@ -479,13 +488,13 @@
                 }
             }
         });
-
         fetchTerminalOutput();
         setInterval(fetchTerminalOutput, 200);
 
         // ---------- Параметры камеры и трекинга ----------
         const depthEnabledChk = document.getElementById('depthEnabled');
         const faceTrackingChk = document.getElementById('faceTrackingEnabled');
+        const wlsEnabledChk = document.getElementById('wlsEnabled');
         const trackingScaleX = document.getElementById('trackingScaleX');
         const trackingScaleY = document.getElementById('trackingScaleY');
         const trackingOffsetX = document.getElementById('trackingOffsetX');
@@ -501,65 +510,68 @@
             offsetXVal.textContent = trackingOffsetX.value;
             offsetYVal.textContent = trackingOffsetY.value;
         }
-
         async function loadCameraParams() {
             try {
                 const resp = await fetch('/api/camera/params');
                 const params = await resp.json();
                 depthEnabledChk.checked = params.depth_enabled;
                 faceTrackingChk.checked = params.face_tracking_enabled;
+                wlsEnabledChk.checked = params.wls_enabled;
                 trackingScaleX.value = params.tracking_scale_x;
                 trackingScaleY.value = params.tracking_scale_y;
                 trackingOffsetX.value = params.tracking_offset_x;
                 trackingOffsetY.value = params.tracking_offset_y;
                 updateTrackingDisplay();
-            } catch (e) {
-                console.error('Не удалось загрузить параметры', e);
-            }
+            } catch (e) { console.error('Ошибка загрузки параметров', e); }
         }
-
         async function sendCameraParams() {
             const params = {
                 depth_enabled: depthEnabledChk.checked,
                 face_tracking_enabled: faceTrackingChk.checked,
+                wls_enabled: wlsEnabledChk.checked,
                 tracking_scale_x: parseInt(trackingScaleX.value),
                 tracking_scale_y: parseInt(trackingScaleY.value),
                 tracking_offset_x: parseInt(trackingOffsetX.value),
                 tracking_offset_y: parseInt(trackingOffsetY.value)
             };
             try {
-                await fetch('/api/camera/params', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(params)
-                });
-            } catch (e) {
-                console.error('Ошибка отправки параметров', e);
-            }
+                await fetch('/api/camera/params', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+            } catch (e) { console.error('Ошибка отправки параметров', e); }
         }
-
         loadCameraParams();
 
-        // ---------- Управление сервоприводами (без кнопок) ----------
+        // ---------- Управление сервоприводами и автотрекинг ----------
         function updateServoValue(channel, value) {
             document.getElementById(`servo${channel}_val`).innerText = value + '°';
         }
-
         function setServo(channel, angle) {
             fetch(`/api/servo/${channel}/${angle}`, { method: 'POST' })
                 .then(res => res.json())
-                .then(data => {
-                    if (data.error) {
-                        console.error('Ошибка серво:', data.error);
-                    }
-                })
+                .then(data => { if (data.error) console.error('Ошибка серво:', data.error); })
                 .catch(err => console.error(err));
         }
+        const servoTrackingChk = document.getElementById('servoTrackingEnabled');
+        async function setServoTracking() {
+            const enabled = servoTrackingChk.checked;
+            try {
+                await fetch('/api/servo/tracking', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) });
+            } catch (e) { console.error('Ошибка установки трекинга серво', e); }
+        }
+        async function loadServoTracking() {
+            try {
+                const resp = await fetch('/api/servo/tracking');
+                const data = await resp.json();
+                servoTrackingChk.checked = data.enabled;
+            } catch (e) { console.error('Ошибка загрузки статуса трекинга', e); }
+        }
+        loadServoTracking();
 
-        // При загрузке синхронизируем отображаемые значения
         window.addEventListener('load', () => {
-            // Уже установлены в HTML, но можно дополнительно запросить с сервера, если нужно
-            // Для простоты оставляем как есть, сервоприводы уже установлены в main.py при старте
+            // Инициализация ползунков серво
+            for (let ch = 0; ch <= 5; ch++) {
+                const slider = document.getElementById(`servo${ch}`);
+                if (slider) updateServoValue(ch, slider.value);
+            }
         });
     </script>
 </body>
