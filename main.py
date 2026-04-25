@@ -1,56 +1,8 @@
-import sys
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
-from collections import deque
-
-# ========== ПЕРЕХВАТ КОНСОЛЬНОГО ВЫВОДА (САМОЕ НАЧАЛО) ==========
-console_log_buffer = deque(maxlen=500)
-
-class Tee:
-    def __init__(self, name, buffer, original):
-        self.name = name
-        self.buffer = buffer
-        self.original = original
-
-    def write(self, data):
-        if not data:
-            return
-        # Преобразуем байты в строку, если нужно
-        if isinstance(data, bytes):
-            try:
-                data = data.decode('utf-8', errors='replace')
-            except:
-                data = str(data)
-        # Добавляем в буфер (всегда как есть, включая переносы строк)
-        self.buffer.append(data)
-        # Записываем в оригинальный вывод, если он не None
-        if self.original and self.original is not self:
-            try:
-                self.original.write(data)
-            except:
-                pass
-
-    def flush(self):
-        if self.original and self.original is not self:
-            try:
-                self.original.flush()
-            except:
-                pass
-
-    def isatty(self):
-        return False
-
-    def fileno(self):
-        return -1
-
-# Сохраняем оригинальные stdout/stderr (sys.__stdout__ уже содержит оригинал)
-_original_stdout = sys.__stdout__
-_original_stderr = sys.__stderr__
-
-# Заменяем глобальные потоки
-sys.stdout = Tee('stdout', console_log_buffer, _original_stdout)
-sys.stderr = Tee('stderr', console_log_buffer, _original_stderr)
-
-# Теперь можно безопасно импортировать остальные модули
+import sys
 import subprocess
 import threading
 import time
@@ -58,20 +10,33 @@ import socket
 import datetime
 import pwd
 import shutil
+from collections import deque
+
 import psutil
-import numpy as np
 from flask import Flask, render_template, jsonify, request, Response
 import cv2
+import numpy as np
 
 from camera import StereoCamera
 from servo import ServoController
 
 HTTP_PORT = 80
 
+shell_manager = None
+camera = None
+servo_controller = None
+servo_tracking_enabled = False
+servo_tracking_thread = None
+
+# Кольцевой буфер для логов самого приложения
+console_logs = deque(maxlen=500)
+
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}")
+    full_msg = f"[{timestamp}] {msg}"
+    print(full_msg)
+    console_logs.append(full_msg)
 
 def get_cpu_temp():
     try:
@@ -119,7 +84,7 @@ def get_ip_address():
         s.close()
     return ip
 
-# ---------- Поток сервотрекинга (без изменений) ----------
+# ---------- Поток сервотрекинга с таймаутом 10 секунд ----------
 def servo_tracking_loop():
     global servo_tracking_enabled, camera, servo_controller
     default_neck = 90
@@ -128,9 +93,11 @@ def servo_tracking_loop():
     max_tilt_delta = 15
     last_neck = default_neck
     last_tilt = default_head_tilt
-    last_target_time = time.time()
-    target_lost = True
-    timeout_seconds = 10.0
+
+    # Переменные для таймаута
+    last_target_time = time.time()   # время последнего обнаружения цели
+    target_lost = True                # флаг, что цель потеряна (изначально нет цели)
+    timeout_seconds = 10.0            # ждать 10 секунд перед возвратом в центр
 
     while True:
         if servo_tracking_enabled and camera is not None and servo_controller is not None:
@@ -138,17 +105,21 @@ def servo_tracking_loop():
             scale_x = camera.tracking_scale_x if camera.tracking_scale_x != 0 else 1.0
             scale_y = camera.tracking_scale_y if camera.tracking_scale_y != 0 else 1.0
 
+            # Проверяем, есть ли цель (dx, dy != 0)
             target_present = (dx != 0.0 or dy != 0.0)
 
             if target_present:
+                # Цель обнаружена – обновляем время и сбрасываем флаг потери
                 last_target_time = time.time()
                 target_lost = False
 
+                # Вычисляем желаемые углы
                 neck_angle = default_neck + (dx / scale_x) * max_neck_delta
                 neck_angle = max(default_neck - max_neck_delta, min(default_neck + max_neck_delta, neck_angle))
                 tilt_angle = default_head_tilt + (dy / scale_y) * max_tilt_delta
                 tilt_angle = max(default_head_tilt - max_tilt_delta, min(default_head_tilt + max_tilt_delta, tilt_angle))
 
+                # Плавное движение к цели
                 if abs(neck_angle - last_neck) > 1:
                     servo_controller.set_servo(0, int(round(neck_angle)), smooth=True, step_delay=0.01, step_angle=2)
                     last_neck = neck_angle
@@ -156,23 +127,30 @@ def servo_tracking_loop():
                     servo_controller.set_servo(3, int(round(tilt_angle)), smooth=True, step_delay=0.01, step_angle=2)
                     last_tilt = tilt_angle
             else:
+                # Цель отсутствует
                 if not target_lost:
+                    # Цель только что пропала – начинаем отсчёт таймаута
                     target_lost = True
                     last_target_time = time.time()
                     log_message("Цель потеряна, ожидание {} секунд перед возвратом в центр".format(timeout_seconds))
                 else:
+                    # Цель уже потеряна, проверяем таймаут
                     elapsed = time.time() - last_target_time
                     if elapsed >= timeout_seconds:
+                        # Таймаут истёк – возвращаемся в центр, если ещё не там
                         if abs(last_neck - default_neck) > 1:
                             servo_controller.set_servo(0, default_neck, smooth=True, step_delay=0.01, step_angle=2)
                             last_neck = default_neck
                         if abs(last_tilt - default_head_tilt) > 1:
                             servo_controller.set_servo(3, default_head_tilt, smooth=True, step_delay=0.01, step_angle=2)
                             last_tilt = default_head_tilt
+                        # После возврата можно сбросить last_target_time, но не обязательно
         else:
+            # Если трекинг выключен или нет контроллера – сбрасываем состояние
             target_lost = True
             last_target_time = time.time()
-        time.sleep(0.05)
+
+        time.sleep(0.05)  # 20 Гц
 
 # ---------- Flask приложение ----------
 app = Flask(__name__)
@@ -198,19 +176,16 @@ def api_data():
     cpu = psutil.cpu_percent()
     ram = psutil.virtual_memory().percent
     temp = get_cpu_temp()
+    logs = get_recent_logs(500)
     fps = camera.fps if camera else 0.0
     return jsonify({
         'cpu': cpu,
         'ram': ram,
         'temp': temp,
-        'fps': round(fps, 1)
+        'logs': logs,
+        'fps': round(fps, 1),
+        'app_logs': list(console_logs)
     })
-
-@app.route('/api/console_logs')
-def api_console_logs():
-    # Возвращаем все строки буфера как единую строку
-    logs = list(console_log_buffer)
-    return jsonify({'logs': ''.join(logs)})
 
 @app.route('/api/ip')
 def api_ip():
@@ -242,7 +217,7 @@ def api_shutdown():
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({'status': 'ok', 'message': 'Завершение работы'})
 
-# ---------- Терминал (без изменений) ----------
+# ---------- Терминал ----------
 class ShellManager:
     def __init__(self):
         self.proc = None
@@ -352,14 +327,6 @@ def depth_at():
     depth = camera.get_depth_at(int(x), int(y))
     return jsonify({'depth': depth})
 
-# ---------- API для облака точек ----------
-@app.route('/api/pointcloud')
-def api_pointcloud():
-    if camera is None:
-        return jsonify({'points': []})
-    points = camera.get_pointcloud_subsampled(step=6)
-    return jsonify({'points': points})
-
 # ---------- API для параметров камеры и трекинга ----------
 @app.route('/api/camera/params', methods=['GET', 'POST'])
 def camera_params():
@@ -402,6 +369,15 @@ def tracking_offsets():
     if camera is None: return jsonify({'dx': 0, 'dy': 0})
     dx, dy = camera.get_eye_offsets()
     return jsonify({'dx': dx, 'dy': dy})
+
+# ---------- API для облака точек ----------
+@app.route('/api/pointcloud')
+def api_pointcloud():
+    if camera is None or not camera.depth_enabled:
+        return jsonify([])
+    step = request.args.get('step', default=2, type=int)
+    points = camera.get_point_cloud_sample(step=step)
+    return jsonify(points)
 
 # ---------- API для сервоприводов ----------
 @app.route('/api/servo/<int:channel>/<int:angle>', methods=['POST'])
@@ -494,7 +470,7 @@ def start_browser_when_ready():
 
 def main():
     global shell_manager, camera, servo_controller, servo_tracking_thread
-    log_message("Запуск веб-сервера R2 (Liquid Glass Edition)")
+    log_message("Запуск веб-сервера R2")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "cam_params.json")

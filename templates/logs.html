@@ -3,64 +3,67 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 - Системные логи</title>
+    <title>R2 — Логи системы</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: #000;
-            color: #ccc;
-            font-family: 'Segoe UI', monospace;
+            background: radial-gradient(circle at 20% 30%, #1a1a1a, #0a0a0a);
+            color: #ddd;
+            font-family: 'Segoe UI', system-ui, sans-serif;
             height: 100vh;
             display: flex;
             flex-direction: column;
+            backdrop-filter: blur(10px);
         }
         header {
-            background: rgba(20,20,20,0.8);
-            backdrop-filter: blur(12px);
-            padding: 12px 20px;
+            background: rgba(20,20,20,0.75);
+            backdrop-filter: blur(20px);
+            padding: 12px 24px;
             text-align: center;
-            border-bottom: 1px solid #2c2c2c;
+            border-bottom: 1px solid rgba(255,255,255,0.15);
         }
-        header a {
-            color: #ddd;
-            text-decoration: none;
-            font-size: 18px;
-            margin: 0 20px;
-        }
+        header a { color: #ccc; text-decoration: none; font-size: 18px; margin: 0 16px; transition: color 0.2s; }
+        header a:hover { color: #fff; }
         .logs-container {
             flex: 1;
+            margin: 12px;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
             padding: 20px;
             overflow-y: auto;
-            font-size: 11px;
-            line-height: 1.4;
-            white-space: pre-wrap;
-            background: #050505;
+            font-size: 12px;
+            line-height: 1.7;
+            font-family: 'JetBrains Mono', monospace;
+            color: #aaa;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            scrollbar-width: thin;
+            scrollbar-color: #444 #1a1a1a;
         }
-        .logs-container div {
-            border-bottom: 1px solid #1a1a1a;
-            padding: 4px 0;
-        }
+        .logs-container div { white-space: pre-wrap; word-wrap: break-word; }
     </style>
 </head>
 <body>
-<header>
-    <a href="/">R2</a><a href="/screen">Экран</a><a href="/terminal">CMD</a><a href="/logs">Логи</a>
-</header>
-<div class="logs-container" id="logs"></div>
-<script>
-    const logsDiv = document.getElementById('logs');
-    async function fetchLogs() {
-        try {
-            const r = await fetch('/api/data');
-            const d = await r.json();
-            // Ниже показываем системные логи (как и было), но без изменения логики
-            logsDiv.innerHTML = d.logs?.map(l => `<div>${escapeHtml(l)}</div>`).join('') || '<div>Нет логов</div>';
-            logsDiv.scrollTop = logsDiv.scrollHeight;
-        } catch(e) {}
-    }
-    function escapeHtml(s) { return s.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
-    fetchLogs();
-    setInterval(fetchLogs, 3000);
-</script>
+    <header>
+        <a href="/">R2</a>
+        <a href="/screen">Экран</a>
+        <a href="/terminal">CMD</a>
+        <a href="/logs">Логи</a>
+    </header>
+    <div class="logs-container" id="logs"></div>
+    <script>
+        async function fetchLogs() {
+            try {
+                const r = await fetch('/api/data');
+                const d = await r.json();
+                document.getElementById('logs').innerHTML = d.logs.map(l => `<div>${escapeHtml(l)}</div>`).join('');
+                document.getElementById('logs').scrollTop = document.getElementById('logs').scrollHeight;
+            } catch(e) {}
+        }
+        function escapeHtml(s) { return s.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]); }
+        fetchLogs();
+        setInterval(fetchLogs, 2000);
+    </script>
 </body>
 </html>
