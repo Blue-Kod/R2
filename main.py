@@ -29,7 +29,7 @@ servo_tracking_enabled = False
 servo_tracking_thread = None
 
 # ========== ПЕРЕХВАТ КОНСОЛЬНОГО ВЫВОДА ==========
-console_log_buffer = deque(maxlen=500)   # храним последние 500 строк
+console_log_buffer = deque(maxlen=500)
 
 class Tee:
     def __init__(self, name, buffer, original):
@@ -37,11 +37,22 @@ class Tee:
         self.buffer = buffer
         self.original = original
     def write(self, data):
-        if data.strip():
+        if data:
+            # Преобразуем байты в строку, если необходимо
+            if isinstance(data, bytes):
+                data = data.decode('utf-8', errors='replace')
+            # Добавляем в буфер (без автоматического разбиения на строки)
             self.buffer.append(data)
-        self.original.write(data)
+        # Пишем в оригинальный вывод (консоль)
+        if self.original:
+            self.original.write(data)
     def flush(self):
-        self.original.flush()
+        if self.original:
+            self.original.flush()
+
+# Перенаправляем stdout и stderr
+sys.stdout = Tee('stdout', console_log_buffer, sys.__stdout__)
+sys.stderr = Tee('stderr', console_log_buffer, sys.__stderr__)
 
 # Подменяем stdout и stderr
 sys.stdout = Tee('stdout', console_log_buffer, sys.__stdout__)
@@ -187,9 +198,9 @@ def api_data():
 
 @app.route('/api/console_logs')
 def api_console_logs():
-    # Возвращаем последние 500 строк консольного вывода
+    # Возвращаем все строки буфера как единую строку
     logs = list(console_log_buffer)
-    return jsonify({'logs': '\n'.join(logs)})
+    return jsonify({'logs': ''.join(logs)})
 
 @app.route('/api/ip')
 def api_ip():
