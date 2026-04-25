@@ -1,8 +1,56 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import os
 import sys
+import os
+from collections import deque
+
+# ========== ПЕРЕХВАТ КОНСОЛЬНОГО ВЫВОДА (САМОЕ НАЧАЛО) ==========
+console_log_buffer = deque(maxlen=500)
+
+class Tee:
+    def __init__(self, name, buffer, original):
+        self.name = name
+        self.buffer = buffer
+        self.original = original
+
+    def write(self, data):
+        if not data:
+            return
+        # Преобразуем байты в строку, если нужно
+        if isinstance(data, bytes):
+            try:
+                data = data.decode('utf-8', errors='replace')
+            except:
+                data = str(data)
+        # Добавляем в буфер (всегда как есть, включая переносы строк)
+        self.buffer.append(data)
+        # Записываем в оригинальный вывод, если он не None
+        if self.original and self.original is not self:
+            try:
+                self.original.write(data)
+            except:
+                pass
+
+    def flush(self):
+        if self.original and self.original is not self:
+            try:
+                self.original.flush()
+            except:
+                pass
+
+    def isatty(self):
+        return False
+
+    def fileno(self):
+        return -1
+
+# Сохраняем оригинальные stdout/stderr (sys.__stdout__ уже содержит оригинал)
+_original_stdout = sys.__stdout__
+_original_stderr = sys.__stderr__
+
+# Заменяем глобальные потоки
+sys.stdout = Tee('stdout', console_log_buffer, _original_stdout)
+sys.stderr = Tee('stderr', console_log_buffer, _original_stderr)
+
+# Теперь можно безопасно импортировать остальные модули
 import subprocess
 import threading
 import time
@@ -10,8 +58,6 @@ import socket
 import datetime
 import pwd
 import shutil
-from collections import deque
-
 import psutil
 import numpy as np
 from flask import Flask, render_template, jsonify, request, Response
@@ -21,42 +67,6 @@ from camera import StereoCamera
 from servo import ServoController
 
 HTTP_PORT = 80
-
-shell_manager = None
-camera = None
-servo_controller = None
-servo_tracking_enabled = False
-servo_tracking_thread = None
-
-# ========== ПЕРЕХВАТ КОНСОЛЬНОГО ВЫВОДА ==========
-console_log_buffer = deque(maxlen=500)
-
-class Tee:
-    def __init__(self, name, buffer, original):
-        self.name = name
-        self.buffer = buffer
-        self.original = original
-    def write(self, data):
-        if data:
-            # Преобразуем байты в строку, если необходимо
-            if isinstance(data, bytes):
-                data = data.decode('utf-8', errors='replace')
-            # Добавляем в буфер (без автоматического разбиения на строки)
-            self.buffer.append(data)
-        # Пишем в оригинальный вывод (консоль)
-        if self.original:
-            self.original.write(data)
-    def flush(self):
-        if self.original:
-            self.original.flush()
-
-# Перенаправляем stdout и stderr
-sys.stdout = Tee('stdout', console_log_buffer, sys.__stdout__)
-sys.stderr = Tee('stderr', console_log_buffer, sys.__stderr__)
-
-# Подменяем stdout и stderr
-sys.stdout = Tee('stdout', console_log_buffer, sys.__stdout__)
-sys.stderr = Tee('stderr', console_log_buffer, sys.__stderr__)
 
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
