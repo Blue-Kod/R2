@@ -3,167 +3,281 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 - Главная</title>
+    <title>R2 - Liquid Interface</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <style>
+        :root {
+            --glass: rgba(255, 255, 255, 0.08);
+            --border: rgba(255, 255, 255, 0.15);
+            --accent: #00e5ff;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: black; color: #00ff00; font-family: monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        header { background: #111; padding: 10px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
-        header .nav-links a { color: #fff; text-decoration: none; font-size: 20px; margin: 0 15px; }
-        .stats { display: flex; gap: 20px; font-size: 14px; background: #0a0a0a; padding: 5px 15px; border-radius: 8px; }
-        .stats span { color: #ffaa00; }
-        .container { flex: 1; display: flex; overflow: hidden; }
-        .panel { display: flex; flex-direction: column; padding: 10px; overflow: hidden; }
-        .panel-left { width: 25%; background: #0a0a0a; border-right: 1px solid #333; }
-        .panel-center { width: 50%; background: black; display: flex; flex-direction: column; }
-        .panel-right { width: 25%; background: #0a0a0a; border-left: 1px solid #333; overflow-y: auto; }
-        .panel-title { color: #00ff00; font-size: 14px; text-transform: uppercase; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #333; }
-        #logs { flex: 1; overflow-y: auto; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-        #logs div { color: #aaa; }
-        #video-container { flex: 1; position: relative; display: flex; justify-content: center; align-items: center; }
-        #video-feed { max-width: 100%; max-height: 100%; object-fit: contain; border: 1px solid #333; }
-        #controls { padding: 10px; background: #111; border-top: 1px solid #333; overflow-y: auto; max-height: 40%; }
-        .control-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-        .control-row label { color: #00ff00; font-size: 12px; }
-        .control-row input[type="checkbox"], .control-row select { accent-color: #00ff00; background: black; color: #00ff00; border: 1px solid #333; }
-        .control-row input[type="range"] { width: 60%; accent-color: #00ff00; }
-        .control-group { margin-top: 15px; padding-top: 10px; border-top: 1px solid #333; }
-        #terminal-output { flex: 1; overflow-y: auto; font-size: 12px; background: #000; padding: 5px; border: 1px solid #333; margin-bottom: 5px; min-height: 200px; white-space: pre-wrap; }
-        #terminal-input-line { display: flex; }
-        #terminal-prompt { color: #00ff00; margin-right: 5px; }
-        #terminal-command { flex: 1; background: black; border: none; outline: none; color: #00ff00; font-family: monospace; font-size: 12px; }
-        .depth-tooltip { position: absolute; background: rgba(0,0,0,0.85); color: #00ff00; padding: 4px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; border: 1px solid #00ff00; z-index: 1000; }
-        .hidden { display: none; }
-        .servo-controls { margin-top: 10px; padding: 10px; background: #0a0a0a; border: 1px solid #333; border-radius: 4px; }
-        .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-        .servo-row label { width: 100px; font-size: 12px; color: #00ff00; }
-        .servo-row input[type="range"] { flex: 1; min-width: 150px; accent-color: #00ff00; }
-        .servo-row span { width: 45px; text-align: center; font-size: 12px; }
+        body {
+            background: radial-gradient(circle at center, #1a1a2e 0%, #0d0d15 100%);
+            color: white;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            z-index: 100;
+        }
+        .nav-links a {
+            color: #ccc;
+            text-decoration: none;
+            margin-left: 30px;
+            font-size: 0.9rem;
+            letter-spacing: 1px;
+            transition: 0.3s;
+        }
+        .nav-links a:hover { color: var(--accent); }
+
+        .main-layout {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        .glass-card {
+            background: var(--glass);
+            backdrop-filter: blur(15px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Визуализатор */
+        #viewport-container {
+            position: relative;
+            flex: 1;
+        }
+        .view-toggle {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            display: flex;
+            gap: 10px;
+            background: rgba(0,0,0,0.3);
+            padding: 5px;
+            border-radius: 12px;
+        }
+        .view-btn {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+        .view-btn.active { background: var(--accent); color: #000; font-weight: bold; }
+
+        #video-feed, #three-canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* Боковая панель управления */
+        .controls-panel { padding: 25px; overflow-y: auto; }
+        .panel-section { margin-bottom: 30px; }
+        h3 { font-size: 0.75rem; text-transform: uppercase; color: var(--accent); margin-bottom: 15px; letter-spacing: 2px; }
+
+        .slider-group { margin-bottom: 15px; }
+        .slider-header { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 8px; color: #aaa; }
+        input[type="range"] {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+            appearance: none;
+            accent-color: var(--accent);
+        }
+
+        /* Консоль внизу справа */
+        #console-box {
+            height: 200px;
+            background: rgba(0,0,0,0.2);
+            font-family: 'Consolas', monospace;
+            font-size: 0.75rem;
+            padding: 15px;
+            overflow-y: auto;
+            color: #00ffaa;
+            border-top: 1px solid var(--border);
+        }
+        .log-entry { margin-bottom: 4px; opacity: 0.8; }
+
+        .stats-bar { display: flex; gap: 20px; font-size: 0.8rem; color: #888; }
+        .stats-bar span b { color: white; }
     </style>
 </head>
 <body>
-<header>
-    <div class="nav-links">
-        <a href="/">R2</a><a href="/screen">Экран</a><a href="/terminal">CMD</a><a href="/logs">Логи</a>
-    </div>
-    <div class="stats">
-        <div>CPU: <span id="cpuStat">0</span>%</div>
-        <div>RAM: <span id="ramStat">0</span>%</div>
-        <div>Темп: <span id="tempStat">--</span></div>
-        <div>FPS: <span id="fpsStat">0</span></div>
-    </div>
-</header>
-<div class="container">
-    <div class="panel panel-left">
-        <div class="panel-title">Системные логи</div>
-        <div id="logs"></div>
-    </div>
-    <div class="panel panel-center">
-        <div id="video-container">
-            <img id="video-feed" src="/video_feed" alt="Video Stream">
-            <div id="depth-tooltip" class="depth-tooltip hidden"></div>
+    <header>
+        <div style="font-size: 1.5rem; font-weight: 200; letter-spacing: 4px;">R2<span style="color:var(--accent)">_OS</span></div>
+        <div class="stats-bar">
+            <span>CPU: <b id="stat-cpu">-</b></span>
+            <span>TEMP: <b id="stat-temp">-</b></span>
+            <span>RAM: <b id="stat-ram">-</b></span>
         </div>
-        <div id="controls">
-            <div class="control-row">
-                <label>Основной глаз:</label>
-                <div><input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateParams()"> <label for="eyeLeft">Левый</label>
-                    <input type="radio" name="mainEye" id="eyeRight" onchange="updateParams()"> <label for="eyeRight">Правый</label></div>
+        <nav class="nav-links">
+            <a href="/">DASHBOARD</a>
+            <a href="/screen">EYES</a>
+            <a href="/terminal">TERMINAL</a>
+        </nav>
+    </header>
+
+    <main class="main-layout">
+        <div class="glass-card" id="viewport-container">
+            <div class="view-toggle">
+                <button class="view-btn active" onclick="switchView('2d')">DEPTH CAM</button>
+                <button class="view-btn" onclick="switchView('3d')">POINT CLOUD</button>
             </div>
-            <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked onchange="updateParams()"></div>
-            <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()"></div>
-            <div class="control-group">
-                <div class="panel-title" style="font-size:12px;">⚙️ Настройки камеры</div>
-                <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled" onchange="sendCameraParams()"></div>
-                <div class="control-row"><label>WLS фильтр (медленно):</label><input type="checkbox" id="wlsEnabled" onchange="sendCameraParams()"></div>
-            </div>
-            <div class="control-group">
-                <div class="panel-title" style="font-size:12px;">🎯 Трекинг цели</div>
-                <div class="control-row"><label>Включить трекинг:</label><input type="checkbox" id="trackingEnabled" onchange="sendCameraParams()"></div>
-                <div class="control-row"><label>Тип цели:</label>
-                   <select id="trackingMode" onchange="sendCameraParams()">
-                        <option value="person">🧍 Человек (всё тело)</option>
-                        <option value="face">👤 Лицо</option>
-                        <option value="motion">🌀 Движение</option>
-                    </select>
+            <img id="video-feed" src="/api/camera/video_feed">
+            <div id="three-canvas" style="display: none;"></div>
+        </div>
+
+        <div class="glass-card">
+            <div class="controls-panel">
+                <div class="panel-section">
+                    <h3>Servo Control</h3>
+                    <div id="servo-controls"></div>
                 </div>
-                <div class="control-row"><label>Scale X (пикс):</label><input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="scaleXVal">50</span></div>
-                <div class="control-row"><label>Scale Y (пикс):</label><input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="scaleYVal">30</span></div>
-                <div class="control-row"><label>Offset X (пикс):</label><input type="range" id="trackingOffsetX" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="offsetXVal">0</span></div>
-                <div class="control-row"><label>Offset Y (пикс):</label><input type="range" id="trackingOffsetY" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="offsetYVal">0</span></div>
-                <div class="control-row"><label>Авто-серво по цели:</label><input type="checkbox" id="servoTrackingEnabled" onchange="setServoTracking()"></div>
+
+                <div class="panel-section">
+                    <h3>AI Systems</h3>
+                    <label style="display: flex; align-items: center; gap: 10px; font-size: 0.9rem;">
+                        <input type="checkbox" id="tracking-chk" onchange="toggleTracking()">
+                        Auto-Tracking Face
+                    </label>
+                </div>
             </div>
+            <div id="console-box"></div>
         </div>
-    </div>
-    <div class="panel panel-right">
-        <div class="panel-title">Терминал</div>
-        <div id="terminal-output"></div>
-        <div id="terminal-input-line"><span id="terminal-prompt">$</span><input type="text" id="terminal-command" placeholder="Введите команду..." autofocus></div>
-        <div class="panel-title" style="margin-top:20px;">Сервоприводы</div>
-        <div class="servo-controls">
-            <div class="servo-row"><label>Шея (0):</label><input type="range" id="servo0" min="0" max="180" value="90" oninput="updateServoValue(0, this.value)" onchange="setServo(0, this.value)"><span id="servo0_val">90°</span></div>
-            <div class="servo-row"><label>Правое плечо (1):</label><input type="range" id="servo1" min="0" max="270" value="135" oninput="updateServoValue(1, this.value)" onchange="setServo(1, this.value)"><span id="servo1_val">135°</span></div>
-            <div class="servo-row"><label>Левое плечо (2):</label><input type="range" id="servo2" min="0" max="270" value="135" oninput="updateServoValue(2, this.value)" onchange="setServo(2, this.value)"><span id="servo2_val">135°</span></div>
-            <div class="servo-row"><label>Наклон головы (3):</label><input type="range" id="servo3" min="0" max="180" value="90" oninput="updateServoValue(3, this.value)" onchange="setServo(3, this.value)"><span id="servo3_val">90°</span></div>
-            <div class="servo-row"><label>Поворот прав. плеча (4):</label><input type="range" id="servo4" min="0" max="270" value="135" oninput="updateServoValue(4, this.value)" onchange="setServo(4, this.value)"><span id="servo4_val">135°</span></div>
-            <div class="servo-row"><label>Поворот лев. плеча (5):</label><input type="range" id="servo5" min="0" max="270" value="135" oninput="updateServoValue(5, this.value)" onchange="setServo(5, this.value)"><span id="servo5_val">135°</span></div>
-        </div>
-    </div>
-</div>
-<script>
-    async function fetchSystemStats() {
-        try {
-            const r = await fetch('/api/data');
-            const d = await r.json();
-            document.getElementById('cpuStat').innerText = d.cpu;
-            document.getElementById('ramStat').innerText = d.ram;
-            document.getElementById('tempStat').innerText = d.temp;
-            document.getElementById('fpsStat').innerText = d.fps;
-            document.getElementById('logs').innerHTML = d.logs.map(l => `<div>${escapeHtml(l)}</div>`).join('');
-            document.getElementById('logs').scrollTop = document.getElementById('logs').scrollHeight;
-        } catch(e) { console.error(e); }
-    }
-    function escapeHtml(s) { return s.replace(/[&<>]/g, function(m){ if(m==='&') return '&amp;'; if(m==='<') return '&lt;'; if(m==='>') return '&gt;'; return m;}); }
-    setInterval(fetchSystemStats, 2000);
-    fetchSystemStats();
+    </main>
 
-    const eyeLeft = document.getElementById('eyeLeft'), eyeRight = document.getElementById('eyeRight'), showDepth = document.getElementById('showDepth'), depthAlpha = document.getElementById('depthAlpha');
-    function updateParams() {
-        fetch('/update', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0, show_left: eyeLeft.checked, num_disp:5 }) }).catch(console.error);
-    }
-    const video = document.getElementById('video-feed'), tooltip = document.getElementById('depth-tooltip');
-    video.addEventListener('mousemove', (e) => {
-        if(!showDepth.checked) { tooltip.classList.add('hidden'); return; }
-        const rect = video.getBoundingClientRect();
-        const x = e.clientX - rect.left, y = e.clientY - rect.top;
-        const sx = video.naturalWidth/rect.width, sy = video.naturalHeight/rect.height;
-        const ix = Math.round(x*sx), iy = Math.round(y*sy);
-        fetch('/api/depth', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({x:ix, y:iy}) }).then(res=>res.json()).then(data=>{ if(data.depth!==null && data.depth!==undefined) { tooltip.classList.remove('hidden'); tooltip.style.left=(e.clientX+15)+'px'; tooltip.style.top=(e.clientY+15)+'px'; tooltip.textContent=`${data.depth.toFixed(1)} см`; } else tooltip.classList.add('hidden'); }).catch(()=>tooltip.classList.add('hidden'));
-    });
-    video.addEventListener('mouseleave', ()=>tooltip.classList.add('hidden'));
+    <script>
+        // --- 3D Logic ---
+        let scene, camera3d, renderer, points, controls;
+        const canvasContainer = document.getElementById('three-canvas');
 
-    const terminalOutput = document.getElementById('terminal-output'), terminalCommand = document.getElementById('terminal-command');
-    let lastOutput='', fetchInProgress=false, sendInProgress=false;
-    function stripAnsi(s){ return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x1b\\/g,'').replace(/\x07/g,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n'); }
-    function setTerminalOutput(t){ terminalOutput.innerHTML = stripAnsi(t); terminalOutput.scrollTop = terminalOutput.scrollHeight; }
-    async function fetchTerminalOutput(){ if(fetchInProgress) return; fetchInProgress=true; try{ const r=await fetch('/api/cmd/output'); const d=await r.json(); if(d.output!==lastOutput){ setTerminalOutput(d.output); lastOutput=d.output; } }catch(e){} finally{ fetchInProgress=false; } }
-    async function sendTerminalCommand(cmd){ if(sendInProgress) return; sendInProgress=true; try{ await fetch('/api/cmd/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})}); await fetchTerminalOutput(); }catch(e){} finally{ sendInProgress=false; } }
-    terminalCommand.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ const cmd=terminalCommand.value; if(cmd.trim()!==''){ setTerminalOutput(lastOutput+'$ '+cmd+'\n'); lastOutput+='$ '+cmd+'\n'; sendTerminalCommand(cmd); terminalCommand.value=''; } } });
-    fetchTerminalOutput(); setInterval(fetchTerminalOutput,200);
+        function init3D() {
+            scene = new THREE.Scene();
+            camera3d = new THREE.PerspectiveCamera(75, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            canvasContainer.appendChild(renderer.domElement);
 
-    const depthEnabledChk = document.getElementById('depthEnabled'), wlsEnabledChk = document.getElementById('wlsEnabled'), trackingEnabled = document.getElementById('trackingEnabled'), trackingMode = document.getElementById('trackingMode');
-    const trackingScaleX = document.getElementById('trackingScaleX'), trackingScaleY = document.getElementById('trackingScaleY'), trackingOffsetX = document.getElementById('trackingOffsetX'), trackingOffsetY = document.getElementById('trackingOffsetY');
-    const scaleXVal=document.getElementById('scaleXVal'), scaleYVal=document.getElementById('scaleYVal'), offsetXVal=document.getElementById('offsetXVal'), offsetYVal=document.getElementById('offsetYVal');
-    function updateTrackingDisplay(){ scaleXVal.innerText=trackingScaleX.value; scaleYVal.innerText=trackingScaleY.value; offsetXVal.innerText=trackingOffsetX.value; offsetYVal.innerText=trackingOffsetY.value; }
-    async function loadCameraParams(){ try{ const r=await fetch('/api/camera/params'); const p=await r.json(); depthEnabledChk.checked=p.depth_enabled; wlsEnabledChk.checked=p.wls_enabled; trackingEnabled.checked=p.face_tracking_enabled; trackingMode.value=p.tracking_mode; trackingScaleX.value=p.tracking_scale_x; trackingScaleY.value=p.tracking_scale_y; trackingOffsetX.value=p.tracking_offset_x; trackingOffsetY.value=p.tracking_offset_y; updateTrackingDisplay(); }catch(e){ console.error(e); } }
-    async function sendCameraParams(){ const params={ depth_enabled: depthEnabledChk.checked, face_tracking_enabled: trackingEnabled.checked, tracking_mode: trackingMode.value, wls_enabled: wlsEnabledChk.checked, tracking_scale_x: parseInt(trackingScaleX.value), tracking_scale_y: parseInt(trackingScaleY.value), tracking_offset_x: parseInt(trackingOffsetX.value), tracking_offset_y: parseInt(trackingOffsetY.value) }; try{ await fetch('/api/camera/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)}); }catch(e){ console.error(e); } }
-    loadCameraParams();
+            controls = new THREE.OrbitControls(camera3d, renderer.domElement);
+            camera3d.position.set(0, 0, 2);
 
-    function updateServoValue(ch,val){ document.getElementById(`servo${ch}_val`).innerText = val+'°'; }
-    function setServo(ch,angle){ fetch(`/api/servo/${ch}/${angle}`,{method:'POST'}).catch(console.error); }
-    const servoTrackingChk = document.getElementById('servoTrackingEnabled');
-    async function setServoTracking(){ const enabled = servoTrackingChk.checked; try{ await fetch('/api/servo/tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); }catch(e){ console.error(e); } }
-    async function loadServoTracking(){ try{ const r=await fetch('/api/servo/tracking'); const d=await r.json(); servoTrackingChk.checked=d.enabled; }catch(e){} }
-    loadServoTracking();
-    window.addEventListener('load',()=>{ for(let ch=0;ch<=5;ch++){ const s=document.getElementById(`servo${ch}`); if(s) updateServoValue(ch,s.value); } });
-</script>
+            const geometry = new THREE.BufferGeometry();
+            const material = new THREE.PointsMaterial({ size: 0.015, vertexColors: true });
+            points = new THREE.Points(geometry, material);
+            scene.add(points);
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera3d);
+        }
+
+        async function updatePointCloud() {
+            if (canvasContainer.style.display === 'none') return;
+            try {
+                const r = await fetch('/api/camera/pointcloud');
+                const data = await r.json();
+                if (data.points) {
+                    points.geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.points, 3));
+                    if (data.colors) {
+                        points.geometry.setAttribute('color', new THREE.Float32BufferAttribute(data.colors, 3));
+                    }
+                }
+            } catch(e) {}
+            setTimeout(updatePointCloud, 100);
+        }
+
+        // --- UI Logic ---
+        function switchView(mode) {
+            const feed = document.getElementById('video-feed');
+            const btns = document.querySelectorAll('.view-btn');
+            btns.forEach(b => b.classList.remove('active'));
+
+            if (mode === '3d') {
+                feed.style.display = 'none';
+                canvasContainer.style.display = 'block';
+                btns[1].classList.add('active');
+                if (!scene) init3D();
+                updatePointCloud();
+            } else {
+                feed.style.display = 'block';
+                canvasContainer.style.display = 'none';
+                btns[0].classList.add('active');
+            }
+        }
+
+        // Servos
+        const servoNames = ['NECK', 'R_SHOULDER', 'L_SHOULDER', 'TILT', 'R_ELBOW', 'L_ELBOW'];
+        const ctrlDiv = document.getElementById('servo-controls');
+        servoNames.forEach((name, i) => {
+            ctrlDiv.innerHTML += `
+                <div class="slider-group">
+                    <div class="slider-header"><span>${name}</span><span id="v${i}">90°</span></div>
+                    <input type="range" min="0" max="180" value="90" oninput="moveServo(${i}, this.value)">
+                </div>
+            `;
+        });
+
+        function moveServo(ch, val) {
+            document.getElementById(`v${ch}`).innerText = val + '°';
+            fetch(`/api/servo/${ch}/${val}`, {method: 'POST'});
+        }
+
+        // Console & Stats
+        async function updateSystem() {
+            const [cRes, sRes] = await Promise.all([fetch('/api/console'), fetch('/api/stats')]);
+            const cData = await cRes.json();
+            const sData = await sRes.json();
+
+            document.getElementById('console-box').innerHTML = cData.logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+            const cb = document.getElementById('console-box');
+            cb.scrollTop = cb.scrollHeight;
+
+            document.getElementById('stat-cpu').innerText = sData.cpu;
+            document.getElementById('stat-temp').innerText = sData.temp;
+            document.getElementById('stat-ram').innerText = sData.ram;
+        }
+
+        setInterval(updateSystem, 1000);
+        function toggleTracking() {
+            const enabled = document.getElementById('tracking-chk').checked;
+            fetch('/api/servo/tracking', {method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled})});
+        }
+
+        window.onresize = () => {
+            if (camera3d) {
+                camera3d.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+                camera3d.updateProjectionMatrix();
+                renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            }
+        };
+    </script>
 </body>
 </html>
