@@ -129,6 +129,22 @@ class StereoCamera:
             self.wls_available = False
             self.matcher_r = None
 
+    def get_pointcloud_subsampled(self, step=4):
+        """Возвращает разреженное облако точек в виде списка [x,y,z] в метрах."""
+        with self.lock:
+            if self.points_3d is None:
+                return []
+            h, w, _ = self.points_3d.shape
+            points = []
+            for y in range(0, h, step):
+                for x in range(0, w, step):
+                    z_mm = self.points_3d[y, x, 2]
+                    if 0 < z_mm < 5000:  # отфильтровываем шум и дальние точки
+                        x_m = self.points_3d[y, x, 0] / 1000.0
+                        y_m = -self.points_3d[y, x, 1] / 1000.0  # инвертируем Y для удобства
+                        z_m = z_mm / 1000.0
+                        points.append([x_m, y_m, z_m])
+            return points
     def _capture_loop(self):
         while self.running:
             ret, frame = self.cap.read()

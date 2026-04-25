@@ -3,49 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 - Логи системы</title>
+    <title>R2 - Системные логи</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: black; color: white; font-family: 'Ubuntu Sans Mono', monospace; height: 100vh; display: flex; flex-direction: column; }
-        header { background: #111; padding: 10px; text-align: center; border-bottom: 1px solid #333; }
-        header a { color: #fff; text-decoration: none; font-size: 20px; margin: 0 15px; }
-        header a:hover { text-decoration: underline; }
-        .logs-container { flex: 1; padding: 20px; overflow-y: auto; font-size: 12px; line-height: 1.5; }
-        .logs-container div { white-space: pre-wrap; word-wrap: break-word; }
+        body {
+            background: #000;
+            color: #ccc;
+            font-family: 'Segoe UI', monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            background: rgba(20,20,20,0.8);
+            backdrop-filter: blur(12px);
+            padding: 12px 20px;
+            text-align: center;
+            border-bottom: 1px solid #2c2c2c;
+        }
+        header a {
+            color: #ddd;
+            text-decoration: none;
+            font-size: 18px;
+            margin: 0 20px;
+        }
+        .logs-container {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            background: #050505;
+        }
+        .logs-container div {
+            border-bottom: 1px solid #1a1a1a;
+            padding: 4px 0;
+        }
     </style>
 </head>
 <body>
-    <header>
-        <a href="/">R2</a>
-        <a href="/screen">Экран</a>
-        <a href="/terminal">CMD</a>
-        <a href="/logs">Логи</a>
-    </header>
-    <div class="logs-container" id="logs"></div>
-
-    <script>
-        const logsDiv = document.getElementById('logs');
-        async function fetchLogs() {
-            try {
-                const response = await fetch('/api/data');
-                const data = await response.json();
-                logsDiv.innerHTML = data.logs.map(line => `<div>${escapeHtml(line)}</div>`).join('');
-                logsDiv.scrollTop = logsDiv.scrollHeight;
-            } catch (e) {
-                console.error('Ошибка получения логов:', e);
-            }
-        }
-        function escapeHtml(unsafe) {
-            return unsafe.replace(/[&<>"]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                if (m === '"') return '&quot;';
-                return m;
-            });
-        }
-        fetchLogs();
-        setInterval(fetchLogs, 2000);
-    </script>
+<header>
+    <a href="/">R2</a><a href="/screen">Экран</a><a href="/terminal">CMD</a><a href="/logs">Логи</a>
+</header>
+<div class="logs-container" id="logs"></div>
+<script>
+    const logsDiv = document.getElementById('logs');
+    async function fetchLogs() {
+        try {
+            const r = await fetch('/api/data');
+            const d = await r.json();
+            // Ниже показываем системные логи (как и было), но без изменения логики
+            logsDiv.innerHTML = d.logs?.map(l => `<div>${escapeHtml(l)}</div>`).join('') || '<div>Нет логов</div>';
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        } catch(e) {}
+    }
+    function escapeHtml(s) { return s.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+    fetchLogs();
+    setInterval(fetchLogs, 3000);
+</script>
 </body>
 </html>

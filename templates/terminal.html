@@ -5,189 +5,99 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>R2 - Терминал</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: black;
-            color: #00ff00;
-            font-family: 'Ubuntu Sans Mono', monospace;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
             height: 100vh;
             display: flex;
             flex-direction: column;
         }
         header {
-            background: #111;
-            padding: 10px;
+            background: rgba(20,20,20,0.8);
+            backdrop-filter: blur(10px);
+            padding: 12px 20px;
             text-align: center;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid #2c2c2c;
         }
         header a {
-            color: #fff;
+            color: #ccc;
             text-decoration: none;
-            font-size: 20px;
-            margin: 0 15px;
+            font-size: 18px;
+            margin: 0 20px;
+            transition: 0.2s;
         }
-        header a:hover {
-            text-decoration: underline;
-        }
+        header a:hover { color: white; }
         #output {
             flex: 1;
-            background: black;
-            color: #00ff00;
-            padding: 15px;
+            padding: 20px;
             overflow-y: auto;
-            font-size: 14px;
+            font-size: 13px;
             line-height: 1.5;
             white-space: pre-wrap;
-            word-wrap: break-word;
-            font-family: 'Ubuntu Sans Mono', monospace;
+            background: #010101;
         }
         .input-line {
             display: flex;
             background: #111;
-            border-top: 1px solid #333;
-            padding: 10px;
+            border-top: 1px solid #2c2c2c;
+            padding: 12px 20px;
         }
         .prompt {
-            color: #00ff00;
+            color: white;
+            font-weight: bold;
+            margin-right: 12px;
             font-size: 16px;
-            margin-right: 8px;
-            user-select: none;
         }
         #command {
             flex: 1;
-            background: black;
+            background: transparent;
             border: none;
             outline: none;
-            color: #00ff00;
-            font-family: 'Ubuntu Sans Mono', monospace;
+            color: #f0f0f0;
+            font-family: monospace;
             font-size: 16px;
-            caret-color: #00ff00;
-        }
-        #command::placeholder {
-            color: #006600;
-        }
-        .error {
-            color: #ff5555;
         }
     </style>
 </head>
 <body>
-    <header>
-        <a href="/">R2</a>
-        <a href="/screen">Экран</a>
-        <a href="/terminal">CMD</a>
-        <a href="/logs">Логи</a>
-    </header>
-    <div id="output"></div>
-    <div class="input-line">
-        <span class="prompt">$</span>
-        <input type="text" id="command" placeholder="Введите команду..." autofocus>
-    </div>
-
-    <script>
-        const outputDiv = document.getElementById('output');
-        const commandInput = document.getElementById('command');
-        let lastOutput = '';
-        let pollInterval = 100; // миллисекунд
-        let fetchInProgress = false; // защита от одновременных запросов
-        let sendInProgress = false;
-
-        // Улучшенная функция удаления ANSI escape-последовательностей
-        function stripAnsi(str) {
-            if (!str) return '';
-            // Удаляем CSI последовательности: \x1b\[[0-9;?]*[a-zA-Z]
-            // Удаляем OSC (установка заголовка): \x1b\][0-9;]*[a-zA-Z]?.*?\x07
-            // Удаляем одиночные \x07 (BEL)
-            // Удаляем \x1b\\ (ST)
-            return str
-                .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')           // CSI с ? 
-                .replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')    // OSC до BEL
-                .replace(/\x1b\\/g, '')                            // ST
-                .replace(/\x07/g, '');                             // BEL
+<header>
+    <a href="/">R2</a><a href="/screen">Экран</a><a href="/terminal">CMD</a><a href="/logs">Логи</a>
+</header>
+<div id="output"></div>
+<div class="input-line">
+    <span class="prompt">$</span>
+    <input type="text" id="command" placeholder="введите команду..." autofocus>
+</div>
+<script>
+    const outputDiv = document.getElementById('output');
+    const commandInput = document.getElementById('command');
+    let lastOutput = '';
+    let fetchInProgress = false;
+    function stripAnsi(s) { return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x07/g,''); }
+    function setOutput(text) { outputDiv.innerHTML = stripAnsi(text); outputDiv.scrollTop = outputDiv.scrollHeight; }
+    async function fetchOutput() {
+        if (fetchInProgress) return;
+        fetchInProgress = true;
+        try {
+            const res = await fetch('/api/cmd/output');
+            const data = await res.json();
+            if (data.output !== lastOutput) { setOutput(data.output); lastOutput = data.output; }
+        } catch(e) {} finally { fetchInProgress = false; }
+    }
+    async function sendCommand(cmd) {
+        await fetch('/api/cmd/send', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd}) });
+        await fetchOutput();
+    }
+    commandInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            const cmd = commandInput.value;
+            if (cmd.trim()) { sendCommand(cmd); commandInput.value = ''; }
         }
-
-        function escapeHtml(unsafe) {
-            if (!unsafe) return '';
-            return unsafe.replace(/[&<>]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                return m;
-            });
-        }
-
-        function appendOutput(text) {
-            outputDiv.innerHTML += escapeHtml(stripAnsi(text));
-            outputDiv.scrollTop = outputDiv.scrollHeight;
-        }
-
-        function setOutput(text) {
-            outputDiv.innerHTML = escapeHtml(stripAnsi(text));
-            outputDiv.scrollTop = outputDiv.scrollHeight;
-        }
-
-        async function fetchOutput() {
-            if (fetchInProgress) return;
-            fetchInProgress = true;
-            try {
-                const response = await fetch('/api/cmd/output');
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-                if (data.output !== lastOutput) {
-                    setOutput(data.output);
-                    lastOutput = data.output;
-                }
-            } catch (err) {
-                // Тихая ошибка — ничего не показываем пользователю
-                console.debug('fetchOutput error:', err);
-            } finally {
-                fetchInProgress = false;
-            }
-        }
-
-        async function sendCommand(cmd) {
-            if (sendInProgress) return;
-            sendInProgress = true;
-            try {
-                const response = await fetch('/api/cmd/send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command: cmd })
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-                if (data.error) {
-                    // Можно показать, но скроем
-                    console.debug('sendCommand error:', data.error);
-                } else {
-                    // После отправки сразу обновим вывод
-                    await fetchOutput();
-                }
-            } catch (err) {
-                console.debug('sendCommand fetch error:', err);
-            } finally {
-                sendInProgress = false;
-            }
-        }
-
-        commandInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                const cmd = commandInput.value;
-                if (cmd.trim() !== '') {
-                    appendOutput(cmd + '\r\n');
-                    sendCommand(cmd);
-                    commandInput.value = '';
-                }
-            }
-        });
-
-        // Запускаем опрос вывода
-        fetchOutput();
-        setInterval(fetchOutput, pollInterval);
-    </script>
+    });
+    fetchOutput();
+    setInterval(fetchOutput, 200);
+</script>
 </body>
 </html>
