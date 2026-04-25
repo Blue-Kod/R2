@@ -3,128 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 — Терминал</title>
+    <title>R2 — Экран</title>
     <style>
+        :root { --text:#ecf0ff; --muted:#aab5d6; --border:rgba(210,220,255,.22); }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: radial-gradient(circle at 20% 30%, #1a1a1a, #0a0a0a);
-            color: #ddd;
-            font-family: 'JetBrains Mono', 'Fira Code', monospace;
-            height: 100vh;
+            min-height: 100vh;
+            color: var(--text);
+            font-family: "Segoe UI", system-ui, sans-serif;
+            background: radial-gradient(circle at 20% 15%, rgba(120,140,255,.22), transparent 42%), radial-gradient(circle at 82% 84%, rgba(96,208,255,.2), transparent 45%), linear-gradient(145deg, #04060b 0%, #0d1220 40%, #0a101d 100%);
             display: flex;
             flex-direction: column;
-            backdrop-filter: blur(10px);
         }
-        header {
-            background: rgba(20,20,20,0.75);
-            backdrop-filter: blur(20px);
-            padding: 12px 24px;
-            text-align: center;
-            border-bottom: 1px solid rgba(255,255,255,0.15);
+        .glass {
+            background: linear-gradient(140deg, rgba(255,255,255,.16), rgba(255,255,255,.04));
+            border: 1px solid var(--border);
+            backdrop-filter: blur(26px) saturate(150%);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,.4);
         }
-        header a { color: #ccc; text-decoration: none; font-size: 18px; margin: 0 16px; transition: color 0.2s; }
-        header a:hover { color: #fff; }
-        .terminal-wrap {
+        header { margin: 12px 12px 0; padding: 12px 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+        header a { color: var(--text); text-decoration: none; font-size: 14px; padding: 8px 12px; border-radius: 12px; border: 1px solid transparent; background: rgba(255,255,255,.05); }
+        header a:hover { border-color: var(--border); }
+        .screen-wrap {
             flex: 1;
             margin: 12px;
-            background: rgba(0,0,0,0.6);
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 20px;
             padding: 16px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
         }
-        #output {
+        .panel-title {
+            font-size: 11px;
+            letter-spacing: 1px;
+            color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        #video-container {
             flex: 1;
-            background: transparent;
-            color: #ccc;
-            padding: 8px;
-            overflow-y: auto;
-            font-size: 14px;
-            line-height: 1.6;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            scrollbar-width: thin;
-            scrollbar-color: #444 #1a1a1a;
-        }
-        .input-line {
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,.14);
+            background: rgba(0,0,0,.55);
+            overflow: hidden;
             display: flex;
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 10px 12px;
-            margin-top: 10px;
+            align-items: center;
+            justify-content: center;
         }
-        .prompt { color: #aaa; margin-right: 8px; user-select: none; }
-        #command {
-            flex: 1;
-            background: transparent;
-            border: none;
-            outline: none;
-            color: #fff;
-            font-family: inherit;
-            font-size: 15px;
-            caret-color: #fff;
-        }
+        #video-feed { max-width: 100%; max-height: 100%; object-fit: contain; }
     </style>
 </head>
 <body>
-<header>
+<header class="glass">
     <a href="/">R2</a>
     <a href="/screen">Экран</a>
     <a href="/terminal">CMD</a>
     <a href="/logs">Логи</a>
 </header>
-<div class="terminal-wrap">
-    <div id="output"></div>
-    <div class="input-line">
-        <span class="prompt">$</span>
-        <input type="text" id="command" placeholder="Введите команду..." autofocus>
+<div class="screen-wrap glass">
+    <div class="panel-title">Камера</div>
+    <div id="video-container">
+        <img id="video-feed" src="/video_feed" alt="Видео поток">
     </div>
 </div>
-<script>
-    const outputDiv = document.getElementById('output');
-    const commandInput = document.getElementById('command');
-    let lastOutput = '', fetchInProgress = false, sendInProgress = false;
-
-    function stripAnsi(s) {
-        return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x1b\\/g,'').replace(/\x07/g,'');
-    }
-    async function fetchOutput() {
-        if(fetchInProgress) return;
-        fetchInProgress = true;
-        try {
-            const r = await fetch('/api/cmd/output');
-            const d = await r.json();
-            if(d.output !== lastOutput) {
-                outputDiv.textContent = stripAnsi(d.output);
-                outputDiv.scrollTop = outputDiv.scrollHeight;
-                lastOutput = d.output;
-            }
-        } catch(e) {} finally { fetchInProgress = false; }
-    }
-    async function sendCommand(cmd) {
-        if(sendInProgress) return;
-        sendInProgress = true;
-        try {
-            await fetch('/api/cmd/send', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd}) });
-            await fetchOutput();
-        } catch(e) {} finally { sendInProgress = false; }
-    }
-    commandInput.addEventListener('keydown', (e) => {
-        if(e.key === 'Enter') {
-            const cmd = commandInput.value;
-            if(cmd.trim() !== '') {
-                outputDiv.textContent += `\n$ ${cmd}`;
-                sendCommand(cmd);
-                commandInput.value = '';
-            }
-        }
-    });
-    fetchOutput();
-    setInterval(fetchOutput, 200);
-</script>
 </body>
 </html>

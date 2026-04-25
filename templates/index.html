@@ -5,196 +5,180 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>R2 — Главная</title>
     <style>
+        :root {
+            --bg: #05070d;
+            --panel: rgba(155, 175, 255, 0.1);
+            --panel-strong: rgba(170, 190, 255, 0.16);
+            --text: #ecf0ff;
+            --muted: #aab5d6;
+            --border: rgba(210, 220, 255, 0.22);
+            --shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: radial-gradient(circle at 20% 30%, #1a1a1a, #0a0a0a);
-            color: #e0e0e0;
-            font-family: 'Segoe UI', system-ui, sans-serif;
-            height: 100vh;
+            min-height: 100vh;
+            color: var(--text);
+            font-family: "Segoe UI", system-ui, sans-serif;
+            background:
+                radial-gradient(circle at 20% 15%, rgba(120, 140, 255, 0.22), transparent 42%),
+                radial-gradient(circle at 82% 84%, rgba(96, 208, 255, 0.2), transparent 45%),
+                linear-gradient(145deg, #04060b 0%, #0d1220 40%, #0a101d 100%);
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            backdrop-filter: blur(10px);
+        }
+        .glass {
+            background: linear-gradient(140deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04));
+            border: 1px solid var(--border);
+            backdrop-filter: blur(26px) saturate(150%);
+            -webkit-backdrop-filter: blur(26px) saturate(150%);
+            border-radius: 20px;
+            box-shadow: var(--shadow);
         }
         header {
-            background: rgba(20, 20, 20, 0.7);
-            backdrop-filter: blur(20px);
-            padding: 12px 24px;
+            margin: 12px;
+            padding: 12px 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid rgba(255,255,255,0.15);
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            gap: 16px;
         }
-        header .nav-links a {
-            color: #ccc;
+        .nav-links { display: flex; gap: 10px; flex-wrap: wrap; }
+        .nav-links a {
+            color: var(--text);
             text-decoration: none;
-            font-size: 18px;
-            margin: 0 16px;
-            transition: color 0.2s;
+            font-size: 14px;
+            padding: 8px 12px;
+            border-radius: 12px;
+            border: 1px solid transparent;
+            background: rgba(255, 255, 255, 0.04);
+            transition: all 0.18s ease;
         }
-        header .nav-links a:hover { color: #fff; }
-        .stats {
-            display: flex;
-            gap: 20px;
-            font-size: 13px;
-            background: rgba(255,255,255,0.05);
-            padding: 6px 18px;
-            border-radius: 20px;
-            backdrop-filter: blur(10px);
+        .nav-links a:hover { border-color: var(--border); background: rgba(255, 255, 255, 0.11); }
+        .stats { display: flex; gap: 12px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+        .stats div {
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 999px;
+            padding: 6px 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
-        .stats span { color: #aaa; font-weight: 500; }
-        .container { flex: 1; display: flex; overflow: hidden; padding: 10px; gap: 10px; }
+        .stats span { color: var(--text); }
+        .container {
+            flex: 1;
+            padding: 0 12px 12px;
+            display: grid;
+            grid-template-columns: minmax(260px, 20vw) 1fr minmax(300px, 24vw);
+            gap: 12px;
+            min-height: 0;
+        }
         .panel {
-            background: rgba(20, 20, 20, 0.65);
-            backdrop-filter: blur(25px);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 24px;
-            padding: 16px;
+            min-height: 0;
+            padding: 14px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
         }
-        .panel-left { width: 22%; }
-        .panel-center { width: 54%; display: flex; flex-direction: column; }
-        .panel-right { width: 24%; overflow-y: auto; }
-
         .panel-title {
-            font-size: 13px;
+            font-size: 11px;
+            letter-spacing: 1px;
+            color: var(--muted);
             text-transform: uppercase;
-            letter-spacing: 2px;
-            color: #aaa;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 10px;
         }
-        #app-logs {
+        .terminal-box {
             flex: 1;
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(2, 6, 15, 0.55);
+            padding: 10px;
             overflow-y: auto;
             font-size: 11px;
-            line-height: 1.6;
+            line-height: 1.5;
             white-space: pre-wrap;
-            word-wrap: break-word;
-            color: #b0b0b0;
-            font-family: 'JetBrains Mono', 'Fira Code', monospace;
-            scrollbar-width: thin;
-            scrollbar-color: #444 #1a1a1a;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+            color: #bfc8e5;
         }
-        #app-logs::-webkit-scrollbar { width: 6px; }
-        #app-logs::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 8px; }
-        #app-logs::-webkit-scrollbar-thumb { background: #444; border-radius: 8px; }
-
         .view-switch {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 12px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
+            display: inline-flex;
+            gap: 6px;
+            margin-bottom: 10px;
             padding: 4px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background: rgba(255, 255, 255, 0.05);
             align-self: flex-start;
         }
-        .view-switch label {
-            padding: 8px 18px;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 13px;
-            color: #999;
-            transition: all 0.2s;
-        }
         .view-switch input[type="radio"] { display: none; }
-        .view-switch input[type="radio"]:checked + label {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        .view-switch label {
+            cursor: pointer;
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-size: 12px;
+            color: var(--muted);
+            transition: 0.2s ease;
         }
-
+        .view-switch input[type="radio"]:checked + label {
+            color: var(--text);
+            background: linear-gradient(120deg, rgba(167, 186, 255, 0.34), rgba(145, 232, 255, 0.2));
+        }
         #video-container, #pointcloud-container {
             flex: 1;
             position: relative;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(0, 0, 0, 0.55);
+            overflow: hidden;
             display: flex;
             justify-content: center;
             align-items: center;
-            border-radius: 16px;
-            overflow: hidden;
-            background: #000;
+            min-height: 320px;
         }
-        #video-feed {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-            border-radius: 16px;
+        #video-feed { max-width: 100%; max-height: 100%; object-fit: contain; }
+        #pointcloud-canvas { width: 100% !important; height: 100% !important; display: block; }
+        #controls { margin-top: 10px; overflow-y: auto; max-height: 34%; padding-right: 4px; }
+        .control-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .control-row label { font-size: 12px; color: var(--muted); }
+        .control-row input[type="checkbox"], .control-row select { accent-color: #bed2ff; }
+        .control-row input[type="range"] { width: 58%; accent-color: #c8d9ff; }
+        .control-group {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
         }
-        #pointcloud-canvas {
-            width: 100% !important;
-            height: 100% !important;
-            display: block;
-        }
-
-        #controls {
-            padding: 12px 0 0 0;
-            max-height: 35%;
-            overflow-y: auto;
-        }
-        .control-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
-        }
-        .control-row label { color: #ccc; font-size: 12px; }
-        .control-row input[type="checkbox"], .control-row select {
-            accent-color: #fff;
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 6px;
-            padding: 2px 6px;
-        }
-        .control-row input[type="range"] { width: 60%; accent-color: #aaa; }
-        .control-group { margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); }
-
-        #terminal-output {
-            flex: 1;
-            overflow-y: auto;
-            font-size: 11px;
-            background: rgba(0,0,0,0.4);
-            border-radius: 12px;
-            padding: 10px;
-            margin-bottom: 8px;
-            min-height: 180px;
-            white-space: pre-wrap;
-            font-family: monospace;
-            color: #ccc;
-        }
-        #terminal-input-line { display: flex; align-items: center; }
-        #terminal-prompt { color: #aaa; margin-right: 6px; }
+        #terminal-input-line { display: flex; align-items: center; margin-top: 8px; }
+        #terminal-prompt { color: var(--muted); margin-right: 6px; font-family: monospace; }
         #terminal-command {
-            flex: 1;
-            background: transparent;
-            border: none;
+            width: 100%;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-family: "JetBrains Mono", monospace;
             outline: none;
-            color: #fff;
-            font-family: monospace;
-            font-size: 13px;
         }
-        .servo-controls { margin-top: 16px; }
-        .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-        .servo-row label { width: 90px; font-size: 11px; color: #aaa; }
-        .servo-row input[type="range"] { flex: 1; accent-color: #aaa; }
-        .servo-row span { width: 40px; text-align: center; font-size: 11px; color: #ccc; }
+        .servo-controls { margin-top: 12px; }
+        .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+        .servo-row label { width: 95px; font-size: 11px; color: var(--muted); }
+        .servo-row input[type="range"] { flex: 1; accent-color: #c8d9ff; }
+        .servo-row span { width: 42px; text-align: right; font-size: 11px; color: var(--text); }
         .depth-tooltip {
             position: absolute;
-            background: rgba(0,0,0,0.8);
-            color: #fff;
-            padding: 4px 10px;
+            background: rgba(10, 16, 28, 0.9);
+            color: var(--text);
+            border: 1px solid rgba(198, 214, 255, 0.4);
             border-radius: 8px;
+            padding: 4px 8px;
             font-size: 12px;
             pointer-events: none;
-            border: 1px solid rgba(255,255,255,0.3);
             z-index: 1000;
         }
         .hidden { display: none; }
+        @media (max-width: 1300px) {
+            .container { grid-template-columns: 1fr; overflow-y: auto; }
+            .panel { min-height: 360px; }
+            #controls { max-height: none; }
+        }
     </style>
 </head>
 <body>
@@ -210,17 +194,16 @@
     </div>
 </header>
 <div class="container">
-    <!-- Левая панель: логи приложения -->
-    <div class="panel panel-left">
-        <div class="panel-title">Консоль приложения</div>
-        <div id="app-logs"></div>
+    <div class="panel glass panel-left">
+        <div class="panel-title">Консоль скрипта</div>
+        <div id="script-console" class="terminal-box"></div>
     </div>
 
     <!-- Центральная панель: видео / облако точек + контролы -->
-    <div class="panel panel-center">
+    <div class="panel glass panel-center">
         <div class="view-switch" id="viewSwitch">
             <input type="radio" name="viewMode" id="viewVideo" value="video" checked>
-            <label for="viewVideo">Камера</label>
+            <label for="viewVideo">Камера / Глубина</label>
             <input type="radio" name="viewMode" id="viewCloud" value="pointcloud">
             <label for="viewCloud">Облако точек</label>
         </div>
@@ -268,9 +251,9 @@
     </div>
 
     <!-- Правая панель: терминал + сервоприводы -->
-    <div class="panel panel-right">
+    <div class="panel glass panel-right">
         <div class="panel-title">Терминал</div>
-        <div id="terminal-output"></div>
+        <div id="terminal-output" class="terminal-box"></div>
         <div id="terminal-input-line"><span id="terminal-prompt">$</span><input type="text" id="terminal-command" placeholder="Введите команду..."></div>
         <div class="panel-title" style="margin-top:20px;">Сервоприводы</div>
         <div class="servo-controls">
@@ -440,9 +423,6 @@
             document.getElementById('ramStat').innerText = d.ram;
             document.getElementById('tempStat').innerText = d.temp;
             document.getElementById('fpsStat').innerText = d.fps;
-            // Отображаем логи приложения
-            document.getElementById('app-logs').innerHTML = d.app_logs.map(l => `<div>${escapeHtml(l)}</div>`).join('');
-            document.getElementById('app-logs').scrollTop = document.getElementById('app-logs').scrollHeight;
         } catch(e) { console.error(e); }
     }
     function escapeHtml(s) { return s.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]); }
@@ -467,13 +447,30 @@
     });
     video.addEventListener('mouseleave', ()=>tooltip.classList.add('hidden'));
 
-    // Терминал
-    const terminalOutput = document.getElementById('terminal-output'), terminalCommand = document.getElementById('terminal-command');
+    // Терминал и поток консоли скрипта
+    const terminalOutput = document.getElementById('terminal-output');
+    const scriptConsole = document.getElementById('script-console');
+    const terminalCommand = document.getElementById('terminal-command');
     let lastOutput='', fetchInProgress=false, sendInProgress=false;
     function stripAnsi(s){ return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x1b\\/g,'').replace(/\x07/g,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n'); }
-    async function fetchTerminalOutput(){ if(fetchInProgress) return; fetchInProgress=true; try{ const r=await fetch('/api/cmd/output'); const d=await r.json(); if(d.output!==lastOutput){ terminalOutput.innerHTML = stripAnsi(d.output); terminalOutput.scrollTop = terminalOutput.scrollHeight; lastOutput=d.output; } }catch(e){} finally{ fetchInProgress=false; } }
+    async function fetchTerminalOutput(){
+        if(fetchInProgress) return;
+        fetchInProgress=true;
+        try{
+            const r=await fetch('/api/cmd/output');
+            const d=await r.json();
+            if(d.output!==lastOutput){
+                const clean = stripAnsi(d.output);
+                terminalOutput.textContent = clean;
+                scriptConsole.textContent = clean;
+                terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                scriptConsole.scrollTop = scriptConsole.scrollHeight;
+                lastOutput=d.output;
+            }
+        }catch(e){} finally{ fetchInProgress=false; }
+    }
     async function sendTerminalCommand(cmd){ if(sendInProgress) return; sendInProgress=true; try{ await fetch('/api/cmd/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})}); await fetchTerminalOutput(); }catch(e){} finally{ sendInProgress=false; } }
-    terminalCommand.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ const cmd=terminalCommand.value; if(cmd.trim()!==''){ terminalOutput.innerHTML += `$ ${cmd}\n`; lastOutput += `$ ${cmd}\n`; sendTerminalCommand(cmd); terminalCommand.value=''; } } });
+    terminalCommand.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ const cmd=terminalCommand.value; if(cmd.trim()!==''){ terminalOutput.textContent += `$ ${cmd}\n`; lastOutput += `$ ${cmd}\n`; sendTerminalCommand(cmd); terminalCommand.value=''; } } });
     fetchTerminalOutput(); setInterval(fetchTerminalOutput,200);
 
     // Параметры камеры

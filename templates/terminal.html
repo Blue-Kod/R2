@@ -3,80 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 - Терминал</title>
+    <title>R2 — Терминал</title>
     <style>
+        :root { --text:#ecf0ff; --muted:#aab5d6; --border:rgba(210,220,255,.22); }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: #0a0a0a;
-            color: #e0e0e0;
-            font-family: 'JetBrains Mono', 'Fira Code', monospace;
-            height: 100vh;
+            min-height: 100vh;
+            color: var(--text);
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+            background: radial-gradient(circle at 20% 15%, rgba(120,140,255,.22), transparent 42%), radial-gradient(circle at 82% 84%, rgba(96,208,255,.2), transparent 45%), linear-gradient(145deg, #04060b 0%, #0d1220 40%, #0a101d 100%);
             display: flex;
             flex-direction: column;
         }
-        header {
-            background: rgba(20,20,20,0.8);
-            backdrop-filter: blur(10px);
-            padding: 12px 20px;
-            text-align: center;
-            border-bottom: 1px solid #2c2c2c;
+        .glass {
+            background: linear-gradient(140deg, rgba(255,255,255,.16), rgba(255,255,255,.04));
+            border: 1px solid var(--border);
+            backdrop-filter: blur(26px) saturate(150%);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,.4);
         }
-        header a {
-            color: #ccc;
-            text-decoration: none;
-            font-size: 18px;
-            margin: 0 20px;
-            transition: 0.2s;
-        }
-        header a:hover { color: white; }
+        header { margin: 12px 12px 0; padding: 12px 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+        header a { color: var(--text); text-decoration: none; font-size: 14px; padding: 8px 12px; border-radius: 12px; border: 1px solid transparent; background: rgba(255,255,255,.05); }
+        header a:hover { border-color: var(--border); }
+        .terminal-wrap { flex: 1; margin: 12px; padding: 16px; display: flex; flex-direction: column; min-height: 0; }
         #output {
             flex: 1;
-            padding: 20px;
+            padding: 12px;
             overflow-y: auto;
             font-size: 13px;
             line-height: 1.5;
             white-space: pre-wrap;
-            background: #010101;
+            background: rgba(2,6,15,.52);
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,.12);
+            color: #c1cae6;
+            min-height: 0;
         }
-        .input-line {
-            display: flex;
-            background: #111;
-            border-top: 1px solid #2c2c2c;
-            padding: 12px 20px;
-        }
-        .prompt {
-            color: white;
-            font-weight: bold;
-            margin-right: 12px;
-            font-size: 16px;
-        }
-        #command {
-            flex: 1;
-            background: transparent;
-            border: none;
-            outline: none;
-            color: #f0f0f0;
-            font-family: monospace;
-            font-size: 16px;
-        }
+        .input-line { display: flex; background: rgba(255,255,255,.08); border-radius: 10px; border: 1px solid rgba(255,255,255,.12); padding: 10px; margin-top: 10px; }
+        .prompt { color: var(--muted); margin-right: 8px; user-select: none; }
+        #command { flex: 1; background: transparent; border: none; outline: none; color: var(--text); font-family: inherit; font-size: 14px; }
     </style>
 </head>
 <body>
-<header>
+<header class="glass">
     <a href="/">R2</a><a href="/screen">Экран</a><a href="/terminal">CMD</a><a href="/logs">Логи</a>
 </header>
-<div id="output"></div>
-<div class="input-line">
-    <span class="prompt">$</span>
-    <input type="text" id="command" placeholder="введите команду..." autofocus>
+<div class="terminal-wrap glass">
+    <div id="output"></div>
+    <div class="input-line">
+        <span class="prompt">$</span>
+        <input type="text" id="command" placeholder="введите команду..." autofocus>
+    </div>
 </div>
 <script>
     const outputDiv = document.getElementById('output');
     const commandInput = document.getElementById('command');
     let lastOutput = '';
     let fetchInProgress = false;
-    function stripAnsi(s) { return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x07/g,''); }
-    function setOutput(text) { outputDiv.innerHTML = stripAnsi(text); outputDiv.scrollTop = outputDiv.scrollHeight; }
+    function stripAnsi(s) { return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x1b\\/g,'').replace(/\x07/g,''); }
+    function setOutput(text) { outputDiv.textContent = stripAnsi(text); outputDiv.scrollTop = outputDiv.scrollHeight; }
     async function fetchOutput() {
         if (fetchInProgress) return;
         fetchInProgress = true;
@@ -84,10 +69,10 @@
             const res = await fetch('/api/cmd/output');
             const data = await res.json();
             if (data.output !== lastOutput) { setOutput(data.output); lastOutput = data.output; }
-        } catch(e) {} finally { fetchInProgress = false; }
+        } catch (e) {} finally { fetchInProgress = false; }
     }
     async function sendCommand(cmd) {
-        await fetch('/api/cmd/send', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd}) });
+        await fetch('/api/cmd/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: cmd }) });
         await fetchOutput();
     }
     commandInput.addEventListener('keydown', (e) => {
