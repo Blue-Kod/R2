@@ -22,6 +22,7 @@ import time
 import pwd
 import socket
 import json
+import shlex
 from pathlib import Path
 
 # Константы
@@ -390,7 +391,6 @@ def setup_autostart_linux(target_user):
         log_message("[!] Не найден подходящий терминал.")
         return False
 
-    import shlex
     cmd_str = " ".join(shlex.quote(arg) for arg in terminal_cmd)
 
     display = os.environ.get('DISPLAY', ':0')
@@ -443,13 +443,49 @@ def is_autostart_installed(target_user):
     return os.path.exists(desktop_file)
 
 def start_main():
-    main_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), MAIN_SCRIPT)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    main_path = os.path.join(script_dir, MAIN_SCRIPT)
     if not os.path.exists(main_path):
         log_message(f"[!] {MAIN_SCRIPT} не найден.")
         return False
     try:
         log_message(f"[L] Запуск {MAIN_SCRIPT}...")
-        subprocess.Popen([sys.executable, main_path])
+
+        system_name = platform.system()
+        if system_name == "Windows":
+            # Явно создаём новое окно консоли.
+            subprocess.Popen(
+                [sys.executable, main_path],
+                cwd=script_dir,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+            return True
+
+        if system_name == "Linux":
+            # Пытаемся запустить main.py в новом терминале GUI.
+            python_cmd = f"{shlex.quote(sys.executable)} {shlex.quote(main_path)}"
+            hold_cmd = 'echo; echo "main.py finished. Press any key to close."; read'
+            full_cmd = f"{python_cmd}; {hold_cmd}"
+
+            if shutil.which("terminator"):
+                subprocess.Popen(["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
+                return True
+            if shutil.which("gnome-terminal"):
+                subprocess.Popen(["gnome-terminal", "--full-screen", "--", "bash", "-c", full_cmd], cwd=script_dir)
+                return True
+            if shutil.which("x-terminal-emulator"):
+                subprocess.Popen(["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
+                return True
+            if shutil.which("xterm"):
+                subprocess.Popen(["xterm", "-fullscreen", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
+                return True
+
+            log_message("[!] Терминал GUI не найден, запускаю main.py в текущем процессе.")
+            subprocess.Popen([sys.executable, main_path], cwd=script_dir)
+            return True
+
+        # Для остальных ОС используем обычный запуск как fallback.
+        subprocess.Popen([sys.executable, main_path], cwd=script_dir)
         return True
     except Exception as e:
         log_message(f"[!] Ошибка запуска {MAIN_SCRIPT}: {e}")
