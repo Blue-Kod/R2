@@ -112,12 +112,12 @@
                 <div class="control-row">
                     <label>Основной глаз:</label>
                     <div>
-                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateParams()"> <label for="eyeLeft">Левый</label>
-                        <input type="radio" name="mainEye" id="eyeRight" onchange="updateParams()"> <label for="eyeRight">Правый</label>
+                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="sendCameraParams()"> <label for="eyeLeft">Левый</label>
+                        <input type="radio" name="mainEye" id="eyeRight" onchange="sendCameraParams()"> <label for="eyeRight">Правый</label>
                     </div>
                 </div>
-                <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked onchange="updateParams()"></div>
-                <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()"></div>
+                <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked onchange="sendCameraParams()"></div>
+                <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="sendCameraParams()"></div>
                 <div class="control-group">
                     <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled" onchange="sendCameraParams()"></div>
                     <div class="control-row"><label>WLS фильтр:</label><input type="checkbox" id="wlsEnabled" onchange="sendCameraParams()"></div>
@@ -274,10 +274,10 @@
                 positions[i * 3 + 1] = -p.y / 100.0;
                 positions[i * 3 + 2] = p.z / 100.0;
                 
-                // Set all points to blue (RGB: 0, 0, 255)
-                colors[i * 3] = 0.0;      // R
-                colors[i * 3 + 1] = 0.0;  // G
-                colors[i * 3 + 2] = 1.0;  // B
+                // Use actual colors from the camera feed (server returns r,g,b as 0-255)
+                colors[i * 3] = p.r / 255.0;      // R
+                colors[i * 3 + 1] = p.g / 255.0;  // G
+                colors[i * 3 + 2] = p.b / 255.0;  // B
             });
             
             pointsMesh.geometry.dispose();
@@ -339,9 +339,6 @@
     const eyeLeft = document.getElementById('eyeLeft');
     const showDepth = document.getElementById('showDepth');
     const depthAlpha = document.getElementById('depthAlpha');
-    function updateParams() {
-        fetch('/update', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0, show_left: eyeLeft.checked, num_disp:5 }) }).catch(() => {});
-    }
 
     const video = document.getElementById('video-feed');
     const tooltip = document.getElementById('depth-tooltip');
@@ -443,7 +440,9 @@
             tracking_scale_x: parseInt(trackingScaleX.value),
             tracking_scale_y: parseInt(trackingScaleY.value),
             tracking_offset_x: parseInt(trackingOffsetX.value),
-            tracking_offset_y: parseInt(trackingOffsetY.value)
+            tracking_offset_y: parseInt(trackingOffsetY.value),
+            alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) / 100.0 : 0,
+            show_left: eyeLeft.checked
         };
         try{
             await fetch('/api/camera/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)});
