@@ -30,11 +30,12 @@ REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
 REQUIREMENTS_APT = [
-    "python3-pyqt5",
-    "python3-pyqt5.qtwebengine",
-    "python3-pyqt5.qtwebchannel",
-    "libqt5webengine5-dev",
-    "unclutter-xfixes",  # Для скрытия курсора
+    "python3-pygame",
+    "libsdl2-2.0-0",
+    "libsdl2-image-2.0-0",
+    "libsdl2-ttf-2.0-0",
+    "unclutter-xfixes",
+    "libportaudio2"
 ]
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"

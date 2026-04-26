@@ -7,5 +7,5 @@ opencv-contrib-python
 numpy
 PCA9685-smbus2
 mediapipe
-PyQt5
-PyQtWebEngine
+pygame
+python-dotenv
