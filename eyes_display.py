@@ -3,18 +3,6 @@
 """
 Robot Eye Display using Pygame.
 Native rendering without HTML/CSS - all drawn with Pygame primitives.
-
-INTEGRATION WITH MAIN APPLICATION:
-
-    from eyes_display import RobotEyes
-
-    eyes = RobotEyes()
-    eyes.start()  # starts the display in a separate thread
-    # Later, call bridge methods from any thread:
-    eyes.update_emote("excited")
-    eyes.update_eyes_position(0.5, -0.3)
-    # To stop:
-    eyes.stop()
 """
 
 import sys
@@ -24,7 +12,11 @@ import socket
 import time
 import random
 
-import pygame
+try:
+    import pygame
+except ImportError:
+    print("Pygame not installed. Install with: pip install pygame")
+    sys.exit(1)
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +26,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Emotion definitions - each emotion defines how eyes and brows look
+# Emotion configurations
 EMOTION_CONFIG = {
     "normal": {
         "eye_scale_y": 1.5,
@@ -205,7 +197,7 @@ class EyeState:
 
 class RobotEyes:
     """Main robot eyes display using Pygame."""
-
+    
     def __init__(self):
         self.state = EyeState()
         self.thread = None
@@ -244,14 +236,17 @@ class RobotEyes:
 
         log.info("[RobotEyes] Pygame initialized: %dx%d", screen_width, screen_height)
 
-        eye_size = int(screen_width * 0.31 * 0.5)
-        eye_spacing = screen_width * 0.18
+        # Eye dimensions
+        eye_size = int(min(screen_width, screen_height) * 0.15)
+        eye_spacing = eye_size * 2.5
 
+        # Fonts
         font = pygame.font.SysFont("Arial", 18)
         menu_font = pygame.font.SysFont("Arial", 24)
 
         running = True
         while running and self.state.is_running():
+            # Handle events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -261,46 +256,57 @@ class RobotEyes:
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_x, mouse_y = event.pos
                     if self.state.is_menu_visible():
+                        # Check if exit button clicked
                         if self._exit_btn_rect and self._exit_btn_rect.collidepoint(mouse_x, mouse_y):
                             log.info("[RobotEyes] Exit button clicked")
                             running = False
                             self.state.set_running(False)
+                        # Check if clicked outside menu card to close
                         elif self._menu_card_rect and not self._menu_card_rect.collidepoint(mouse_x, mouse_y):
                             self.state.toggle_menu()
                     else:
+                        # Bottom zone click (15% from bottom)
                         if mouse_y > screen_height * 0.85:
                             self.state.toggle_menu()
 
+            # Update state
             self.state.update_interpolation()
             self.state.update_blink()
 
+            # Procedural blink
             now = time.time()
             if now >= self._next_blink:
                 self.state.trigger_blink()
                 self._next_blink = now + random.uniform(2.5, 4.5)
                 if random.random() > 0.82:
-                    self._next_blink += 0.14
+                    self._next_blink += 0.14  # Double blink
 
+            # Clear screen
             screen.fill((0, 0, 0))
 
+            # Get current state
             emote = self.state.get_emote()
             current_x, current_y = self.state.get_position()
             blink_scale = self.state.get_blink_scale()
             config = EMOTION_CONFIG.get(emote, EMOTION_CONFIG["normal"])
 
+            # Calculate eye positions with movement
             offset_x = current_x * (screen_width * 0.10)
             offset_y = current_y * (screen_height * 0.07)
 
             face_center_x = screen_width // 2
             face_center_y = screen_height // 2
 
+            # Draw eyes
             self._draw_eyes(screen, face_center_x, face_center_y, offset_x, offset_y,
                           eye_size, eye_spacing, blink_scale, config)
 
+            # Draw brows if visible
             if config.get("brow_opacity", 0) > 0:
                 self._draw_brows(screen, face_center_x, face_center_y, offset_x, offset_y,
                                eye_size, eye_spacing, config)
 
+            # Draw menu if visible
             if self.state.is_menu_visible():
                 self._draw_menu(screen, screen_width, screen_height, menu_font)
 
@@ -317,29 +323,34 @@ class RobotEyes:
         eye_scale = config.get("eye_scale", 1.0)
         eye_color = config.get("eye_color", (255, 255, 255))
         border_color = config.get("eye_border")
-        border_width = config.get("eye_border_width", 0)
+        border_width = int(config.get("eye_border_width", 0))
         glow = config.get("glow_intensity", 0)
 
-        left_x = center_x - spacing - eye_size * eye_scale / 2 + offset_x
-        left_y = center_y - eye_size * eye_scale_y / 2 + offset_y
+        # Left eye
+        left_x = center_x - spacing - (eye_size * eye_scale) / 2 + offset_x
+        left_y = center_y - (eye_size * eye_scale_y) / 2 + offset_y
         left_rect = pygame.Rect(left_x, left_y, eye_size * eye_scale, eye_size * eye_scale_y)
 
-        right_x = center_x + spacing - eye_size * eye_scale / 2 + offset_x
-        right_y = center_y - eye_size * eye_scale_y / 2 + offset_y
+        # Right eye
+        right_x = center_x + spacing - (eye_size * eye_scale) / 2 + offset_x
+        right_y = center_y - (eye_size * eye_scale_y) / 2 + offset_y
         right_rect = pygame.Rect(right_x, right_y, eye_size * eye_scale, eye_size * eye_scale_y)
 
+        # Draw glow effect for excited emotion
         if glow > 0:
             glow_surf = pygame.Surface((eye_size * 3, eye_size * 3), pygame.SRCALPHA)
             glow_alpha = int(255 * glow)
             glow_color = (eye_color[0], eye_color[1], eye_color[2], glow_alpha)
             pygame.draw.ellipse(glow_surf, glow_color, glow_surf.get_rect())
-            screen.blit(glow_surf, (left_rect.centerx - eye_size * 1.5,
-                                   left_rect.centery - eye_size * 1.5))
+            screen.blit(glow_surf, (int(left_rect.centerx - eye_size * 1.5),
+                                   int(left_rect.centery - eye_size * 1.5)))
 
+        # Draw eyes (left and right)
         for rect, rotation in [(left_rect, config.get("eye_rotation", 0)),
                                (right_rect, config.get("eye_right_rotation",
                                                        config.get("eye_rotation", 0)))]:
             if rotation != 0:
+                # Create surface for rotated eye
                 surf = pygame.Surface((int(rect.width), int(rect.height)), pygame.SRCALPHA)
                 pygame.draw.ellipse(surf, eye_color, (0, 0, int(rect.width), int(rect.height)))
                 if border_color:
@@ -352,7 +363,7 @@ class RobotEyes:
                     pygame.draw.ellipse(screen, border_color, rect, border_width)
 
     def _draw_brows(self, screen, center_x, center_y, offset_x, offset_y,
-                   eye_size, spacing, config):
+                    eye_size, spacing, config):
         """Draw eyebrows."""
         brow_width = int(eye_size * 0.97)
         brow_height = 12
@@ -382,27 +393,33 @@ class RobotEyes:
 
     def _draw_menu(self, screen, width, height, font):
         """Draw system menu overlay."""
+        # Overlay background
         overlay = pygame.Surface((width, height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 183))
+        overlay.fill((0, 0, 0, 183))  # 72% opacity
         screen.blit(overlay, (0, 0))
 
+        # Menu card
         card_width = min(int(width * 0.88), 380)
         card_height = 140
         card_x = (width - card_width) // 2
         card_y = (height - card_height) // 2
 
+        # Store card rect for click detection
         self._menu_card_rect = pygame.Rect(card_x, card_y, card_width, card_height)
 
         pygame.draw.rect(screen, (16, 16, 16), self._menu_card_rect, border_radius=14)
         pygame.draw.rect(screen, (59, 59, 59), self._menu_card_rect, width=1, border_radius=14)
 
+        # Title
         title = font.render("System", True, (189, 189, 189))
         screen.blit(title, (card_x + 16, card_y + 16))
 
+        # IP address
         ip_text = self._get_ip()
         ip_surface = font.render("IP: " + ip_text, True, (255, 255, 255))
         screen.blit(ip_surface, (card_x + 16, card_y + 42))
 
+        # Exit button
         btn_width = (card_width - 40) // 2
         btn_height = 40
         btn_x = card_x + 16
@@ -432,6 +449,49 @@ class RobotEyes:
         log.info("[RobotEyes] Display stopped")
 
 
+class EyeAPI:
+    """API bridge for backward compatibility with EmoteService."""
+    
+    def __init__(self, robot_eyes):
+        self._robot_eyes = robot_eyes
+    
+    def update_emote(self, name):
+        """Update emote - called by EmoteService."""
+        self._robot_eyes.update_emote(name)
+    
+    def update_eyes_position(self, x, y):
+        """Update eyes position - called by EmoteService."""
+        self._robot_eyes.update_eyes_position(x, y)
+
+
+class EyeDisplay:
+    """Backward-compatible wrapper for RobotEyes.
+    Used by r2_app/high_level.py for integration.
+    """
+    
+    def __init__(self):
+        self._robot_eyes = RobotEyes()
+        self._api = EyeAPI(self._robot_eyes)
+    
+    @property
+    def api(self):
+        """Return API bridge for EmoteService."""
+        return self._api
+    
+    def start(self):
+        """Start the display."""
+        self._robot_eyes.start()
+    
+    def stop(self):
+        """Stop the display."""
+        self._robot_eyes.stop()
+
+
+def optimize_for_arm():
+    """Dummy function for backward compatibility with r2_app/high_level.py."""
+    pass
+
+
 def main():
     """Main entry point for standalone testing."""
     log.info("=" * 40)
@@ -441,6 +501,7 @@ def main():
     eyes = RobotEyes()
     eyes.start()
 
+    # Keep main thread alive for testing
     try:
         while eyes.state.is_running():
             time.sleep(0.5)
