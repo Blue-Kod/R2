@@ -71,6 +71,7 @@ Example systemd service:
 
 import os
 import sys
+import threading
 import time
 import signal
 import logging
