@@ -521,22 +521,25 @@ def start_main():
             return True
 
         if system_name == "Linux":
+            env = os.environ.copy()
+            env["DISPLAY"] = ":0"
+            env["XAUTHORITY"] = "/home/orangepi/.Xauthority"
+            env["PYTHONPATH"] = script_dir
             # Пытаемся запустить main.py в новом терминале GUI.
             python_cmd = f"sudo python3 {shlex.quote(main_path)}"
             hold_cmd = 'echo; echo "main.py finished. Press any key to close."; read'
             full_cmd = f"{python_cmd}; {hold_cmd}"
-
             if shutil.which("terminator"):
-                subprocess.Popen(["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
+                subprocess.Popen(["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
                 return True
             if shutil.which("gnome-terminal"):
-                subprocess.Popen(["gnome-terminal", "--full-screen", "--", "bash", "-c", full_cmd], cwd=script_dir)
+                subprocess.Popen(["gnome-terminal", "--full-screen", "--", "bash", "-c", full_cmd], cwd=script_dir, env=env)
                 return True
             if shutil.which("x-terminal-emulator"):
-                subprocess.Popen(["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
+                subprocess.Popen(["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
                 return True
             if shutil.which("xterm"):
-                subprocess.Popen(["xterm", "-fullscreen", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
+                subprocess.Popen(["xterm", "-fullscreen", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
                 return True
 
             log_message("[!] Терминал GUI не найден, запускаю main.py в текущем процессе.")
