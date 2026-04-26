@@ -114,7 +114,7 @@ def apply_self_update(new_launcher_path):
         st = os.stat(current_script)
         os.chmod(current_script, st.st_mode)
         log_message("[L] Лаунчер успешно обновлён. Перезапускаю...")
-        os.execv(sys.executable, [sys.executable, current_script] + sys.argv[1:])
+        os.execv("python3", ["python3", current_script] + sys.argv[1:])
     except Exception as e:
         log_message(f"[!] Ошибка при самообновлении: {e}")
         try:
@@ -241,59 +241,6 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         log_message(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
 
-def get_outdated_packages():
-    """Возвращает множество имён пакетов, которые устарели (согласно pip)."""
-    try:
-        # Используем --format=json для быстрого парсинга
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "list", "--outdated", "--format=json"],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            log_message(f"[!] pip list --outdated завершился с ошибкой: {result.stderr}")
-            return None
-        outdated = json.loads(result.stdout)
-        return {pkg["name"].lower() for pkg in outdated}
-    except Exception as e:
-        log_message(f"[!] Не удалось получить список устаревших пакетов: {e}")
-        return None
-
-def parse_requirements(file_path):
-    """Парсит requirements.txt и возвращает словарь {имя_пакета: спецификация}."""
-    reqs = {}
-    if not os.path.exists(file_path):
-        return reqs
-    with open(file_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            # Упрощённый парсинг: берём имя до первого '=', '<', '>', '!', '['
-            import re
-            match = re.match(r'^([a-zA-Z0-9_\-]+)', line)
-            if match:
-                pkg_name = match.group(1).lower()
-                reqs[pkg_name] = line
-    return reqs
-
-def are_dependencies_uptodate():
-    """
-    Проверяет, нужно ли обновлять зависимости.
-    Возвращает True, если все требуемые пакеты актуальны.
-    """
-    reqs = parse_requirements(REQUIREMENTS_FILE)
-    if not reqs:
-        return True  # нет требований
-
-    outdated = get_outdated_packages()
-    if outdated is None:
-        # В случае ошибки pip считаем, что требуется обновление (для безопасности)
-        return False
-
-    # Проверяем, есть ли пересечение между требуемыми пакетами и устаревшими
-    needed_update = any(pkg in outdated for pkg in reqs)
-    return not needed_update
-
 def mark_dependencies_updated():
     """Создаёт файл-флаг, указывающий что зависимости для текущего коммита обновлены."""
     flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DEPS_UPDATED_FLAG)
@@ -308,7 +255,7 @@ def install_requirements(force=False):
     """
     Устанавливает pip-зависимости.
     force=True — принудительная установка (например, после обновления репозитория).
-    Если force=False, проверяет флаг и список устаревших пакетов.
+    Если force=False, проверяет флаг и соответствие зависимостей requirements.txt через pip.
     """
     if not os.path.exists(REQUIREMENTS_FILE):
         return True
@@ -318,19 +265,32 @@ def install_requirements(force=False):
 
     # Если не принудительно, проверяем, нужно ли обновлять
     if not force:
-        # Проверяем флаг: если есть и репозиторий не обновлялся, пропускаем
+        # Проверяем флаг: если есть, значит зависимости уже проверены для текущей версии
         if os.path.exists(flag_path):
             log_message("[L] Зависимости уже проверялись для этой версии, пропускаем.")
             return True
 
-        # Быстрая проверка устаревших пакетов
-        log_message("[L] Проверка актуальности pip-зависимостей...")
-        if are_dependencies_uptodate():
-            log_message("[L] Все зависимости актуальны.")
-            mark_dependencies_updated()
-            return True
-        else:
-            log_message("[L] Обнаружены устаревшие пакеты, запускаем установку.")
+        # Проверка соответствия зависимостей requirements.txt через pip dry-run
+        log_message("[L] Проверка соответствия зависимостей requirements.txt...")
+        try:
+            env = os.environ.copy()
+            env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+            result = subprocess.run(
+                ["sudo", "python3", "-m", "pip3", "install",
+                 "-r", REQUIREMENTS_FILE,
+                 "--dry-run", "--quiet"],
+                capture_output=True, text=True, timeout=60,
+                env=env
+            )
+            if result.returncode == 0:
+                log_message("[L] Все зависимости соответствуют requirements.txt.")
+                mark_dependencies_updated()
+                return True
+            else:
+                log_message("[L] Зависимости не соответствуют requirements.txt, начинаем установку.")
+        except Exception as e:
+            log_message(f"[!] Ошибка при проверке зависимостей: {e}")
+            # продолжаем к установке
 
     # Установка
     try:
@@ -339,9 +299,8 @@ def install_requirements(force=False):
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 
         cmd = [
-            sys.executable, "-m", "pip", "install",
+            "sudo", "python3", "-m", "pip3", "install",
             "--no-cache-dir",
-            "--upgrade",
             "--upgrade-strategy", "only-if-needed",
             "-r", REQUIREMENTS_FILE
         ]
@@ -360,7 +319,7 @@ def install_requirements(force=False):
         return False
 
 def get_terminal_command(script_path, user):
-    launcher_cmd = f"sudo /usr/bin/python3 {script_path}"
+    launcher_cmd = f"sudo python3 {script_path}"
     hold_cmd = 'echo; echo "Launcher finished. Press any key to close."; read'
     full_cmd = f"{launcher_cmd}; {hold_cmd}"
 
@@ -457,7 +416,7 @@ def start_main():
         if system_name == "Windows":
             # Явно создаём новое окно консоли.
             subprocess.Popen(
-                [sys.executable, main_path],
+                ["sudo", "python3", main_path],
                 cwd=script_dir,
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
@@ -465,7 +424,7 @@ def start_main():
 
         if system_name == "Linux":
             # Пытаемся запустить main.py в новом терминале GUI.
-            python_cmd = f"{shlex.quote(sys.executable)} {shlex.quote(main_path)}"
+            python_cmd = f"sudo python3 {shlex.quote(main_path)}"
             hold_cmd = 'echo; echo "main.py finished. Press any key to close."; read'
             full_cmd = f"{python_cmd}; {hold_cmd}"
 
@@ -483,11 +442,11 @@ def start_main():
                 return True
 
             log_message("[!] Терминал GUI не найден, запускаю main.py в текущем процессе.")
-            subprocess.Popen([sys.executable, main_path], cwd=script_dir)
+            subprocess.Popen(["sudo", "python3", main_path], cwd=script_dir)
             return True
 
         # Для остальных ОС используем обычный запуск как fallback.
-        subprocess.Popen([sys.executable, main_path], cwd=script_dir)
+        subprocess.Popen(["sudo", "python3", main_path], cwd=script_dir)
         return True
     except Exception as e:
         log_message(f"[!] Ошибка запуска {MAIN_SCRIPT}: {e}")
@@ -516,7 +475,7 @@ def main():
             remove_autostart_linux(target_user)
         sys.exit(0)
 
-    log_message("""
+    log_message(r"""
   _____     ___  
   |  __ \  |__ \ 
   | |__) |    ) |
