@@ -307,12 +307,18 @@ class StereoCamera:
                 disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
                 output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
+                
+                # Downsample main_view to low_size for color fusion with point cloud
+                low_main = cv2.resize(main_view, self.low_size, interpolation=cv2.INTER_AREA)
+                
                 with self.lock:
                     self.points_3d = points
+                    self.points_color = low_main  # Store color data at same resolution as points_3d
             else:
                 output = main_view
                 with self.lock:
                     self.points_3d = None
+                    self.points_color = None
 
             with self.lock:
                 self.frame = output
@@ -343,11 +349,12 @@ class StereoCamera:
             return self.face_dx, self.face_dy
 
     def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
-        """Возвращает список точек {x,y,z} в сантиметрах, прореженный с шагом step."""
+        """Возвращает список точек {x,y,z,r,g,b} в сантиметрах, прореженный с шагом step."""
         with self.lock:
             if self.points_3d is None:
                 return []
             pts = self.points_3d  # shape: (h, w, 3), Z в мм
+            colors = self.points_color  # shape: (h, w, 3), BGR format
             h, w = pts.shape[:2]
             points = []
             for y in range(0, h, step):
@@ -355,10 +362,22 @@ class StereoCamera:
                     X, Y, Z = pts[y, x]
                     if Z <= 0 or Z > max_distance_cm * 10:  # макс. дальность в мм
                         continue
+                    
+                    # Get color if available (convert BGR to RGB)
+                    r, g, b = 200, 200, 200  # default gray
+                    if colors is not None and y < colors.shape[0] and x < colors.shape[1]:
+                        bgr = colors[y, x]
+                        r = int(bgr[2])  # BGR -> RGB
+                        g = int(bgr[1])
+                        b = int(bgr[0])
+                    
                     points.append({
                         'x': float(X / 10),
                         'y': float(Y / 10),
-                        'z': float(Z / 10)
+                        'z': float(Z / 10),
+                        'r': r,
+                        'g': g,
+                        'b': b
                     })
             return points
 

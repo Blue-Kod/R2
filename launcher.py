@@ -42,6 +42,8 @@ def log_message(*args):
 
 def check_root():
     """Проверяет, запущен ли скрипт с правами root."""
+    if platform.system() != "Linux":
+        return
     if os.geteuid() != 0:
         log_message("[!] Этот скрипт должен запускаться с sudo!")
         log_message("[!] Запустите: sudo python3 launcher.py")
@@ -525,7 +527,8 @@ def main():
  >  Launcher.py  <
  -----------------
  """)
-    subprocess.Popen(["unclutter", "--timeout", "5", "--fork"])
+    if platform.system() == "Linux" and shutil.which("unclutter"):
+        subprocess.Popen(["unclutter", "--timeout", "5", "--fork"])
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_name = os.path.basename(__file__)
     os.chdir(script_dir)
