@@ -223,98 +223,111 @@ class RobotEyes:
         return ip
 
     def _run(self):
-        """Main Pygame loop - runs in separate thread."""
         pygame.init()
-        pygame.mouse.set_visible(False)
+        # Скрываем курсор, но Pygame будет слушать события мыши
+        pygame.mouse.set_visible(True)
 
+        # Настройка экрана
         info = pygame.display.Info()
-        screen_width, screen_height = info.current_w, info.current_h
+        sw, sh = info.current_w, info.current_h
+        # Если экран Orange Pi определяется неверно, можно форсировать: sw, sh = 800, 480
 
-        screen = pygame.display.set_mode((screen_width, screen_height), pygame.FULLSCREEN)
-        pygame.display.set_caption("R2 Eyes")
+        screen = pygame.display.set_mode((sw, sh), pygame.FULLSCREEN | pygame.DOUBLEBUF | pygame.HWSURFACE)
         clock = pygame.time.Clock()
 
-        log.info("[RobotEyes] Pygame initialized: %dx%d", screen_width, screen_height)
+        # Шрифты
+        try:
+            font = pygame.font.SysFont("monospace", 20, bold=True)
+        except:
+            font = pygame.font.Font(None, 30)
 
-        # Eye dimensions
-        eye_size = int(min(screen_width, screen_height) * 0.15)
-        eye_spacing = eye_size * 2.5
+        # УВЕЛИЧЕННЫЕ ГЛАЗА: 25% от ширины экрана
+        eye_size = int(sw * 0.25)
+        spacing = int(sw * 0.22)
 
-        # Fonts
-        font = pygame.font.SysFont("Arial", 18)
-        menu_font = pygame.font.SysFont("Arial", 24)
-
-        running = True
-        while running and self.state.is_running():
-            # Handle events
+        while self.state.is_running():
+            # 1. ОБРАБОТКА СОБЫТИЙ (ФИКС ФОКУСА)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        running = False
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_x, mouse_y = event.pos
+                    self.state.set_running(False)
+
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE or (event.key == pygame.K_f4 and bool(event.mod & pygame.KMOD_ALT)):
+                        log.info("[RobotEyes] Emergency Exit")
+                        self.state.set_running(False)
+
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    mx, my = event.pos
                     if self.state.is_menu_visible():
-                        # Check if exit button clicked
-                        if self._exit_btn_rect and self._exit_btn_rect.collidepoint(mouse_x, mouse_y):
-                            log.info("[RobotEyes] Exit button clicked")
-                            running = False
+                        if self._exit_btn_rect.collidepoint(mx, my):
+                            log.info("[RobotEyes] Exit via Menu")
                             self.state.set_running(False)
-                        # Check if clicked outside menu card to close
-                        elif self._menu_card_rect and not self._menu_card_rect.collidepoint(mouse_x, mouse_y):
+                        else:
                             self.state.toggle_menu()
                     else:
-                        # Bottom zone click (15% from bottom)
-                        if mouse_y > screen_height * 0.85:
+                        # Клик в нижней части (15%) открывает меню
+                        if my > sh * 0.85:
                             self.state.toggle_menu()
 
-            # Update state
+            # 2. ЛОГИКА
             self.state.update_interpolation()
             self.state.update_blink()
 
-            # Procedural blink
-            now = time.time()
-            if now >= self._next_blink:
+            # Рандомное моргание
+            if random.random() < 0.01:
                 self.state.trigger_blink()
-                self._next_blink = now + random.uniform(2.5, 4.5)
-                if random.random() > 0.82:
-                    self._next_blink += 0.14  # Double blink
 
-            # Clear screen
+            # 3. ОТРИСОВКА
             screen.fill((0, 0, 0))
 
-            # Get current state
-            emote = self.state.get_emote()
-            current_x, current_y = self.state.get_position()
-            blink_scale = self.state.get_blink_scale()
-            config = EMOTION_CONFIG.get(emote, EMOTION_CONFIG["normal"])
+            cx, cy = sw // 2, sh // 2
+            ox, oy = self.state.get_position()
+            # Усиление смещения для больших глаз
+            offset_x = ox * (sw * 0.12)
+            offset_y = oy * (sh * 0.10)
 
-            # Calculate eye positions with movement
-            offset_x = current_x * (screen_width * 0.10)
-            offset_y = current_y * (screen_height * 0.07)
+            blink_s = self.state.get_blink_scale()
 
-            face_center_x = screen_width // 2
-            face_center_y = screen_height // 2
+            # Рисуем глаза (Левый и Правый)
+            for side in [-1, 1]:
+                ex = cx + (side * spacing) + offset_x
+                ey = cy + offset_y
 
-            # Draw eyes
-            self._draw_eyes(screen, face_center_x, face_center_y, offset_x, offset_y,
-                          eye_size, eye_spacing, blink_scale, config)
+                # Эллипс глаза
+                rect = pygame.Rect(0, 0, eye_size, int(eye_size * 1.2 * blink_s))
+                rect.center = (ex, ey)
+                pygame.draw.ellipse(screen, (255, 255, 255), rect)
+                # Белое свечение (опционально)
+                pygame.draw.ellipse(screen, (200, 200, 255), rect, 2)
 
-            # Draw brows if visible
-            if config.get("brow_opacity", 0) > 0:
-                self._draw_brows(screen, face_center_x, face_center_y, offset_x, offset_y,
-                               eye_size, eye_spacing, config)
-
-            # Draw menu if visible
+            # 4. МЕНЮ ВЫХОДА
             if self.state.is_menu_visible():
-                self._draw_menu(screen, screen_width, screen_height, menu_font)
+                # Затемнение
+                overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 200))
+                screen.blit(overlay, (0, 0))
+
+                # Карточка меню
+                menu_w, menu_h = 300, 180
+                menu_rect = pygame.Rect((sw - menu_w) // 2, (sh - menu_h) // 2, menu_w, menu_h)
+                pygame.draw.rect(screen, (30, 30, 30), menu_rect, border_radius=15)
+                pygame.draw.rect(screen, (0, 255, 0), menu_rect, 2, border_radius=15)
+
+                # Текст IP
+                ip_surf = font.render(f"IP: {self._get_ip()}", True, (0, 255, 0))
+                screen.blit(ip_surf, (menu_rect.x + 20, menu_rect.y + 30))
+
+                # Кнопка EXIT
+                self._exit_btn_rect = pygame.Rect(menu_rect.x + 50, menu_rect.y + 100, 200, 50)
+                pygame.draw.rect(screen, (150, 0, 0), self._exit_btn_rect, border_radius=10)
+                btn_text = font.render("EXIT R2", True, (255, 255, 255))
+                screen.blit(btn_text, btn_text.get_rect(center=self._exit_btn_rect.center))
 
             pygame.display.flip()
             clock.tick(60)
 
         pygame.quit()
-        log.info("[RobotEyes] Pygame loop ended")
+        sys.exit()  # Гарантированный выход
 
     def _draw_eyes(self, screen, center_x, center_y, offset_x, offset_y,
                    eye_size, spacing, blink_scale, config):
