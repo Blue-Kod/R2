@@ -114,29 +114,28 @@ def fix_permissions(path, user):
 def apply_self_update(new_launcher_path):
     current_script = os.path.abspath(__file__)
 
+    # Проверка на случай, если файл всё же не создался
     if not os.path.exists(new_launcher_path):
-        log_message(f"[!] Ошибка: Файл для обновления не найден по пути {new_launcher_path}")
+        log_message(f"[!] Критическая ошибка: Временный файл {new_launcher_path} не найден.")
         return False
 
     if filecmp.cmp(current_script, new_launcher_path, shallow=False):
         log_message("[L] Текущая версия лаунчера актуальна.")
-        os.unlink(new_launcher_path)
         return False
 
-    log_message("[L] Обнаружена новая версия лаунчера. Выполняю замену...")
+    log_message("[L] Обнаружена новая версия лаунчера. Обновляюсь...")
     try:
-        # Сначала даем права, потом перемещаем
+        # Устанавливаем права на исполнение для нового файла
         os.chmod(new_launcher_path, 0o755)
-        shutil.copy2(new_launcher_path, current_script)  # copy2 надежнее move через разделы
-        log_message("[L] Лаунчер успешно обновлён. Перезапускаю...")
 
-        # Очистка перед выходом
-        os.unlink(new_launcher_path)
+        # Копируем поверх текущего скрипта
+        shutil.copy2(new_launcher_path, current_script)
+        log_message("[L] Файл заменен. Перезапуск...")
 
-        # Перезапуск
+        # Полная команда перезапуска
         os.execv(sys.executable, [sys.executable, current_script] + sys.argv[1:])
     except Exception as e:
-        log_message(f"[!] Ошибка при самообновлении: {e}")
+        log_message(f"[!] Ошибка при замене файла лаунчера: {e}")
         return False
 
 def get_remote_head_commit_info(owner, repo, branch='main'):
@@ -237,6 +236,9 @@ def download_and_extract_repo(target_dir, script_name, target_user):
                     dest_file = os.path.join(dest_dir, file)
                     shutil.copy2(src_file, dest_file)
                     log_message(f"[L] Скопирован: {os.path.join(rel_path, file) if rel_path != '.' else file}")
+            if new_launcher_tmp:
+                # Вызываем обновление, пока папка существует
+                apply_self_update(new_launcher_tmp)
 
         os.unlink(tmp_zip)
 
@@ -245,14 +247,9 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         if os.path.exists(deps_flag):
             os.remove(deps_flag)
             log_message("[L] Флаг зависимостей сброшен.")
-
-        os.unlink(tmp_zip)
-
         fix_permissions(target_dir, target_user)
         save_last_commit_info(target_dir, remote_sha)
 
-        if new_launcher_tmp:
-            apply_self_update(new_launcher_tmp)  # ОШИБКА: Файл уже удален!
         return True
 
     except Exception as e:
