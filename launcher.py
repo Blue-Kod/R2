@@ -36,7 +36,7 @@ REQUIREMENTS_APT = [  # System dependencies for Debian/ARM (pywebview GTK backen
     "libwebkit2gtk-4.0-dev",
     "libglib2.0-dev",
     "libgtk-3-dev",
-    "unclutter",  # Hides mouse cursor for kiosk mode
+    "unclutter-xfixes",  # Hides mouse cursor for kiosk mode
 ]
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
@@ -355,89 +355,66 @@ def install_requirements(force=False):
         log_message(f"[PIP] Ошибка при установке {e}")
         return False
 
+
 def install_apt_requirements(force=False):
     """
-    Install system (APT) dependencies for Debian/ARM systems.
-    Checks if each package is already installed first, skips installation if all are present.
+    Поштучная установка системных зависимостей APT.
     """
     if platform.system() != "Linux":
-        log_message("[APT] APT доступен только на Linux.")
+        log_message("[APT] Доступно только на Linux.")
         return True
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     flag_path = os.path.join(script_dir, ".apt_deps_updated")
 
-    # Check if running with sudo/root
     if os.geteuid() != 0:
-        log_message("[APT] Нет прав sudo для установки.")
+        log_message("[APT] Ошибка: Требуются права root (sudo).")
         return False
 
     if not REQUIREMENTS_APT:
-        log_message("[APT] Список системных зависимостей пуст, пропускаю.")
         return True
 
-    # Проверяем каждый пакет, установлен ли он (если не форсировано)
-    if not force:
-        log_message("[APT] Проверка установленных системных пакетов...")
-        missing_packages = []
-        for package in REQUIREMENTS_APT:
-            log_message(f"[APT] Проверяю наличие {package}...")
-            if is_apt_package_installed(package):
-                log_message(f"[APT] {package} уже установлен.")
-            else:
-                log_message(f"[APT] {package} не найден.")
-                missing_packages.append(package)
-
-        if not missing_packages:
-            log_message("[APT] Все системные пакеты уже установлены.")
-            # Создаем/обновляем файл-флаг
-            with open(flag_path, 'w') as f:
-                f.write(datetime.datetime.now().isoformat())
-            return True
-        else:
-            log_message(f"[APT] Отсутствующие пакеты: {', '.join(missing_packages)}. Начинаю установку.")
-    else:
-        log_message("[APT] Принудительная установка системных зависимостей.")
-
-    # Процесс установки
+    # 1. Обновляем списки (один раз перед циклом)
+    log_message("[APT] Обновление списков пакетов...")
     try:
-        # Обновление списков пакетов
-        log_message("[APT] Обновление списков пакетов APT...")
-        result = subprocess.run(
-            ["apt-get", "update", "-y"],
-            capture_output=True, text=True, timeout=120
-        )
-        if result.returncode != 0:
-            log_message(f"[APT] Ошибка при apt-get update (код {result.returncode}):")
-            log_message(f"[APT] {result.stderr}")
-            return False
-        else:
-            log_message("[APT] Списки пакетов успешно обновлены.")
-            if result.stdout.strip():
-                log_message(f"[APT] Вывод обновления: {result.stdout[:500]}...")
-
-        # Установка пакетов
-        log_message(f"[APT] Установка системных пакетов: {', '.join(REQUIREMENTS_APT)}")
-        cmd = ["apt-get", "install", "-y"] + REQUIREMENTS_APT
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            log_message("[APT] Системные зависимости успешно установлены.")
-            if result.stdout.strip():
-                log_message(f"[APT] Вывод установки: {result.stdout[:500]}...")
-            # Создаем файл-флаг
-            with open(flag_path, 'w') as f:
-                f.write(datetime.datetime.now().isoformat())
-            return True
-        else:
-            log_message(f"[APT] Ошибка при установке системных пакетов (код {result.returncode}):")
-            log_message(f"[APT] {result.stderr}")
-            return False
-    except subprocess.TimeoutExpired:
-        log_message("[APT] Время ожидания установки APT истекло.")
-        return False
+        subprocess.run(["apt-get", "update", "-y"], check=True, timeout=120, capture_output=True)
     except Exception as e:
-        log_message(f"[APT] Ошибка во время установки пакетов: {e}")
-        return False
+        log_message(f"[!] Ошибка при update (возможно нет интернета): {e}")
+        # Продолжаем, вдруг пакеты в кэше
+
+    # 2. Установка по одному
+    any_failed = False
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"  # Чтобы apt не спрашивал подтверждений
+
+    for package in REQUIREMENTS_APT:
+        if not force and is_apt_package_installed(package):
+            log_message(f"[APT] {package} уже в системе.")
+            continue
+
+        log_message(f"[APT] Установка: {package}...")
+        try:
+            # -y: да, -f: fix-broken (исправить зависимости)
+            cmd = ["apt-get", "install", "-y", "-f", package]
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+
+            if result.returncode == 0:
+                log_message(f"[APT] [+] {package} успешно установлен.")
+            else:
+                log_message(f"[APT] [-] Не удалось поставить {package}. Код: {result.returncode}")
+                log_message(f"[APT] Ошибка: {result.stderr.strip()}")
+                any_failed = True
+        except Exception as e:
+            log_message(f"[APT] [!] Исключение при установке {package}: {e}")
+            any_failed = True
+
+    if not any_failed:
+        with open(flag_path, 'w') as f:
+            f.write(datetime.datetime.now().isoformat())
+        log_message("[APT] Все пакеты обработаны без ошибок.")
+        return True
+
+    return False
 
 def get_terminal_command(script_path, user):
     launcher_cmd = f"sudo python3 {script_path}"
