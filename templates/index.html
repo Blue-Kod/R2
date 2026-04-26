@@ -32,7 +32,7 @@
         .tabs button { cursor: pointer; border: 0; border-radius: 6px; padding: 7px 10px; font-size: 12px; color: var(--muted); background: transparent; }
         .tabs button.active { color: var(--text); background: #262626; }
         #video-container, #pointcloud-container { width: var(--cam-w); height: var(--cam-h); flex-shrink: 0; position: relative; border-radius: 8px; border: 1px solid var(--line); background: #0d0d0d; overflow: hidden; display: flex; justify-content: center; align-items: center; }
-        #video-feed { width: 100%; height: 100%; object-fit: contain; }
+        #video-feed { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; margin: auto; }
         #pointcloud-canvas { width: var(--cam-w) !important; height: var(--cam-h) !important; display: block; }
         #terminal-input-line { display: flex; align-items: center; margin-top: 8px; }
         #terminal-prompt { color: var(--muted); margin-right: 6px; font-family: monospace; }
@@ -348,6 +348,7 @@
     video.addEventListener('mousemove', (e) => {
         if(!showDepth.checked) { tooltip.classList.add('hidden'); return; }
         const rect = video.getBoundingClientRect();
+        const containerRect = videoContainer.getBoundingClientRect();
         const sx = video.naturalWidth/rect.width;
         const sy = video.naturalHeight/rect.height;
         const ix = Math.round((e.clientX - rect.left) * sx);
@@ -357,8 +358,8 @@
             .then(data=>{
                 if(data.depth!==null && data.depth!==undefined) {
                     tooltip.classList.remove('hidden');
-                    tooltip.style.left=(e.clientX+15)+'px';
-                    tooltip.style.top=(e.clientY+15)+'px';
+                    tooltip.style.left=(e.clientX - containerRect.left + 10)+'px';
+                    tooltip.style.top=(e.clientY - containerRect.top + 10)+'px';
                     tooltip.textContent=`${data.depth.toFixed(1)} см`;
                 } else {
                     tooltip.classList.add('hidden');
