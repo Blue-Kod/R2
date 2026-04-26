@@ -110,6 +110,16 @@ def fix_permissions(path, user):
     except Exception as e:
         log_message(f"[!] Не удалось изменить владельца: {e}")
 
+def is_apt_package_installed(package):
+    """Check if an APT package is installed on Debian/Ubuntu systems."""
+    try:
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Status}", package],
+            capture_output=True, text=True, timeout=10
+        )
+        return "install ok installed" in result.stdout
+    except Exception:
+        return False
 
 def apply_self_update(new_launcher_path):
     current_script = os.path.abspath(__file__)
@@ -268,9 +278,8 @@ def mark_dependencies_updated():
 
 def install_requirements(force=False):
     """
-    Устанавливает pip-зависимости.
-    force=True — принудительная установка (например, после обновления репозитория).
-    Если force=False, проверяет флаг и соответствие зависимостей requirements.txt через pip.
+    Install pip dependencies. Skips installation if all packages are already satisfied.
+    Logs detailed information about the installation process.
     """
     if not os.path.exists(REQUIREMENTS_FILE):
         return True
@@ -278,38 +287,46 @@ def install_requirements(force=False):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     flag_path = os.path.join(script_dir, DEPS_UPDATED_FLAG)
 
-    # Если не принудительно, проверяем, нужно ли обновлять
+    # If not forced, check if we need to update
     if not force:
-        # Проверяем флаг: если есть, значит зависимости уже проверены для текущей версии
+        # Check flag first
         if os.path.exists(flag_path):
-            log_message("[L] Зависимости уже проверялись для этой версии, пропускаем.")
+            log_message("[PIP] Зависимости уже установлены, пропускаю.")
             return True
 
-        # Проверка соответствия зависимостей requirements.txt через pip dry-run
-        log_message("[L] Проверка соответствия зависимостей requirements.txt...")
+        # Check if requirements are satisfied via pip dry-run
+        log_message("[PIP] Проверка зависимостей requirements.txt...")
         try:
             env = os.environ.copy()
             env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+            # Remove --quiet to get detailed dry-run output
             result = subprocess.run(
-                ["sudo", "python3", "-m", "pip3", "install",
+                ["sudo", "python3", "-m", "pip", "install",
                  "-r", REQUIREMENTS_FILE,
-                 "--dry-run", "--quiet"],
+                 "--dry-run"],
                 capture_output=True, text=True, timeout=60,
                 env=env
             )
+            # Log dry-run output
+            log_message("[PIP] Вывод dry-run:")
+            if result.stdout.strip():
+                log_message(f"[PIP] {result.stdout}")
+            if result.stderr.strip():
+                log_message(f"[PIP] Dry-run ошибка: {result.stderr}")
+
             if result.returncode == 0:
-                log_message("[L] Все зависимости соответствуют requirements.txt.")
+                log_message("[PIP] Все требования соблюдены.")
                 mark_dependencies_updated()
                 return True
             else:
-                log_message("[L] Зависимости не соответствуют requirements.txt, начинаем установку.")
+                log_message("[PIP] Не все требования соблюдены, начинаю установку...")
         except Exception as e:
-            log_message(f"[!] Ошибка при проверке зависимостей: {e}")
-            # продолжаем к установке
+            log_message(f"[PIP] Ошибка при проверке зависимостей: {e}")
+            # Proceed to installation
 
-    # Установка
+    # Install dependencies
     try:
-        log_message("[L] Установка/обновление pip-зависимостей...")
+        log_message("[PIP] Устанавливаю/обновляю зависимости...")
         env = os.environ.copy()
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 
@@ -321,80 +338,110 @@ def install_requirements(force=False):
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+        # Log installation output
+        if result.stdout.strip():
+            log_message(f"[PIP] Вывод установки: {result.stdout[:500]}...")
+        if result.stderr.strip():
+            log_message(f"[PIP] Ошибка установки: {result.stderr[:500]}...")
+
         if result.returncode != 0:
-            log_message(f"[!] Ошибка PIP (Code {result.returncode}):")
-            log_message(result.stderr)
+            log_message(f"[PIP] Ошибка при установке (Code {result.returncode})")
             return False
 
-        log_message("[L] Зависимости успешно установлены.")
+        log_message("[PIP] Зависимости успешно установлены.")
         mark_dependencies_updated()
         return True
     except Exception as e:
-        log_message(f"[!] Ошибка при установке зависимостей: {e}")
+        log_message(f"[PIP] Ошибка при установке {e}")
         return False
 
 def install_apt_requirements(force=False):
     """
     Install system (APT) dependencies for Debian/ARM systems.
-    Installs packages listed in REQUIREMENTS_APT constant.
+    Checks if each package is already installed first, skips installation if all are present.
     """
     if platform.system() != "Linux":
-        log_message("[!] APT installation only available on Linux.")
+        log_message("[APT] APT доступен только на Linux.")
         return True
 
-    # Check if already installed (use a flag file)
-    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".apt_deps_updated")
-    if not force and os.path.exists(flag_path):
-        log_message("[L] APT dependencies already installed for this version, skipping.")
-        return True
-
-    if not REQUIREMENTS_APT:
-        log_message("[L] No APT packages specified, skipping.")
-        return True
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    flag_path = os.path.join(script_dir, ".apt_deps_updated")
 
     # Check if running with sudo/root
     if os.geteuid() != 0:
-        log_message("[!] APT installation requires root privileges. Run with sudo.")
+        log_message("[APT] Нет прав sudo для установки.")
         return False
 
-    log_message(f"[L] Installing APT dependencies: {', '.join(REQUIREMENTS_APT)}")
+    if not REQUIREMENTS_APT:
+        log_message("[APT] Список системных зависимостей пуст, пропускаю.")
+        return True
 
+    # Проверяем каждый пакет, установлен ли он (если не форсировано)
+    if not force:
+        log_message("[APT] Проверка установленных системных пакетов...")
+        missing_packages = []
+        for package in REQUIREMENTS_APT:
+            log_message(f"[APT] Проверяю наличие {package}...")
+            if is_apt_package_installed(package):
+                log_message(f"[APT] {package} уже установлен.")
+            else:
+                log_message(f"[APT] {package} не найден.")
+                missing_packages.append(package)
+
+        if not missing_packages:
+            log_message("[APT] Все системные пакеты уже установлены.")
+            # Создаем/обновляем файл-флаг
+            with open(flag_path, 'w') as f:
+                f.write(datetime.datetime.now().isoformat())
+            return True
+        else:
+            log_message(f"[APT] Отсутствующие пакеты: {', '.join(missing_packages)}. Начинаю установку.")
+    else:
+        log_message("[APT] Принудительная установка системных зависимостей.")
+
+    # Процесс установки
     try:
-        # Update package lists
-        log_message("[L] Updating package lists...")
+        # Обновление списков пакетов
+        log_message("[APT] Обновление списков пакетов APT...")
         result = subprocess.run(
             ["apt-get", "update", "-y"],
             capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0:
-            log_message(f"[!] apt-get update failed: {result.stderr}")
+            log_message(f"[APT] Ошибка при apt-get update (код {result.returncode}):")
+            log_message(f"[APT] {result.stderr}")
             return False
+        else:
+            log_message("[APT] Списки пакетов успешно обновлены.")
+            if result.stdout.strip():
+                log_message(f"[APT] Вывод обновления: {result.stdout[:500]}...")
 
-        # Install packages
-        log_message("[L] Installing packages...")
+        # Установка пакетов
+        log_message(f"[APT] Установка системных пакетов: {', '.join(REQUIREMENTS_APT)}")
         cmd = ["apt-get", "install", "-y"] + REQUIREMENTS_APT
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
-            log_message("[L] APT dependencies installed successfully.")
-            # Create flag file
+            log_message("[APT] Системные зависимости успешно установлены.")
+            if result.stdout.strip():
+                log_message(f"[APT] Вывод установки: {result.stdout[:500]}...")
+            # Создаем файл-флаг
             with open(flag_path, 'w') as f:
                 f.write(datetime.datetime.now().isoformat())
             return True
         else:
-            log_message(f"[!] APT installation failed (code {result.returncode}):")
-            log_message(result.stderr)
+            log_message(f"[APT] Ошибка при установке системных пакетов (код {result.returncode}):")
+            log_message(f"[APT] {result.stderr}")
             return False
     except subprocess.TimeoutExpired:
-        log_message("[!] APT installation timed out.")
+        log_message("[APT] Время ожидания установки APT истекло.")
         return False
     except Exception as e:
-        log_message(f"[!] Error during APT installation: {e}")
+        log_message(f"[APT] Ошибка во время установки пакетов: {e}")
         return False
-
 
 def get_terminal_command(script_path, user):
     launcher_cmd = f"sudo python3 {script_path}"
-    hold_cmd = 'echo; echo "Launcher finished. Press any key to close."; read'
+    hold_cmd = 'echo; echo "Press any key to close..."; read'
     full_cmd = f"{launcher_cmd}; {hold_cmd}"
 
     if shutil.which("terminator"):
