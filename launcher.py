@@ -29,6 +29,15 @@ from pathlib import Path
 REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
+REQUIREMENTS_APT = [  # System dependencies for Debian/ARM (pywebview GTK backend)
+    "python3-gi",
+    "python3-gi-cairo",
+    "gir1.2-gtk-3.0",
+    "libwebkit2gtk-4.0-dev",
+    "libglib2.0-dev",
+    "libgtk-3-dev",
+    "unclutter",  # Hides mouse cursor for kiosk mode
+]
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 INTERNET_CHECK_HOST = "8.8.8.8"
@@ -318,6 +327,65 @@ def install_requirements(force=False):
         log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
+def install_apt_requirements(force=False):
+    """
+    Install system (APT) dependencies for Debian/ARM systems.
+    Installs packages listed in REQUIREMENTS_APT constant.
+    """
+    if platform.system() != "Linux":
+        log_message("[!] APT installation only available on Linux.")
+        return True
+
+    # Check if already installed (use a flag file)
+    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".apt_deps_updated")
+    if not force and os.path.exists(flag_path):
+        log_message("[L] APT dependencies already installed for this version, skipping.")
+        return True
+
+    if not REQUIREMENTS_APT:
+        log_message("[L] No APT packages specified, skipping.")
+        return True
+
+    # Check if running with sudo/root
+    if os.geteuid() != 0:
+        log_message("[!] APT installation requires root privileges. Run with sudo.")
+        return False
+
+    log_message(f"[L] Installing APT dependencies: {', '.join(REQUIREMENTS_APT)}")
+
+    try:
+        # Update package lists
+        log_message("[L] Updating package lists...")
+        result = subprocess.run(
+            ["apt-get", "update", "-y"],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            log_message(f"[!] apt-get update failed: {result.stderr}")
+            return False
+
+        # Install packages
+        log_message("[L] Installing packages...")
+        cmd = ["apt-get", "install", "-y"] + REQUIREMENTS_APT
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            log_message("[L] APT dependencies installed successfully.")
+            # Create flag file
+            with open(flag_path, 'w') as f:
+                f.write(datetime.datetime.now().isoformat())
+            return True
+        else:
+            log_message(f"[!] APT installation failed (code {result.returncode}):")
+            log_message(result.stderr)
+            return False
+    except subprocess.TimeoutExpired:
+        log_message("[!] APT installation timed out.")
+        return False
+    except Exception as e:
+        log_message(f"[!] Error during APT installation: {e}")
+        return False
+
+
 def get_terminal_command(script_path, user):
     launcher_cmd = f"sudo python3 {script_path}"
     hold_cmd = 'echo; echo "Launcher finished. Press any key to close."; read'
@@ -359,7 +427,7 @@ def setup_autostart_linux(target_user):
 
     desktop_content = f"""[Desktop Entry]
 Type=Application
-Name=Orange Pi Monitor (Terminal with sudo)
+Name=R2 Main Program
 Exec={cmd_str}
 Path={os.path.dirname(script_path)}
 Environment="DISPLAY={display}" "XAUTHORITY={xauth}"
@@ -502,6 +570,12 @@ def main():
 
     internet_ok = wait_for_internet(max_wait=60)
     repo_updated = False
+
+    # Install APT dependencies first (system packages for pywebview GTK backend)
+    if platform.system() == "Linux":
+        log_message("[L] Проверка системных зависимостей (APT)...")
+        install_apt_requirements(force=False)
+
     if internet_ok:
         log_message("[L] Пробуем обновить репозиторий...")
         repo_updated = download_and_extract_repo(script_dir, script_name, target_user)

@@ -5,9 +5,20 @@ import time
 from r2_app.bootstrap import build_services
 from r2_app.web import create_app
 
+# Import the new pywebview-based display
+try:
+    from eyes_display import EyeDisplay, optimize_for_arm
+    _HAS_DISPLAY = True
+except ImportError:
+    _HAS_DISPLAY = False
+    EyeDisplay = None
+    optimize_for_arm = None
+
 _services = None
 _app = None
 _services_lock = threading.Lock()
+_display = None
+_display_lock = threading.Lock()
 
 
 def _ensure_services():
@@ -29,31 +40,42 @@ def _hardware_worker():
     services.logger.log("Hardware/shell готовы")
 
 
-def _start_kiosk_browser(url="http://localhost"):
-    cmd = [
-        "chromium",
-        "--kiosk",
-        "--noerrdialogs",
-        "--disable-infobars",
-        f"--app={url}"
-    ]
-
-    try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"Браузер запущен по адресу: {url}")
-    except FileNotFoundError:
-        print("Ошибка: Chromium не найден. Убедитесь, что он установлен (sudo apt install chromium).")
-
 def _web_worker():
+    """Run Flask web server without Chromium kiosk (display handled by pywebview)."""
     services = _ensure_services()
     services.logger.log("Web сервер запускается в отдельном потоке")
-    _start_kiosk_browser(f"http://{services.config.host}:{services.config.http_port}/screen")
     _app.run(host=services.config.host, port=services.config.http_port, debug=False, threaded=True, use_reloader=False)
+
+
+def _display_worker():
+    """Run the pywebview eye display in a separate thread."""
+    global _display
+    if not _HAS_DISPLAY:
+        print("[!] eyes_display.py not available, skipping pywebview display")
+        return
+
+    # Optimize environment for ARM/Debian
+    if optimize_for_arm:
+        optimize_for_arm()
+
+    with _display_lock:
+        _display = EyeDisplay()
+
+    # Connect the EmoteService to the display API
+    services = _ensure_services()
+    services.emote.set_eye_api(_display.api)
+
+    # Wait for services to be ready, then start display
+    # The display blocks this thread until window is closed
+    _display.start()
 
 
 def _start_background_threads():
     threading.Thread(target=_hardware_worker, daemon=True, name="r2-hardware-thread").start()
     threading.Thread(target=_web_worker, daemon=True, name="r2-web-thread").start()
+    # Start pywebview display in separate thread (replaces Chromium kiosk)
+    if _HAS_DISPLAY:
+        threading.Thread(target=_display_worker, daemon=True, name="r2-display-thread").start()
 
 
 def get_stereo_camera():

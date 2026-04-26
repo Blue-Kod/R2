@@ -23,14 +23,14 @@ _emote_index = 0
 
 def parse_args():
     parser = argparse.ArgumentParser(description="R2 launcher")
-    parser.add_argument("--version", action="store_true", help="Показать версию")
+    parser.add_argument("--version", action="store_true", help="Show version")
     return parser.parse_args()
 
 
 def main_loop():
     global _emote_index
     emotion = EMOTE_CYCLE[_emote_index]
-    emote(emotion)
+    emote(emotion)  # This now pushes to pywebview display via EmoteService
     _emote_index = (_emote_index + 1) % len(EMOTE_CYCLE)
     time.sleep(3)
 
@@ -40,6 +40,8 @@ if __name__ == "__main__":
     if args.version:
         print(f"R2 v{APP_VERSION}")
     else:
+        print(f"R2 v{APP_VERSION} - Starting with pywebview display...")
         start_background()
+        # Main loop now runs in current thread, emote updates are pushed to display
         while running:
             main_loop()

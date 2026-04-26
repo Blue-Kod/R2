@@ -203,7 +203,7 @@
         </div>
     </div>
 </div>
-<script>
+    <script>
     const eyes = document.getElementById("eyes");
     const leftEye = document.getElementById("eye-left");
     const rightEye = document.getElementById("eye-right");
@@ -214,6 +214,9 @@
     const menuExit = document.getElementById("menu-exit");
     const supportedEmotes = new Set(["normal", "sad", "excited", "spooked", "unamused", "worried", "woozy", "angry", "wince"]);
     let currentEmote = "normal";
+
+    // Check if pywebview API is available
+    const hasPyWebView = typeof pywebview !== 'undefined';
 
     function applyEyesPosition(x, y) {
         // Normalized x/y (-1..1) from backend to pixel offsets.
@@ -241,32 +244,16 @@
         eyes.classList.add(`emote-${currentEmote}`);
     }
 
-    async function fetchEmote() {
-        try {
-            const response = await fetch("/api/emote");
-            const payload = await response.json();
-            applyEmote(payload.emote || "normal");
-        } catch (_) {
-            // Keep current look on network issues.
-        }
-    }
-
-    async function fetchEyesPosition() {
-        try {
-            const response = await fetch("/api/eyes");
-            const payload = await response.json();
-            applyEyesPosition(payload.x, payload.y);
-        } catch (_) {
-            // Keep current position on network issues.
-        }
-    }
-
+    // IP loading via pywebview API
     async function loadIp() {
+        if (!hasPyWebView) {
+            menuIp.textContent = "IP: N/A (no pywebview)";
+            return;
+        }
         try {
-            const response = await fetch("/api/ip");
-            const payload = await response.json();
-            menuIp.textContent = `IP: ${payload.ip || "N/A"}`;
-        } catch (_) {
+            const result = await pywebview.api.getIp();
+            menuIp.textContent = `IP: ${result.ip || "N/A"}`;
+        } catch (e) {
             menuIp.textContent = "IP: N/A";
         }
     }
@@ -283,9 +270,14 @@
     }
 
     async function exitAll() {
-        try {
-            await fetch("/api/shutdown", { method: "POST" });
-        } catch (_) {}
+        if (hasPyWebView) {
+            try {
+                await pywebview.api.shutdown();
+            } catch (e) {
+                console.error("Shutdown error:", e);
+            }
+        }
+        // Fallback: attempt to close window
         setTimeout(() => {
             try { window.open("", "_self"); } catch (_) {}
             try { window.close(); } catch (_) {}
@@ -302,18 +294,20 @@
     });
     menuExit.addEventListener("click", exitAll);
 
+    // Blink animation (client-side, no backend needed)
     setInterval(() => {
         blink();
         if (Math.random() > 0.82) {
             setTimeout(blink, 140);
         }
     }, 3400);
-    setInterval(fetchEmote, 500);
-    setInterval(fetchEyesPosition, 120);
 
+    // Note: Eye position and emote updates are now pushed from Python
+    // via the js_api bridge (evaluate_js calls to applyEmote and applyEyesPosition)
+    // No more periodic fetch calls needed!
+
+    // Initialize with default position
     applyEyesPosition(0, 0);
-    fetchEmote();
-    fetchEyesPosition();
-</script>
+    </script>
 </body>
 </html>
