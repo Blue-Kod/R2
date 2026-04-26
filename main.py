@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import os
 import time
 from r2_app.high_level import (
     angle,
@@ -18,7 +19,7 @@ from r2_app.high_level import (
 
 APP_VERSION = "2.0"
 running = True
-EMOTE_CYCLE = ["normal", "sad", "excited", "spooked", "unamused", "worried", "woozy", "angry", "wince"]
+EMOTE_CYCLE = [os.path.splitext(f)[0] for f in os.listdir("emotions") if f.endswith(".png")]
 _emote_index = 0
 
 def parse_args():
@@ -30,7 +31,8 @@ def parse_args():
 def main_loop():
     global _emote_index
     emotion = EMOTE_CYCLE[_emote_index]
-    emote(emotion)  # This now pushes to pywebview display via EmoteService
+    print(emotion)
+    emote(emotion)
     _emote_index = (_emote_index + 1) % len(EMOTE_CYCLE)
     time.sleep(3)
 
@@ -40,7 +42,7 @@ if __name__ == "__main__":
     if args.version:
         print(f"R2 v{APP_VERSION}")
     else:
-        print(f"R2 v{APP_VERSION} - Starting with pywebview display...")
+        print(f"R2 v{APP_VERSION} - Starting...")
         start_background()
         # Main loop now runs in current thread, emote updates are pushed to display
         while running:
