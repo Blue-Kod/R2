@@ -276,7 +276,7 @@ def install_requirements(force=False):
             env = os.environ.copy()
             env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
             result = subprocess.run(
-                ["sudo", "python3", "-m", "pip3", "install",
+                ["sudo", "python3", "-m", "pip", "install",
                  "-r", REQUIREMENTS_FILE,
                  "--dry-run", "--quiet"],
                 capture_output=True, text=True, timeout=60,
@@ -299,7 +299,7 @@ def install_requirements(force=False):
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 
         cmd = [
-            "sudo", "python3", "-m", "pip3", "install",
+            "sudo", "python3", "-m", "pip", "install",
             "--no-cache-dir",
             "--upgrade-strategy", "only-if-needed",
             "-r", REQUIREMENTS_FILE
