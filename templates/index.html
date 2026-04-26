@@ -112,12 +112,12 @@
                 <div class="control-row">
                     <label>Основной глаз:</label>
                     <div>
-                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="sendCameraParams()"> <label for="eyeLeft">Левый</label>
-                        <input type="radio" name="mainEye" id="eyeRight" onchange="sendCameraParams()"> <label for="eyeRight">Правый</label>
+                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateParams()"> <label for="eyeLeft">Левый</label>
+                        <input type="radio" name="mainEye" id="eyeRight" onchange="updateParams()"> <label for="eyeRight">Правый</label>
                     </div>
                 </div>
-                <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked onchange="sendCameraParams()"></div>
-                <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="sendCameraParams()"></div>
+                <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked onchange="updateParams()"></div>
+                <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()"></div>
                 <div class="control-group">
                     <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled" onchange="sendCameraParams()"></div>
                     <div class="control-row"><label>WLS фильтр:</label><input type="checkbox" id="wlsEnabled" onchange="sendCameraParams()"></div>
@@ -266,42 +266,25 @@
             const resp = await fetch('/api/pointcloud?step=2');
             const points = await resp.json();
             if (!points.length) return;
+            const positions = new Float32Array(points.length * 3);
+            const colors = new Float32Array(points.length * 3);
             
-            // Use separate arrays for better performance
-            const count = points.length;
-            const positions = new Float32Array(count * 3);
-            const colors = new Float32Array(count * 3);
-            
-            for (let i = 0; i < count; i++) {
-                const p = points[i];
-                // Convert cm to meters for Three.js (divide by 100)
+            points.forEach((p, i) => {
                 positions[i * 3] = p.x / 100.0;
-                positions[i * 3 + 1] = -p.y / 100.0;  // Flip Y axis
+                positions[i * 3 + 1] = -p.y / 100.0;
                 positions[i * 3 + 2] = p.z / 100.0;
                 
-                // Use actual colors from camera (server returns 0-255)
-                colors[i * 3] = p.r / 255.0;      // R
-                colors[i * 3 + 1] = p.g / 255.0;  // G
-                colors[i * 3 + 2] = p.b / 255.0;  // B
-            }
+                // Set all points to blue (RGB: 0, 0, 255)
+                colors[i * 3] = 0.0;      // R
+                colors[i * 3 + 1] = 0.0;  // G
+                colors[i * 3 + 2] = 1.0;  // B
+            });
             
-            // Update geometry
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            
-            // Dispose old geometry and update
-            if (pointsMesh.geometry) {
-                pointsMesh.geometry.dispose();
-            }
-            pointsMesh.geometry = geometry;
-            
-            // Adjust point size based on distance for better visualization
-            pointsMesh.material.size = 0.008;
-            pointsMesh.material.needsUpdate = true;
-        } catch (e) {
-            console.warn('Point cloud update failed:', e);
-        }
+            pointsMesh.geometry.dispose();
+            pointsMesh.geometry = new THREE.BufferGeometry();
+            pointsMesh.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            pointsMesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        } catch (_) {}
     }
 
     function animate() {
@@ -356,6 +339,9 @@
     const eyeLeft = document.getElementById('eyeLeft');
     const showDepth = document.getElementById('showDepth');
     const depthAlpha = document.getElementById('depthAlpha');
+    function updateParams() {
+        fetch('/update', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0, show_left: eyeLeft.checked, num_disp:5 }) }).catch(() => {});
+    }
 
     const video = document.getElementById('video-feed');
     const tooltip = document.getElementById('depth-tooltip');
@@ -457,9 +443,7 @@
             tracking_scale_x: parseInt(trackingScaleX.value),
             tracking_scale_y: parseInt(trackingScaleY.value),
             tracking_offset_x: parseInt(trackingOffsetX.value),
-            tracking_offset_y: parseInt(trackingOffsetY.value),
-            alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) / 100.0 : 0,
-            show_left: eyeLeft.checked
+            tracking_offset_y: parseInt(trackingOffsetY.value)
         };
         try{
             await fetch('/api/camera/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)});

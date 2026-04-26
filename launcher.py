@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Launcher for auto-updating and starting the application from GitHub repository.
-WARNING: This script must be run with root privileges (via sudo).
-If run as a regular user - it will report an error and terminate.
+Launcher для автообновления и запуска приложения из GitHub репозитория.
+ВНИМАНИЕ: Этот скрипт должен запускаться с правами root (через sudo).
+Если запущен обычным пользователем – он сообщит об ошибке и завершится.
 """
 
 import os
@@ -25,8 +25,7 @@ import json
 import shlex
 from pathlib import Path
 
-# Constants
-BASE_DIR = "/home/orangepi/R2/"
+# Константы
 REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
@@ -34,7 +33,7 @@ MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 INTERNET_CHECK_HOST = "8.8.8.8"
 LAST_COMMIT_FILE = ".last_commit"
-DEPS_UPDATED_FLAG = ".deps_updated"      # flag that dependencies already checked for current commit
+DEPS_UPDATED_FLAG = ".deps_updated"      # флаг, что зависимости уже проверены для текущего коммита
 
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
@@ -42,12 +41,12 @@ def log_message(*args):
     print(f"[{timestamp}] {msg}")
 
 def check_root():
-    """Check if script is run with root privileges."""
+    """Проверяет, запущен ли скрипт с правами root."""
     if platform.system() != "Linux":
         return
     if os.geteuid() != 0:
-        log_message("[!] This script must be run with sudo!")
-        log_message("[!] Run: sudo python3 launcher.py")
+        log_message("[!] Этот скрипт должен запускаться с sudo!")
+        log_message("[!] Запустите: sudo python3 launcher.py")
         sys.exit(1)
 
 def is_internet_available(timeout=3):
@@ -63,19 +62,19 @@ def is_internet_available(timeout=3):
         return False
 
 def wait_for_internet(max_wait=60):
-    log_message(f"[L] Waiting for internet up to {max_wait} sec...")
+    log_message(f"[L] Ожидание интернета до {max_wait} сек...")
     start = time.time()
     while time.time() - start < max_wait:
         if is_internet_available(timeout=2):
-            log_message("[L] Internet available.")
+            log_message("[L] Интернет доступен.")
             return True
-        log_message("[L] Internet unavailable, waiting 5 sec...")
+        log_message("[L] Интернет недоступен, ждём 5 сек...")
         time.sleep(5)
-    log_message("[L] Internet did not appear in the allotted time.")
+    log_message("[L] Интернет не появился за отведённое время.")
     return False
 
 def get_display_user():
-    """Returns the username of the graphical session (real person)."""
+    """Возвращает имя пользователя, от которого запущена графическая сессия (реальный человек)."""
     user = os.environ.get('SUDO_USER')
     if user and user != 'root':
         return user
@@ -88,11 +87,11 @@ def get_display_user():
     return 'orangepi'  # fallback
 
 def fix_permissions(path, user):
-    """Recursively change owner of files in path to user."""
+    """Рекурсивно меняет владельца файлов в path на user."""
     try:
         pw = pwd.getpwnam(user)
         uid, gid = pw.pw_uid, pw.pw_gid
-        log_message(f"[L] Changing owner of {path} to {user} ({uid}:{gid})")
+        log_message(f"[L] Меняем владельца {path} на {user} ({uid}:{gid})")
         for root, dirs, files in os.walk(path):
             for d in dirs:
                 os.chown(os.path.join(root, d), uid, gid)
@@ -100,27 +99,24 @@ def fix_permissions(path, user):
                 os.chown(os.path.join(root, f), uid, gid)
         os.chown(path, uid, gid)
     except Exception as e:
-        log_message(f"[!] Failed to change owner: {e}")
+        log_message(f"[!] Не удалось изменить владельца: {e}")
 
 def apply_self_update(new_launcher_path):
-    """Replace current launcher with new version and restart."""
-    current_script = os.path.join(BASE_DIR, os.path.basename(__file__))
+    current_script = os.path.abspath(__file__)
     if filecmp.cmp(current_script, new_launcher_path, shallow=False):
-        log_message("[L] Current launcher version is up to date.")
+        log_message("[L] Текущая версия лаунчера актуальна.")
         os.unlink(new_launcher_path)
         return False
 
-    log_message("[L] New launcher version detected. Replacing and restarting...")
+    log_message("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
     try:
         shutil.move(new_launcher_path, current_script)
         st = os.stat(current_script)
         os.chmod(current_script, st.st_mode)
-        log_message("[L] Launcher successfully updated. Restarting...")
-        # Use sys.executable to get the actual Python interpreter path
-        python_exe = sys.executable if sys.executable else "/usr/bin/python3"
-        os.execv(python_exe, [python_exe, current_script] + sys.argv[1:])
+        log_message("[L] Лаунчер успешно обновлён. Перезапускаю...")
+        os.execv("python3", ["python3", current_script] + sys.argv[1:])
     except Exception as e:
-        log_message(f"[!] Error during self-update: {e}")
+        log_message(f"[!] Ошибка при самообновлении: {e}")
         try:
             os.unlink(new_launcher_path)
         except:
@@ -132,7 +128,7 @@ def get_remote_head_commit_info(owner, repo, branch='main'):
     try:
         response = requests.get(api_url, timeout=10)
         if response.status_code != 200:
-            log_message(f"[!] GitHub API returned {response.status_code}")
+            log_message(f"[!] GitHub API вернул {response.status_code}")
             return None, None
         data = response.json()
         sha = data.get('sha')
@@ -142,7 +138,7 @@ def get_remote_head_commit_info(owner, repo, branch='main'):
             commit_date = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
         return sha, commit_date
     except Exception as e:
-        log_message(f"[!] Error getting commit info: {e}")
+        log_message(f"[!] Ошибка получения информации о коммите: {e}")
         return None, None
 
 def is_repo_up_to_date(target_dir):
@@ -164,9 +160,9 @@ def save_last_commit_info(target_dir, sha):
     try:
         with open(last_commit_path, 'w') as f:
             f.write(sha)
-        log_message(f"[L] Saved commit SHA: {sha[:8]}")
+        log_message(f"[L] Сохранён SHA коммита: {sha[:8]}")
     except Exception as e:
-        log_message(f"[!] Error saving .last_commit: {e}")
+        log_message(f"[!] Ошибка сохранения .last_commit: {e}")
 
 def download_and_extract_repo(target_dir, script_name, target_user):
     if is_repo_up_to_date(target_dir):
@@ -174,11 +170,11 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
     remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
     if remote_sha is None:
-        log_message("[!] Failed to get remote commit SHA, update aborted.")
+        log_message("[!] Не удалось получить SHA удалённого коммита, обновление прервано.")
         return False
 
     try:
-        log_message("[L] Downloading repository...")
+        log_message("[L] Скачивание репозитория...")
         response = requests.get(ARCHIVE_URL, stream=True)
         response.raise_for_status()
 
@@ -193,7 +189,7 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
             extracted_items = os.listdir(tmp_extract_dir)
             if not extracted_items:
-                raise Exception("[!] Archive is empty")
+                raise Exception("[!] Архив пуст")
             repo_root = os.path.join(tmp_extract_dir, extracted_items[0])
             if not os.path.isdir(repo_root):
                 for item in extracted_items:
@@ -201,7 +197,7 @@ def download_and_extract_repo(target_dir, script_name, target_user):
                         repo_root = os.path.join(tmp_extract_dir, item)
                         break
                 else:
-                    raise Exception("[!] Could not find repository root folder")
+                    raise Exception("[!] Не удалось найти корневую папку репозитория")
 
             new_launcher_tmp = None
             for root, dirs, files in os.walk(repo_root):
@@ -216,7 +212,7 @@ def download_and_extract_repo(target_dir, script_name, target_user):
                         continue
 
                     if file == script_name:
-                        log_message(f"[L] Found new version of {script_name}, checking if update needed...")
+                        log_message(f"[L] Найдена новая версия {script_name}, проверяем необходимость обновления...")
                         fd, new_launcher_tmp = tempfile.mkstemp(prefix="launcher_new_", suffix=".py")
                         os.close(fd)
                         shutil.copy2(src_file, new_launcher_tmp)
@@ -224,15 +220,15 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
                     dest_file = os.path.join(dest_dir, file)
                     shutil.copy2(src_file, dest_file)
-                    log_message(f"[L] Copied: {os.path.join(rel_path, file) if rel_path != '.' else file}")
+                    log_message(f"[L] Скопирован: {os.path.join(rel_path, file) if rel_path != '.' else file}")
 
         os.unlink(tmp_zip)
 
-        # After update, remove dependencies flag so they get rechecked on next run
+        # После обновления удаляем флаг зависимостей, чтобы при следующей проверке они перепроверились
         deps_flag = os.path.join(target_dir, DEPS_UPDATED_FLAG)
         if os.path.exists(deps_flag):
             os.remove(deps_flag)
-            log_message("[L] Dependencies flag reset.")
+            log_message("[L] Флаг зависимостей сброшен.")
 
         fix_permissions(target_dir, target_user)
         save_last_commit_info(target_dir, remote_sha)
@@ -242,67 +238,68 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         return True
 
     except Exception as e:
-        log_message(f"[!] Error downloading/extracting repository: {e}")
+        log_message(f"[!] Ошибка при загрузке/распаковке репозитория: {e}")
         return False
 
 def mark_dependencies_updated():
-    """Creates a flag file indicating dependencies for current commit are updated."""
-    flag_path = os.path.join(BASE_DIR, DEPS_UPDATED_FLAG)
+    """Создаёт файл-флаг, указывающий что зависимости для текущего коммита обновлены."""
+    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DEPS_UPDATED_FLAG)
     try:
         with open(flag_path, 'w') as f:
             f.write(datetime.datetime.now().isoformat())
-        log_message("[L] Dependencies update flag set.")
+        log_message("[L] Флаг обновления зависимостей установлен.")
     except Exception as e:
-        log_message(f"[!] Failed to create flag: {e}")
+        log_message(f"[!] Не удалось создать флаг: {e}")
 
 def install_requirements(force=False):
     """
-    Installs pip dependencies.
-    force=True - force installation (e.g., after repo update).
-    If force=False, checks flag and pip dependency matching against requirements.txt.
+    Устанавливает pip-зависимости.
+    force=True — принудительная установка (например, после обновления репозитория).
+    Если force=False, проверяет флаг и соответствие зависимостей requirements.txt через pip.
     """
     if not os.path.exists(REQUIREMENTS_FILE):
         return True
 
-    flag_path = os.path.join(BASE_DIR, DEPS_UPDATED_FLAG)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    flag_path = os.path.join(script_dir, DEPS_UPDATED_FLAG)
 
-    # If not forced, check if update is needed
+    # Если не принудительно, проверяем, нужно ли обновлять
     if not force:
-        # Check flag: if exists, dependencies already checked for this version
+        # Проверяем флаг: если есть, значит зависимости уже проверены для текущей версии
         if os.path.exists(flag_path):
-            log_message("[L] Dependencies already checked for this version, skipping.")
+            log_message("[L] Зависимости уже проверялись для этой версии, пропускаем.")
             return True
 
-        # Check dependencies match requirements.txt via pip dry-run
-        log_message("[L] Checking dependencies against requirements.txt...")
+        # Проверка соответствия зависимостей requirements.txt через pip dry-run
+        log_message("[L] Проверка соответствия зависимостей requirements.txt...")
         try:
             env = os.environ.copy()
             env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
             result = subprocess.run(
-                ["sudo", "python3", "-m", "pip", "install",
+                ["sudo", "python3", "-m", "pip3", "install",
                  "-r", REQUIREMENTS_FILE,
                  "--dry-run", "--quiet"],
                 capture_output=True, text=True, timeout=60,
                 env=env
             )
             if result.returncode == 0:
-                log_message("[L] All dependencies match requirements.txt.")
+                log_message("[L] Все зависимости соответствуют requirements.txt.")
                 mark_dependencies_updated()
                 return True
             else:
-                log_message("[L] Dependencies don't match requirements.txt, starting installation.")
+                log_message("[L] Зависимости не соответствуют requirements.txt, начинаем установку.")
         except Exception as e:
-            log_message(f"[!] Error checking dependencies: {e}")
-            # continue to installation
+            log_message(f"[!] Ошибка при проверке зависимостей: {e}")
+            # продолжаем к установке
 
-    # Installation
+    # Установка
     try:
-        log_message("[L] Installing/updating pip dependencies...")
+        log_message("[L] Установка/обновление pip-зависимостей...")
         env = os.environ.copy()
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 
         cmd = [
-            "sudo", "python3", "-m", "pip", "install",
+            "sudo", "python3", "-m", "pip3", "install",
             "--no-cache-dir",
             "--upgrade-strategy", "only-if-needed",
             "-r", REQUIREMENTS_FILE
@@ -310,15 +307,15 @@ def install_requirements(force=False):
 
         result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
         if result.returncode != 0:
-            log_message(f"[!] PIP Error (Code {result.returncode}):")
+            log_message(f"[!] Ошибка PIP (Code {result.returncode}):")
             log_message(result.stderr)
             return False
 
-        log_message("[L] Dependencies successfully installed.")
+        log_message("[L] Зависимости успешно установлены.")
         mark_dependencies_updated()
         return True
     except Exception as e:
-        log_message(f"[!] Error installing dependencies: {e}")
+        log_message(f"[!] Ошибка при установке зависимостей: {e}")
         return False
 
 def get_terminal_command(script_path, user):
@@ -337,13 +334,13 @@ def get_terminal_command(script_path, user):
     return None
 
 def setup_autostart_linux(target_user):
-    script_path = os.path.join(BASE_DIR, os.path.basename(__file__))
+    script_path = os.path.abspath(__file__)
     try:
         pw = pwd.getpwnam(target_user)
         user_home = pw.pw_dir
         uid, gid = pw.pw_uid, pw.pw_gid
     except KeyError:
-        log_message(f"[!] User {target_user} not found in system.")
+        log_message(f"[!] Пользователь {target_user} не найден в системе.")
         return False
 
     autostart_dir = os.path.join(user_home, ".config", "autostart")
@@ -352,7 +349,7 @@ def setup_autostart_linux(target_user):
 
     terminal_cmd = get_terminal_command(script_path, target_user)
     if not terminal_cmd:
-        log_message("[!] No suitable terminal found.")
+        log_message("[!] Не найден подходящий терминал.")
         return False
 
     cmd_str = " ".join(shlex.quote(arg) for arg in terminal_cmd)
@@ -375,11 +372,11 @@ X-GNOME-Autostart-Phase=Applications
         with open(desktop_file_path, 'w') as f:
             f.write(desktop_content)
         os.chown(desktop_file_path, uid, gid)
-        log_message(f"[L] Autostart installed: {desktop_file_path}")
-        log_message(f"[L] Command: {cmd_str}")
+        log_message(f"[L] Автозапуск установлен: {desktop_file_path}")
+        log_message(f"[L] Команда: {cmd_str}")
         return True
     except Exception as e:
-        log_message(f"[!] Error creating .desktop file: {e}")
+        log_message(f"[!] Ошибка создания .desktop файла: {e}")
         return False
 
 def remove_autostart_linux(target_user):
@@ -387,15 +384,15 @@ def remove_autostart_linux(target_user):
         pw = pwd.getpwnam(target_user)
         user_home = pw.pw_dir
     except KeyError:
-        log_message(f"[!] User {target_user} not found.")
+        log_message(f"[!] Пользователь {target_user} не найден.")
         return
     desktop_file = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
     if os.path.exists(desktop_file):
         try:
             os.remove(desktop_file)
-            log_message(f"[L] .desktop file deleted.")
+            log_message(f"[L] .desktop файл удалён.")
         except Exception as e:
-            log_message(f"[!] Error deleting: {e}")
+            log_message(f"[!] Ошибка удаления: {e}")
 
 def is_autostart_installed(target_user):
     try:
@@ -407,77 +404,77 @@ def is_autostart_installed(target_user):
     return os.path.exists(desktop_file)
 
 def start_main():
-    # Use BASE_DIR to find main.py
-    main_path = os.path.join(BASE_DIR, MAIN_SCRIPT)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    main_path = os.path.join(script_dir, MAIN_SCRIPT)
     if not os.path.exists(main_path):
-        log_message(f"[!] {MAIN_SCRIPT} not found in {BASE_DIR}.")
+        log_message(f"[!] {MAIN_SCRIPT} не найден.")
         return False
     try:
-        log_message(f"[L] Starting {MAIN_SCRIPT}...")
-        
+        log_message(f"[L] Запуск {MAIN_SCRIPT}...")
+
         system_name = platform.system()
         if system_name == "Windows":
-            # Explicitly create new console window
+            # Явно создаём новое окно консоли.
             subprocess.Popen(
                 ["sudo", "python3", main_path],
-                cwd=BASE_DIR,
+                cwd=script_dir,
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
             return True
-        
+
         if system_name == "Linux":
-            # Try to start main.py in new GUI terminal
+            # Пытаемся запустить main.py в новом терминале GUI.
             python_cmd = f"sudo python3 {shlex.quote(main_path)}"
             hold_cmd = 'echo; echo "main.py finished. Press any key to close."; read'
             full_cmd = f"{python_cmd}; {hold_cmd}"
-            
+
             if shutil.which("terminator"):
-                subprocess.Popen(["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"], cwd=BASE_DIR)
+                subprocess.Popen(["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
                 return True
             if shutil.which("gnome-terminal"):
-                subprocess.Popen(["gnome-terminal", "--full-screen", "--", "bash", "-c", full_cmd], cwd=BASE_DIR)
+                subprocess.Popen(["gnome-terminal", "--full-screen", "--", "bash", "-c", full_cmd], cwd=script_dir)
                 return True
             if shutil.which("x-terminal-emulator"):
-                subprocess.Popen(["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"], cwd=BASE_DIR)
+                subprocess.Popen(["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
                 return True
             if shutil.which("xterm"):
-                subprocess.Popen(["xterm", "-fullscreen", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=BASE_DIR)
+                subprocess.Popen(["xterm", "-fullscreen", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir)
                 return True
-            
-            log_message("[!] GUI terminal not found, starting main.py in current process.")
-            subprocess.Popen(["sudo", "python3", main_path], cwd=BASE_DIR)
+
+            log_message("[!] Терминал GUI не найден, запускаю main.py в текущем процессе.")
+            subprocess.Popen(["sudo", "python3", main_path], cwd=script_dir)
             return True
-        
-        # For other OS use regular start as fallback
-        subprocess.Popen(["sudo", "python3", main_path], cwd=BASE_DIR)
+
+        # Для остальных ОС используем обычный запуск как fallback.
+        subprocess.Popen(["sudo", "python3", main_path], cwd=script_dir)
         return True
     except Exception as e:
-        log_message(f"[!] Error starting {MAIN_SCRIPT}: {e}")
+        log_message(f"[!] Ошибка запуска {MAIN_SCRIPT}: {e}")
         return False
 
 def main():
     check_root()
-    
+
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
     parser.add_argument("--install-autostart", action="store_true")
     parser.add_argument("--remove-autostart", action="store_true")
     parser.add_argument("--no-start", action="store_true")
     parser.add_argument("--dont-install-autostart", action="store_true")
     args, unknown = parser.parse_known_args()
-    
+
     target_user = get_display_user()
-    log_message(f"[L] Target user for permissions: {target_user}")
-    
+    log_message(f"[L] Целевой пользователь для прав: {target_user}")
+
     if args.install_autostart or args.remove_autostart:
         if platform.system() != "Linux":
-            log_message("[!] Autostart only for Linux.")
+            log_message("[!] Автозапуск только для Linux.")
             sys.exit(1)
         if args.install_autostart:
             setup_autostart_linux(target_user)
         elif args.remove_autostart:
             remove_autostart_linux(target_user)
         sys.exit(0)
-    
+
     log_message(r"""
   _____     ___  
   |  __ \  |__ \ 
@@ -491,44 +488,43 @@ def main():
  """)
     if platform.system() == "Linux" and shutil.which("unclutter"):
         subprocess.Popen(["unclutter", "--timeout", "5", "--fork"])
-    
-    # Use BASE_DIR as the working directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     script_name = os.path.basename(__file__)
-    os.chdir(BASE_DIR)
-    log_message(f"[L] Working directory: {BASE_DIR}")
-    
+    os.chdir(script_dir)
+    log_message(f"[L] Рабочая директория: {script_dir}")
+
     if platform.system() == "Linux" and not args.dont_install_autostart:
         if not is_autostart_installed(target_user):
-            log_message("[L] Autostart not found. Installing...")
+            log_message("[L] Автозапуск не обнаружен. Устанавливаем...")
             setup_autostart_linux(target_user)
         else:
-            log_message("[L] Autostart already installed.")
-    
+            log_message("[L] Автозапуск уже установлен.")
+
     internet_ok = wait_for_internet(max_wait=60)
     repo_updated = False
     if internet_ok:
-        log_message("[L] Trying to update repository...")
-        repo_updated = download_and_extract_repo(BASE_DIR, script_name, target_user)
+        log_message("[L] Пробуем обновить репозиторий...")
+        repo_updated = download_and_extract_repo(script_dir, script_name, target_user)
         if repo_updated:
-            # Repository was either updated or already up to date
-            # force=True only if actual download happened (SHA changed)
-            # In download_and_extract_repo we reset the flag on download, so
-            # install_requirements will see missing flag and perform check
+            # Репозиторий либо был обновлён, либо уже актуален.
+            # force=True только если действительно было скачивание (SHA изменился).
+            # В download_and_extract_repo мы сбрасываем флаг при скачивании, поэтому
+            # install_requirements увидит отсутствие флага и выполнит проверку.
             install_requirements(force=False)
         else:
-            log_message("[*] Repository update failed.")
+            log_message("[*] Обновление репозитория не удалось.")
     else:
-        log_message("[*] Internet unavailable, skipping update.")
-        # Even without internet we can start main.py if dependencies are already installed
+        log_message("[*] Интернет отсутствует, пропускаем обновление.")
+        # Даже без интернета можно запустить main.py, если зависимости уже стоят
         install_requirements(force=False)
-    
+
     if not args.no_start:
         time.sleep(2)
         start_main()
     else:
-        log_message("[L] main.py start skipped.")
-    
-    log_message("[L] Launcher work completed. Window can be closed.")
+        log_message("[L] Запуск main.py пропущен.")
+
+    log_message("[L] Работа лаунчера завершена. Окно можно закрыть.")
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,4 @@
 import os
-import subprocess
-import threading
 from dataclasses import dataclass
 
 from .config import AppConfig
@@ -43,36 +41,6 @@ def build_services() -> ServiceContainer:
     )
 
 
-def open_browser(url: str) -> None:
-    """Attempt to open the given URL in the default browser."""
-    import webbrowser
-    import shutil
-    
-    # Try webbrowser module first
-    try:
-        webbrowser.open(url)
-        return
-    except Exception:
-        pass
-    
-    # Fallback: try common browser commands
-    browsers = [
-        "chromium-browser",
-        "chromium",
-        "firefox-esr",
-        "firefox",
-        "google-chrome",
-        "xdg-open",
-    ]
-    for browser in browsers:
-        if shutil.which(browser):
-            try:
-                subprocess.Popen([browser, url])
-                return
-            except Exception:
-                continue
-
-
 def run() -> None:
     services = build_services()
     services.logger.log("Запуск веб-сервера R2 (новая архитектура)")
@@ -81,16 +49,5 @@ def run() -> None:
     services.shell.start()
 
     app = create_app(services=services, logger=services.logger)
-    
-    # Schedule browser opening after a short delay
-    def launch_browser():
-        import time
-        time.sleep(2)  # Wait for server to start
-        url = f"http://localhost:{services.config.http_port}"
-        services.logger.log(f"Открытие браузера: {url}")
-        open_browser(url)
-    
-    threading.Thread(target=launch_browser, daemon=True).start()
-    
     app.run(host=services.config.host, port=services.config.http_port, debug=False, threaded=True)
 
