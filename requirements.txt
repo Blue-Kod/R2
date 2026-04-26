@@ -7,4 +7,5 @@ opencv-contrib-python
 numpy
 PCA9685-smbus2
 mediapipe
-pywebview
+PyQt5
+PyQtWebEngine

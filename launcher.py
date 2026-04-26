@@ -29,14 +29,12 @@ from pathlib import Path
 REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
-REQUIREMENTS_APT = [  # System dependencies for Debian/ARM (pywebview GTK backend)
-    "python3-gi",
-    "python3-gi-cairo",
-    "gir1.2-gtk-3.0",
-    "libwebkit2gtk-4.0-dev",
-    "libglib2.0-dev",
-    "libgtk-3-dev",
-    "unclutter-xfixes",  # Hides mouse cursor for kiosk mode
+REQUIREMENTS_APT = [
+    "python3-pyqt5",
+    "python3-pyqt5.qtwebengine",
+    "python3-pyqt5.qtwebchannel",
+    "libqt5webengine5-dev",
+    "unclutter-xfixes",  # Для скрытия курсора
 ]
 MAIN_SCRIPT = "main.py"
 AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"

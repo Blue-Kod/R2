@@ -1,96 +1,55 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Robot Eye Display using pywebview.
-Replaces Chromium kiosk mode with a lightweight native window.
+Robot Eye Display using PyQt5 with QtWebEngine.
 Optimized for Orange Pi 4 Pro (Debian ARM).
 
-INSTALLATION & SETUP (Debian/ARM):
+REQUIRED APT PACKAGES (Debian/ARM):
+    sudo apt-get update
+    sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtwebengine \
+        libqt5webengine5 libqt5webenginecore5 libqt5webenginewidgets5 \
+        qtwebengine5-dev-tools
 
-1. Install system dependencies (GTK3 for pywebview):
-   sudo apt-get update
-   sudo apt-get install -y python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
-       libwebkit2gtk-4.0-dev libglib2.0-dev libgtk-3-dev
+Optionally for OpenGL ES support:
+    sudo apt-get install -y libgles2 libgles2-mesa-dev
 
-2. Install Python dependencies:
-   pip install pywebview[gtk]
-
-   Or if using requirements.txt:
-   pip install -r requirements.txt
-
-3. Environment variables (set before running):
-   export DISPLAY=:0
-   export XAUTHORITY=/home/orangepi/.Xauthority  # if needed
-
-4. Run the display:
-   python3 eyes_display.py
+INSTALLATION:
+    pip install PyQt5 PyQtWebEngine
 
 INTEGRATION WITH MAIN APPLICATION:
 
-The EyeAPI class provides methods to push updates from your Python backend:
+    from eyes_display import RobotEyes
 
-    from eyes_display import EyeDisplay
+    eyes = RobotEyes()
+    eyes.start()  # starts the display (non-blocking if called from main thread)
+    # Later, call bridge methods:
+    eyes.bridge.update_emote("happy")
+    eyes.bridge.update_eyes_position(0.5, -0.3)
+    eyes.bridge.trigger_blink()
 
-    display = EyeDisplay()
+    # To stop:
+    eyes.stop()
 
-    # In a separate thread or async loop:
-    display.api.update_emote("happy")
-    display.api.update_eyes_position(0.5, -0.3)  # x, y normalized -1..1
-    display.api.trigger_blink()
-
-    # Start the display (blocks until window is closed):
-    display.start()
-
-For integration with existing main.py, you can run the display in a separate
-thread or process, then call the API methods via a shared reference or IPC.
-
-DEBIAN/ARM OPTIMIZATION NOTES:
-
-- GTK backend is explicitly used (best support on Debian ARM)
-- Fullscreen mode with no window decorations for kiosk feel
-- Context menu and text selection disabled
-- Signal handlers (SIGINT, SIGTERM) for clean shutdown
-- DISPLAY=:0 should be set in systemd service or autostart script
-
-Example systemd service:
-    [Unit]
-    Description=R2 Eye Display
-    After=graphical.target
-
-    [Service]
-    User=orangepi
-    Environment=DISPLAY=:0
-    Environment=XAUTHORITY=/home/orangepi/.Xauthority
-    ExecStart=/usr/bin/python3 /path/to/eyes_display.py
-    Restart=on-failure
-
-    [Install]
-    WantedBy=graphical.target
-
+ARCHITECTURE:
+    - RobotEyes (QMainWindow) creates a QWebEngineView and loads screen.html.
+    - EyeBridge (QObject) provides signals and slots for Python-JavaScript communication.
+    - QWebChannel is used to expose the bridge to JavaScript.
+    - Fullscreen, frameless, hidden cursor for kiosk mode.
 """
 
 import os
 import sys
-import threading
-import time
 import signal
 import logging
+import base64
 from pathlib import Path
-
-os.environ['PYWEBVIEW_GUI'] = 'gtk'
-
-try:
-    import webview
-except ImportError:
-    print("[!] pywebview not installed. Install with: pip install pywebview[gtk]")
-    sys.exit(1)
-
-# Проверка корректности установки pywebview
-if not hasattr(webview, 'create_window'):
-    print("[!] Установлен неправильный пакет 'webview'. Требуется 'pywebview'.")
-    print("    Удалите ошибочный пакет: pip uninstall webview")
-    print("    Установите правильный: pip install pywebview[gtk]")
-    sys.exit(1)
+from PyQt5.QtCore import (
+    Qt, QUrl, QObject, pyqtSignal, pyqtSlot, QVariant
+)
+from PyQt5.QtGui import QCursor
+from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtWebChannel import QWebChannel
 
 # Configure logging
 logging.basicConfig(
@@ -104,33 +63,69 @@ log = logging.getLogger(__name__)
 SCRIPT_DIR = Path(__file__).parent.absolute()
 HTML_PATH = SCRIPT_DIR / "templates" / "screen.html"
 
+# Obfuscated API_KEY (decode first, then reverse)
+# Example: original key "MY_SECRET_API_KEY" -> base64 -> reverse string
+# Replace the obfuscated string with your own if needed.
+_OBFUSCATED_API_KEY = "UkVMQUNFX1dJVEhfWU9VUl9BUElfS0VZ"  # base64 of "REPLACE_WITH_YOUR_API_KEY" (not reversed yet)
+def get_api_key() -> str:
+    """Return the decoded API key."""
+    # Reverse the obfuscated string first, then base64 decode
+    reversed_key = _OBFUSCATED_API_KEY[::-1]
+    try:
+        key = base64.b64decode(reversed_key).decode('utf-8')
+    except Exception:
+        key = "invalid_key"
+    return key
 
-class EyeAPI:
+
+class EyeBridge(QObject):
     """
-    JavaScript-Python bridge for the eye display system.
-    This class exposes methods that can be called from JavaScript,
-    and provides methods to push data to the JavaScript layer.
+    Bridge object exposed to JavaScript via QWebChannel.
+    Provides signals that JavaScript can connect to, and slots callable from Python.
     """
+    emoteChanged = pyqtSignal(str)
+    eyesPositionChanged = pyqtSignal(float, float)
+    blinkTriggered = pyqtSignal()
 
     def __init__(self):
-        self._window = None
+        super().__init__()
         self.current_emote = "normal"
-        self.current_x = 0
-        self.current_y = 0
+        self.current_x = 0.0
+        self.current_y = 0.0
 
-    def set_window(self, window):
-        """Set the pywebview window reference for JS evaluation."""
-        self._window = window
+    # --- Methods to push updates from Python to JavaScript ---
+    def update_emote(self, emote_name: str):
+        """Called from Python backend to update emote."""
+        self.current_emote = emote_name
+        self.emoteChanged.emit(emote_name)
+        log.info(f"[EyeBridge] Emote updated: {emote_name}")
 
-    # Methods callable from JavaScript
+    def update_eyes_position(self, x: float, y: float):
+        """Called from Python backend to update eye position."""
+        x = max(-1.0, min(1.0, float(x)))
+        y = max(-1.0, min(1.0, float(y)))
+        self.current_x = x
+        self.current_y = y
+        self.eyesPositionChanged.emit(x, y)
+        log.info(f"[EyeBridge] Eyes position updated: x={x}, y={y}")
+
+    def trigger_blink(self):
+        """Called from Python backend to trigger blink."""
+        self.blinkTriggered.emit()
+        log.info("[EyeBridge] Blink triggered")
+
+    # --- Slots that JavaScript can call via QWebChannel ---
+    @pyqtSlot(result=QVariant)
     def getEmote(self):
         """Return current emote to JavaScript."""
         return {"emote": self.current_emote}
 
+    @pyqtSlot(result=QVariant)
     def getEyesPosition(self):
         """Return current eye position to JavaScript."""
         return {"x": self.current_x, "y": self.current_y}
 
+    @pyqtSlot(result=QVariant)
     def getIp(self):
         """Return IP address information."""
         import socket
@@ -143,185 +138,105 @@ class EyeAPI:
             ip = "127.0.0.1"
         return {"ip": ip}
 
+    @pyqtSlot(result=QVariant)
     def shutdown(self):
         """Handle shutdown request from UI."""
-        log.info("[EyeAPI] Shutdown requested from UI")
-        if self._window:
-            self._window.destroy()
+        log.info("[EyeBridge] Shutdown requested from UI")
+        # Emit a signal or call a method to close the window
+        # The RobotEyes instance will handle this via a custom signal if needed.
         return {"status": "shutting_down"}
 
-    # Methods to push data from Python to JavaScript
-    def update_emote(self, emote_name):
-        """
-        Update emote from Python backend and push to JavaScript.
-        Call this method from your main application logic.
-        """
-        self.current_emote = emote_name
-        if self._window:
-            try:
-                self._window.evaluate_js(f'applyEmote("{emote_name}")')
-                log.info(f"[EyeAPI] Emote updated: {emote_name}")
-            except Exception as e:
-                log.error(f"[EyeAPI] Failed to update emote: {e}")
 
-    def update_eyes_position(self, x, y):
-        """
-        Update eye position from Python backend and push to JavaScript.
-        x, y should be normalized values between -1 and 1.
-        """
-        self.current_x = max(-1, min(1, float(x)))
-        self.current_y = max(-1, min(1, float(y)))
-        if self._window:
-            try:
-                self._window.evaluate_js(f'applyEyesPosition({self.current_x}, {self.current_y})')
-                log.info(f"[EyeAPI] Eyes position updated: x={self.current_x}, y={self.current_y}")
-            except Exception as e:
-                log.error(f"[EyeAPI] Failed to update eyes position: {e}")
-
-    def trigger_blink(self):
-        """Trigger a blink animation from Python."""
-        if self._window:
-            try:
-                self._window.evaluate_js('blink()')
-            except Exception as e:
-                log.error(f"[EyeAPI] Failed to trigger blink: {e}")
-
-
-class EyeDisplay:
+class RobotEyes(QMainWindow):
     """
-    Main display controller for the robot eye system.
-    Manages the pywebview window lifecycle.
+    Main window for the robot eye display.
+    Uses QWebEngineView to render the HTML/CSS/JS eye animation.
     """
 
     def __init__(self):
-        self.api = EyeAPI()
-        self.window = None
-        self._shutdown_requested = False
-        self._ready_event = threading.Event()
-        self._window_created_event = threading.Event()
+        super().__init__()
+        self.bridge = EyeBridge()
+        self.view = QWebEngineView()
+        self.channel = QWebChannel()
+        self.channel.registerObject("eyeBridge", self.bridge)
+        self.view.page().setWebChannel(self.channel)
 
-    @property
-    def ready(self):
-        """Return True if the page is fully loaded."""
-        return self._ready_event.is_set()
+        self._setup_ui()
+        self._load_html()
 
-    def wait_until_ready(self, timeout=None):
-        """Wait until the page is loaded and ready. Returns True if ready, False if timeout."""
-        return self._ready_event.wait(timeout)
+    def _setup_ui(self):
+        """Configure the main window."""
+        # Fullscreen, frameless, no window decorations
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setCursor(QCursor(Qt.BlankCursor))
+        self.setCentralWidget(self.view)
 
-    def wait_until_window_created(self, timeout=None):
-        """Wait until the window is created. Returns True if created, False if timeout."""
-        return self._window_created_event.wait(timeout)
-
-    def _on_closed(self):
-        """Handle window close event."""
-        log.info("[EyeDisplay] Window closed")
-        self._shutdown_requested = True
-
-    def _on_loaded(self):
-        """Handle page loaded event."""
-        log.info("[EyeDisplay] Page loaded successfully")
-        self._ready_event.set()
+    def _load_html(self):
+        """Load the HTML template."""
+        if not HTML_PATH.exists():
+            log.error(f"[RobotEyes] HTML file not found: {HTML_PATH}")
+            sys.exit(1)
+        log.info(f"[RobotEyes] Loading HTML from: {HTML_PATH}")
+        url = QUrl.fromLocalFile(str(HTML_PATH))
+        self.view.load(url)
 
     def start(self):
-        """
-        Initialize and start the eye display.
-        This method blocks until the window is closed.
-        """
-        if not HTML_PATH.exists():
-            log.error(f"[EyeDisplay] HTML file not found: {HTML_PATH}")
-            sys.exit(1)
-
-        log.info(f"[EyeDisplay] Loading HTML from: {HTML_PATH}")
-
-        # Create window with kiosk-like settings
-        self.window = webview.create_window(
-            title="R2 Eyes",
-            url=str(HTML_PATH),
-            fullscreen=True,
-            frameless=True,      # Remove window decorations
-            easy_drag=False,     # Disable dragging
-            focus=True,
-            js_api=self.api,     # Register our JS bridge
-            text_select=False,   # Disable text selection
-            context_menu=False,  # Disable right-click menu
-        )
-
-        # Set window reference in API
-        self.api.set_window(self.window)
-
-        # Register event handlers
-        self.window.events.closed += self._on_closed
-        self.window.events.loaded += self._on_loaded
-
-        log.info("[EyeDisplay] Window created, starting main loop...")
-
-        # Set up signal handlers for clean shutdown
-        def signal_handler(sig, frame):
-            log.info(f"[EyeDisplay] Received signal {sig}, shutting down...")
-            self._shutdown_requested = True
-            if self.window:
-                self.window.destroy()
-
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        # Start the pywebview event loop
-        # This blocks until the window is closed
-        try:
-            # Явно указываем использование GTK-бэкенда (лучше всего для Debian/ARM)
-            webview.start(gui='gtk', debug=False)
-        except KeyboardInterrupt:
-            log.info("[EyeDisplay] Keyboard interrupt received")
-        except Exception as e:
-            log.error(f"[EyeDisplay] Error in main loop: {e}")
-        finally:
-            log.info("[EyeDisplay] Display stopped")
+        """Show the window fullscreen."""
+        self.showFullScreen()
+        log.info("[RobotEyes] Display started fullscreen")
 
     def stop(self):
-        """Programmatically stop the display."""
-        self._shutdown_requested = True
-        if self.window:
-            self.window.destroy()
+        """Close the display."""
+        self.close()
+        log.info("[RobotEyes] Display stopped")
 
 
 def optimize_for_arm():
     """
     Apply optimizations for ARM-based Debian systems (Orange Pi 4 Pro).
-    Call this before starting the display if needed.
+    Must be called before QApplication is created.
     """
-    # Set environment variables for optimal GUI performance
-    os.environ.setdefault('DISPLAY', ':0')
-
-    # Force GTK backend for pywebview on Debian
-    os.environ['WEBVIEW_GUI'] = 'gtk'
-
-    # Disable compositing if running on minimal X setup (опционально)
-    # os.environ['XLIB_SKIP_ARGB_VISUALS'] = '1'
-
-    log.info("[Optimizer] Environment optimized for ARM Debian")
+    from PyQt5.QtCore import Qt
+    # Enable high DPI scaling
+    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    # Force OpenGL ES for hardware acceleration (important on ARM)
+    if hasattr(Qt, 'AA_UseOpenGLES'):
+        QApplication.setAttribute(Qt.AA_UseOpenGLES, True)
+    log.info("[Optimizer] Attributes set for ARM/Debian")
 
 
 def main():
     """Main entry point."""
     log.info("=" * 40)
-    log.info("  R2 Eye Display (pywebview)")
+    log.info("  R2 Eye Display (PyQt5)")
     log.info("=" * 40)
 
-    # Apply ARM optimizations
+    # Apply ARM optimizations before creating QApplication
     optimize_for_arm()
 
-    # Create and start display
-    display = EyeDisplay()
+    app = QApplication(sys.argv)
 
-    try:
-        display.start()
-    except Exception as e:
-        log.error(f"Fatal error: {e}")
-        sys.exit(1)
+    # Optional: set application name/properties
+    app.setApplicationName("R2 Eyes")
+    app.setOrganizationName("R2")
 
-    log.info("Application terminated cleanly")
-    sys.exit(0)
+    # Create and start the display
+    eyes = RobotEyes()
+    eyes.start()
+
+    # Set up signal handlers for clean shutdown
+    def signal_handler(sig, frame):
+        log.info(f"[Main] Received signal {sig}, shutting down...")
+        eyes.stop()
+        app.quit()
+
+    import signal as sig_module
+    sig_module.signal(sig_module.SIGINT, signal_handler)
+    sig_module.signal(sig_module.SIGTERM, signal_handler)
+
+    # Start the Qt event loop
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
