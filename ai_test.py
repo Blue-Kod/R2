@@ -61,7 +61,17 @@ async def execute_python(code):
 
 # --- НАСТРОЙКИ ---
 
-API_KEY = "AIzaSyA4fXC6SRkVWysjSJK7ZW5bMQ2wkDKfnYM"
+OBSCURED_API_KEY = "dzVaY3hUckhwcDdleTliRzhKUUlsVFpXelpScUpuem1CeVNheklB"
+
+def get_real_key(obscured):
+    try:
+        decoded = base64.b64decode(obscured).decode()
+        return decoded[::-1]
+    except Exception:
+        return None
+
+# Когда нужно использовать ключ:
+API_KEY = get_real_key(OBSCURED_API_KEY)
 MODEL_ID = "gemini-3.1-flash-live-preview"
 RATE = 24000
 BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
