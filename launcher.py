@@ -314,7 +314,7 @@ def install_requirements(force=False):
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 
         cmd = [
-            "sudo", "python3", "-m", "pip3", "install",
+            "sudo", "python3", "-m", "pip", "install",
             "--no-cache-dir",
             "--upgrade-strategy", "only-if-needed",
             "-r", REQUIREMENTS_FILE
