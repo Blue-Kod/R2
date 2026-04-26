@@ -77,10 +77,19 @@ import signal
 import logging
 from pathlib import Path
 
+os.environ['PYWEBVIEW_GUI'] = 'gtk'
+
 try:
     import webview
 except ImportError:
     print("[!] pywebview not installed. Install with: pip install pywebview[gtk]")
+    sys.exit(1)
+
+# Проверка корректности установки pywebview
+if not hasattr(webview, 'create_window'):
+    print("[!] Установлен неправильный пакет 'webview'. Требуется 'pywebview'.")
+    print("    Удалите ошибочный пакет: pip uninstall webview")
+    print("    Установите правильный: pip install pywebview[gtk]")
     sys.exit(1)
 
 # Configure logging
@@ -225,10 +234,6 @@ class EyeDisplay:
 
         log.info(f"[EyeDisplay] Loading HTML from: {HTML_PATH}")
 
-        # Configure pywebview for optimal performance on Debian/ARM
-        # Using GTK backend is recommended for Debian-based systems
-        webview.WEBVIEW_GTK = True
-
         # Create window with kiosk-like settings
         self.window = webview.create_window(
             title="R2 Eyes",
@@ -264,10 +269,8 @@ class EyeDisplay:
         # Start the pywebview event loop
         # This blocks until the window is closed
         try:
-            webview.start(
-                gui=webview.GTK,  # Explicitly use GTK backend for Debian
-                debug=False       # Set to True for debugging
-            )
+            # Явно указываем использование GTK-бэкенда (лучше всего для Debian/ARM)
+            webview.start(gui='gtk', debug=False)
         except KeyboardInterrupt:
             log.info("[EyeDisplay] Keyboard interrupt received")
         except Exception as e:
@@ -293,7 +296,7 @@ def optimize_for_arm():
     # Force GTK backend for pywebview on Debian
     os.environ['WEBVIEW_GUI'] = 'gtk'
 
-    # Disable compositing if running on minimal X setup
+    # Disable compositing if running on minimal X setup (опционально)
     # os.environ['XLIB_SKIP_ARGB_VISUALS'] = '1'
 
     log.info("[Optimizer] Environment optimized for ARM Debian")
