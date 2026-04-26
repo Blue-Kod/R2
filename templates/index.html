@@ -2,62 +2,334 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2 — Главная</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>R2 — Главная | Управление роботом</title>
     <style>
-        :root { --bg:#0a0a0a; --panel:#121212; --panel-2:#151515; --text:#f0f0f0; --muted:#9c9c9c; --line:#2a2a2a; --cam-scale: 0.67; --cam-w: 853px; --cam-h: 480px; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        html, body { height: 100%; }
-        body { height: 100vh; overflow: hidden; background: var(--bg); color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; padding: 0; margin: 0; }
-        .layout { width: 100%; max-width: none; margin: 0; height: 100vh; display: flex; flex-direction: column; gap: 12px; overflow: hidden; padding: 16px; }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-        /* Custom Black Scrollbars */
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #0a0a0a; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb { background: #333333; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #444444; }
-        ::-webkit-scrollbar-corner { background: #0a0a0a; }
-        * { scrollbar-width: thin; scrollbar-color: #333333 #0a0a0a; }
-        .topbar { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
-        .nav-links { display: flex; gap: 8px; }
-        .nav-links a { color: var(--text); text-decoration: none; border: 1px solid var(--line); background: var(--panel); padding: 8px 12px; border-radius: 8px; font-size: 13px; }
-        .stats { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-        .stats div { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); }
-        .stats span { color: var(--text); font-weight: 600; }
-        .container { display: grid; grid-template-columns: 1fr var(--cam-w) 1fr; gap: 12px; flex: 1; min-height: 0; overflow: hidden; }
-        .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-        .panel-title { font-size: 11px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
-        .terminal-box { flex: 1; border-radius: 8px; border: 1px solid var(--line); background: #0d0d0d; padding: 10px; overflow-y: auto; font-size: 12px; line-height: 1.4; white-space: pre-wrap; font-family: Consolas, "JetBrains Mono", monospace; color: #d0d0d0; min-height: 0; }
-        .tabs { display: inline-flex; gap: 6px; margin-bottom: 8px; padding: 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); align-self: flex-start; }
-        .tabs button { cursor: pointer; border: 0; border-radius: 6px; padding: 7px 10px; font-size: 12px; color: var(--muted); background: transparent; }
-        .tabs button.active { color: var(--text); background: #262626; }
-        #video-container, #pointcloud-container { width: var(--cam-w); height: var(--cam-h); flex-shrink: 0; position: relative; border-radius: 8px; border: 1px solid var(--line); background: #0d0d0d; overflow: hidden; display: flex; justify-content: center; align-items: center; }
-        #video-feed { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; margin: auto; }
-        #pointcloud-canvas { width: var(--cam-w) !important; height: var(--cam-h) !important; display: block; }
-        #terminal-input-line { display: flex; align-items: center; margin-top: 8px; }
-        #terminal-prompt { color: var(--muted); margin-right: 6px; font-family: monospace; }
-        #terminal-command { width: 100%; border: 1px solid var(--line); background: #111; color: var(--text); border-radius: 6px; padding: 8px 10px; font-family: Consolas, "JetBrains Mono", monospace; outline: none; }
-        .control-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
-        .control-row label { font-size: 12px; color: var(--muted); }
-        .control-row input[type="checkbox"] { accent-color: #fff; }
-        .control-row select { border: 1px solid var(--line); background: #111; color: #fff; border-radius: 6px; padding: 4px 6px; }
-        .control-row input[type="range"] { width: 58%; accent-color: #fff; }
-        .control-group { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
-        #camera-controls, #tracking-controls { overflow-y: auto; height: 200px; min-height: 200px; max-height: 200px; width: 100%; padding-right: 4px; }
-        .servo-controls { overflow-y: auto; min-height: 0; padding-right: 4px; }
-        .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
-        .servo-row label { width: 95px; font-size: 11px; color: var(--muted); }
-        .servo-row input[type="range"] { flex: 1; accent-color: #fff; }
-        .servo-row span { width: 42px; text-align: right; font-size: 11px; color: var(--text); }
-        .depth-tooltip { position: absolute; background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; pointer-events: none; z-index: 1000; }
-        .hidden { display: none !important; }
-        @media (max-width: 1360px) {
+        :root {
+            --bg: #0a0a0a;
+            --panel: #121212;
+            --panel-2: #151515;
+            --text: #f0f0f0;
+            --muted: #9c9c9c;
+            --line: #2a2a2a;
+            --accent: #2c6e9e;
+            --cam-w: 853px;
+            --cam-h: 480px;
+        }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+        }
+
+        body {
+            overflow: hidden;
+            color: var(--text);
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            font-size: 13px;
+        }
+
+        /* кастомный скролл */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0a0a0a;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #444;
+        }
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #333 #0a0a0a;
+        }
+
+        .layout {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow: hidden;
+            padding: 16px;
+        }
+
+        /* шапка */
+        .topbar {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-links a {
+            color: var(--text);
+            text-decoration: none;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: 0.2s;
+        }
+
+        .nav-links a:hover {
+            background: #1f1f1f;
+            border-color: #3a3a3a;
+        }
+
+        .stats {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .stats div {
+            font-size: 12px;
+            color: var(--muted);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 6px 12px;
+            background: var(--panel);
+            backdrop-filter: blur(2px);
+        }
+
+        .stats span {
+            color: var(--text);
+            font-weight: 600;
+            margin-left: 4px;
+        }
+
+        /* основная сетка */
+        .container {
+            display: grid;
+            grid-template-columns: 260px minmax(0, var(--cam-w)) 1fr;
+            gap: 14px;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            background: var(--panel);
+            border-radius: 20px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+            backdrop-filter: blur(2px);
+        }
+
+        .panel-title {
+            font-size: 11px;
+            letter-spacing: 1.2px;
+            color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+
+        /* стили для терминала */
+        .terminal-box {
+            flex: 1;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: #0d0d0d;
+            padding: 12px;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            font-family: 'JetBrains Mono', Consolas, monospace;
+            color: #e0e0e0;
+        }
+
+        /* вкладки */
+        .tabs {
+            display: inline-flex;
+            gap: 6px;
+            margin-bottom: 10px;
+            padding: 4px;
+            border-radius: 40px;
+            background: rgba(20, 20, 20, 0.8);
+            border: 1px solid var(--line);
+            align-self: flex-start;
+        }
+
+        .tabs button {
+            cursor: pointer;
+            border: none;
+            border-radius: 30px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--muted);
+            background: transparent;
+            transition: 0.2s;
+        }
+
+        .tabs button.active {
+            color: white;
+            background: #2a2a2a;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+
+        /* видео / облако */
+        #video-container, #pointcloud-container {
+            width: var(--cam-w);
+            height: var(--cam-h);
+            flex-shrink: 0;
+            position: relative;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: #070707;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #video-feed {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
+        }
+
+        #pointcloud-canvas {
+            width: 100% !important;
+            height: 100% !important;
+            display: block;
+        }
+
+        /* сервопанель */
+        .servo-controls {
+            overflow-y: auto;
+            flex: 1;
+            padding-right: 6px;
+        }
+
+        .servo-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .servo-row label {
+            width: 100px;
+            font-size: 11.5px;
+            color: var(--muted);
+        }
+
+        .servo-row input[type="range"] {
+            flex: 1;
+            accent-color: #ffffff;
+            background: #2a2a2a;
+            height: 4px;
+            border-radius: 4px;
+        }
+
+        .servo-row span {
+            width: 45px;
+            text-align: right;
+            font-size: 11px;
+            font-weight: 500;
+            color: #ddd;
+        }
+
+        /* контролы камера/трекинг */
+        .control-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .control-row label {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        input[type="checkbox"], input[type="radio"] {
+            accent-color: #3a86ff;
+            width: 16px;
+            height: 16px;
+            margin-right: 6px;
+        }
+
+        select, input[type="range"] {
+            background: #1e1e1e;
+            border: 1px solid var(--line);
+            color: white;
+            border-radius: 8px;
+            padding: 6px 8px;
+        }
+
+        #camera-controls, #tracking-controls {
+            overflow-y: auto;
+            max-height: 220px;
+            padding-right: 4px;
+        }
+
+        .control-group {
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid var(--line);
+        }
+
+        .depth-tooltip {
+            position: absolute;
+            background: #111;
+            color: white;
+            border: 1px solid #3a3a3a;
+            border-radius: 12px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 500;
+            pointer-events: none;
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        @media (max-width: 1280px) {
+            .container {
+                grid-template-columns: 1fr;
+                overflow: auto;
+            }
             body { overflow: auto; }
-            .layout { height: auto; overflow: visible; }
-            .container { grid-template-columns: 1fr; overflow: visible; }
-            .topbar { grid-template-columns: 1fr; }
-            .stats { justify-content: flex-start; }
-            #camera-controls, #tracking-controls { max-height: none; }
+            .layout { height: auto; }
+            #video-container, #pointcloud-container { width: 100%; }
         }
     </style>
 </head>
@@ -66,7 +338,7 @@
     <header class="topbar">
         <div class="nav-links">
             <a href="/">Главная</a>
-            <a href="/screen">Screen</a>
+            <a href="/screen">Экран</a>
         </div>
         <div class="stats">
             <div>CPU: <span id="cpuStat">0</span>%</div>
@@ -77,81 +349,87 @@
     </header>
 
     <div class="container">
+        <!-- левая панель: сервоприводы -->
         <aside class="panel">
-            <div class="panel-title">Сервоприводы</div>
+            <div class="panel-title">Сервоприводы (Dynamixel)</div>
             <div class="servo-controls">
-                <div class="servo-row"><label>Шея (0):</label><input type="range" id="servo0" min="0" max="180" value="90" oninput="updateServoValue(0, this.value)" onchange="setServo(0, this.value)"><span id="servo0_val">90°</span></div>
-                <div class="servo-row"><label>Пр. плечо (1):</label><input type="range" id="servo1" min="0" max="270" value="135" oninput="updateServoValue(1, this.value)" onchange="setServo(1, this.value)"><span id="servo1_val">135°</span></div>
-                <div class="servo-row"><label>Лев. плечо (2):</label><input type="range" id="servo2" min="0" max="270" value="135" oninput="updateServoValue(2, this.value)" onchange="setServo(2, this.value)"><span id="servo2_val">135°</span></div>
-                <div class="servo-row"><label>Наклон (3):</label><input type="range" id="servo3" min="0" max="180" value="90" oninput="updateServoValue(3, this.value)" onchange="setServo(3, this.value)"><span id="servo3_val">90°</span></div>
-                <div class="servo-row"><label>Пов. пр.(4):</label><input type="range" id="servo4" min="0" max="270" value="135" oninput="updateServoValue(4, this.value)" onchange="setServo(4, this.value)"><span id="servo4_val">135°</span></div>
-                <div class="servo-row"><label>Пов. лев.(5):</label><input type="range" id="servo5" min="0" max="270" value="135" oninput="updateServoValue(5, this.value)" onchange="setServo(5, this.value)"><span id="servo5_val">135°</span></div>
+                <div class="servo-row"><label>Шея (0):</label><input type="range" id="servo0" min="0" max="180" value="90"><span id="servo0_val">90°</span></div>
+                <div class="servo-row"><label>Пр. плечо (1):</label><input type="range" id="servo1" min="0" max="270" value="135"><span id="servo1_val">135°</span></div>
+                <div class="servo-row"><label>Лев. плечо (2):</label><input type="range" id="servo2" min="0" max="270" value="135"><span id="servo2_val">135°</span></div>
+                <div class="servo-row"><label>Наклон (3):</label><input type="range" id="servo3" min="0" max="180" value="90"><span id="servo3_val">90°</span></div>
+                <div class="servo-row"><label>Пов. пр.(4):</label><input type="range" id="servo4" min="0" max="270" value="135"><span id="servo4_val">135°</span></div>
+                <div class="servo-row"><label>Пов. лев.(5):</label><input type="range" id="servo5" min="0" max="270" value="135"><span id="servo5_val">135°</span></div>
             </div>
         </aside>
 
+        <!-- центральная панель: видео / облако точек + управление камерой -->
         <main class="panel">
             <div class="tabs" id="viewTabs">
-                <button id="tabVideo" class="active" type="button">Камера</button>
-                <button id="tabCloud" type="button">Облако точек</button>
+                <button id="tabVideo" class="active">Камера</button>
+                <button id="tabCloud">Облако точек</button>
             </div>
 
             <div id="video-container">
-                <img id="video-feed" src="/video_feed" alt="Video Stream">
+                <img id="video-feed" src="/video_feed" alt="Video Stream" crossorigin="anonymous">
                 <div id="depth-tooltip" class="depth-tooltip hidden"></div>
             </div>
             <div id="pointcloud-container" class="hidden">
                 <canvas id="pointcloud-canvas"></canvas>
             </div>
 
-            <div class="tabs" id="controlsTabs" style="margin-top:10px;">
-                <button id="tabCameraControls" class="active" type="button">Камера</button>
-                <button id="tabTrackingControls" type="button">Трекинг</button>
+            <div class="tabs" id="controlsTabs" style="margin-top: 12px;">
+                <button id="tabCameraControls" class="active">Параметры камеры</button>
+                <button id="tabTrackingControls">Трекинг & CV</button>
             </div>
 
             <div id="camera-controls">
                 <div class="control-row">
                     <label>Основной глаз:</label>
-                    <div>
-                        <input type="radio" name="mainEye" id="eyeLeft" checked onchange="updateParams()"> <label for="eyeLeft">Левый</label>
-                        <input type="radio" name="mainEye" id="eyeRight" onchange="updateParams()"> <label for="eyeRight">Правый</label>
+                    <div style="display: flex; gap: 12px;">
+                        <label><input type="radio" name="mainEye" id="eyeLeft" checked> Левый</label>
+                        <label><input type="radio" name="mainEye" id="eyeRight"> Правый</label>
                     </div>
                 </div>
-                <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked onchange="updateParams()"></div>
-                <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30" oninput="updateParams()"></div>
+                <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked></div>
+                <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30"></div>
                 <div class="control-group">
-                    <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled" onchange="sendCameraParams()"></div>
-                    <div class="control-row"><label>WLS фильтр:</label><input type="checkbox" id="wlsEnabled" onchange="sendCameraParams()"></div>
+                    <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled"></div>
+                    <div class="control-row"><label>WLS фильтр:</label><input type="checkbox" id="wlsEnabled"></div>
                 </div>
             </div>
 
             <div id="tracking-controls" class="hidden">
-                <div class="control-row"><label>Включить трекинг:</label><input type="checkbox" id="trackingEnabled" onchange="sendCameraParams()"></div>
+                <div class="control-row"><label>Включить трекинг:</label><input type="checkbox" id="trackingEnabled"></div>
                 <div class="control-row"><label>Тип цели:</label>
-                    <select id="trackingMode" onchange="sendCameraParams()">
+                    <select id="trackingMode">
                         <option value="person">Человек</option>
                         <option value="face">Лицо</option>
                         <option value="motion">Движение</option>
                     </select>
                 </div>
-                <div class="control-row"><label>Scale X:</label><input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="scaleXVal">50</span></div>
-                <div class="control-row"><label>Scale Y:</label><input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="scaleYVal">30</span></div>
-                <div class="control-row"><label>Offset X:</label><input type="range" id="trackingOffsetX" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="offsetXVal">0</span></div>
-                <div class="control-row"><label>Offset Y:</label><input type="range" id="trackingOffsetY" min="-100" max="100" value="0" step="1" oninput="updateTrackingDisplay()" onchange="sendCameraParams()"><span id="offsetYVal">0</span></div>
-                <div class="control-row"><label>Авто-серво по цели:</label><input type="checkbox" id="servoTrackingEnabled" onchange="setServoTracking()"></div>
+                <div class="control-row"><label>Scale X:</label><input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1"><span id="scaleXVal">50</span></div>
+                <div class="control-row"><label>Scale Y:</label><input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1"><span id="scaleYVal">30</span></div>
+                <div class="control-row"><label>Offset X:</label><input type="range" id="trackingOffsetX" min="-100" max="100" value="0" step="1"><span id="offsetXVal">0</span></div>
+                <div class="control-row"><label>Offset Y:</label><input type="range" id="trackingOffsetY" min="-100" max="100" value="0" step="1"><span id="offsetYVal">0</span></div>
+                <div class="control-row"><label>Авто-серво по цели:</label><input type="checkbox" id="servoTrackingEnabled"></div>
             </div>
         </main>
 
+        <!-- правая панель: терминал + логи -->
         <aside class="panel">
             <div class="tabs" id="rightTabs">
-                <button id="tabTerminal" class="active" type="button">Терминал</button>
-                <button id="tabLogs" type="button">Логи</button>
+                <button id="tabTerminal" class="active">Терминал</button>
+                <button id="tabLogs">Логи системы</button>
             </div>
             <div id="terminal-pane" style="display:flex; flex-direction:column; flex:1; min-height:0;">
-                <div id="terminal-output" class="terminal-box"></div>
-                <div id="terminal-input-line"><span id="terminal-prompt">$</span><input type="text" id="terminal-command" placeholder="Введите команду..."></div>
+                <div id="terminal-output" class="terminal-box">➜ Ожидание команд...</div>
+                <div id="terminal-input-line" style="display: flex; margin-top: 8px; gap: 8px; align-items: center;">
+                    <span id="terminal-prompt" style="color:#6a9955; font-family: monospace;">❯</span>
+                    <input type="text" id="terminal-command" placeholder="Введите команду (help, ls, ...)" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius: 12px; padding: 8px 12px; font-family: monospace; outline: none;">
+                </div>
             </div>
             <div id="logs-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0;">
-                <div id="logs-output" class="terminal-box"></div>
+                <div id="logs-output" class="terminal-box">📡 Логи загрузятся автоматически...</div>
             </div>
         </aside>
     </div>
@@ -165,148 +443,283 @@
         }
     }
 </script>
+
 <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+    // ---------- DOM элементы ----------
     const videoContainer = document.getElementById('video-container');
     const cloudContainer = document.getElementById('pointcloud-container');
     const tabVideo = document.getElementById('tabVideo');
     const tabCloud = document.getElementById('tabCloud');
     const tabCameraControls = document.getElementById('tabCameraControls');
     const tabTrackingControls = document.getElementById('tabTrackingControls');
-    const cameraControls = document.getElementById('camera-controls');
-    const trackingControls = document.getElementById('tracking-controls');
+    const cameraControlsDiv = document.getElementById('camera-controls');
+    const trackingControlsDiv = document.getElementById('tracking-controls');
     const tabTerminal = document.getElementById('tabTerminal');
     const tabLogs = document.getElementById('tabLogs');
     const terminalPane = document.getElementById('terminal-pane');
     const logsPane = document.getElementById('logs-pane');
     const logsOutput = document.getElementById('logs-output');
+    const videoFeed = document.getElementById('video-feed');
+    const depthTooltip = document.getElementById('depth-tooltip');
 
-    let scene, camera, renderer, controls;
+    // параметры камеры / UI
+    const eyeLeft = document.getElementById('eyeLeft');
+    const eyeRight = document.getElementById('eyeRight');
+    const showDepthChk = document.getElementById('showDepth');
+    const depthAlphaSlider = document.getElementById('depthAlpha');
+    const depthEnabledChk = document.getElementById('depthEnabled');
+    const wlsEnabledChk = document.getElementById('wlsEnabled');
+    const trackingEnabledChk = document.getElementById('trackingEnabled');
+    const trackingModeSelect = document.getElementById('trackingMode');
+    const trackingScaleX = document.getElementById('trackingScaleX');
+    const trackingScaleY = document.getElementById('trackingScaleY');
+    const trackingOffsetX = document.getElementById('trackingOffsetX');
+    const trackingOffsetY = document.getElementById('trackingOffsetY');
+    const scaleXSpan = document.getElementById('scaleXVal');
+    const scaleYSpan = document.getElementById('scaleYVal');
+    const offsetXSpan = document.getElementById('offsetXVal');
+    const offsetYSpan = document.getElementById('offsetYVal');
+    const servoTrackingChk = document.getElementById('servoTrackingEnabled');
+
+    // Three.js переменные
+    let scene, camera3D, renderer, orbitControls;
     let pointsMesh = null;
     let animationId = null;
     let pointCloudActive = false;
     let lastPointFetch = 0;
 
+    // ---------- вспомогательные функции UI ----------
     function setActiveTab(activeBtn, allBtns) {
         allBtns.forEach(btn => btn.classList.remove('active'));
         activeBtn.classList.add('active');
     }
 
-    tabVideo.addEventListener('click', () => {
-        setActiveTab(tabVideo, [tabVideo, tabCloud]);
-        stopPointCloud();
-    });
-    tabCloud.addEventListener('click', () => {
-        setActiveTab(tabCloud, [tabVideo, tabCloud]);
-        startPointCloud();
-    });
+    // обновление отображения значений трекинга
+    function updateTrackingDisplay() {
+        scaleXSpan.innerText = trackingScaleX.value;
+        scaleYSpan.innerText = trackingScaleY.value;
+        offsetXSpan.innerText = trackingOffsetX.value;
+        offsetYSpan.innerText = trackingOffsetY.value;
+    }
 
-    tabCameraControls.addEventListener('click', () => {
-        setActiveTab(tabCameraControls, [tabCameraControls, tabTrackingControls]);
-        cameraControls.classList.remove('hidden');
-        trackingControls.classList.add('hidden');
-    });
-    tabTrackingControls.addEventListener('click', () => {
-        setActiveTab(tabTrackingControls, [tabCameraControls, tabTrackingControls]);
-        trackingControls.classList.remove('hidden');
-        cameraControls.classList.add('hidden');
-    });
+    // сервоприводы (всплывающие)
+    function updateServoValue(channel, val) {
+        const span = document.getElementById(`servo${channel}_val`);
+        if (span) span.innerText = val + '°';
+    }
 
-    tabTerminal.addEventListener('click', () => {
-        setActiveTab(tabTerminal, [tabTerminal, tabLogs]);
-        terminalPane.classList.remove('hidden');
-        logsPane.classList.add('hidden');
-    });
-    tabLogs.addEventListener('click', () => {
-        setActiveTab(tabLogs, [tabTerminal, tabLogs]);
-        logsPane.classList.remove('hidden');
-        terminalPane.classList.add('hidden');
-    });
+    async function setServo(channel, angle) {
+        try {
+            await fetch(`/api/servo/${channel}/${angle}`, { method: 'POST' });
+        } catch(e) { console.warn("servo err", e); }
+    }
 
-    function initThreeJS() {
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x111111);
+    // Отправка параметров камеры + трекинг
+    async function sendCameraParams() {
+        const payload = {
+            depth_enabled: depthEnabledChk.checked,
+            face_tracking_enabled: trackingEnabledChk.checked,
+            tracking_mode: trackingModeSelect.value,
+            wls_enabled: wlsEnabledChk.checked,
+            tracking_scale_x: parseInt(trackingScaleX.value, 10),
+            tracking_scale_y: parseInt(trackingScaleY.value, 10),
+            tracking_offset_x: parseInt(trackingOffsetX.value, 10),
+            tracking_offset_y: parseInt(trackingOffsetY.value, 10)
+        };
+        try {
+            await fetch('/api/camera/params', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } catch(err) { console.warn("camera params post error", err); }
+    }
+
+    // Параметры отображения глубины + основной глаз
+    async function updateRenderParams() {
+        const alpha = showDepthChk.checked ? parseInt(depthAlphaSlider.value, 10) : 0;
+        const showLeft = eyeLeft.checked;
+        try {
+            await fetch('/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ alpha_depth: alpha, show_left: showLeft, num_disp: 5 })
+            });
+        } catch(e) { console.warn("update error", e); }
+    }
+
+    async function loadCameraParams() {
+        try {
+            const res = await fetch('/api/camera/params');
+            const p = await res.json();
+            depthEnabledChk.checked = p.depth_enabled;
+            wlsEnabledChk.checked = p.wls_enabled;
+            trackingEnabledChk.checked = p.face_tracking_enabled;
+            trackingModeSelect.value = p.tracking_mode || 'face';
+            trackingScaleX.value = p.tracking_scale_x ?? 50;
+            trackingScaleY.value = p.tracking_scale_y ?? 30;
+            trackingOffsetX.value = p.tracking_offset_x ?? 0;
+            trackingOffsetY.value = p.tracking_offset_y ?? 0;
+            updateTrackingDisplay();
+        } catch(e) { console.warn("load camera params", e); }
+    }
+
+    async function loadServoTrackingState() {
+        try {
+            const res = await fetch('/api/servo/tracking');
+            const data = await res.json();
+            servoTrackingChk.checked = data.enabled === true;
+        } catch(e) {}
+    }
+
+    async function setServoTracking() {
+        try {
+            await fetch('/api/servo/tracking', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: servoTrackingChk.checked })
+            });
+        } catch(e) {}
+    }
+
+    // ---------- терминал ----------
+    let lastTerminalOutput = '';
+    let fetchingTerminal = false;
+    let sendingCmd = false;
+    const terminalOutputDiv = document.getElementById('terminal-output');
+    const terminalInput = document.getElementById('terminal-command');
+
+    function stripAnsi(s) {
+        return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')
+                .replace(/\x1b\\/g, '').replace(/\x07/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    }
+
+    async function fetchTerminalOutput() {
+        if (fetchingTerminal) return;
+        fetchingTerminal = true;
+        try {
+            const resp = await fetch('/api/cmd/output');
+            const data = await resp.json();
+            if (data.output !== lastTerminalOutput) {
+                terminalOutputDiv.textContent = stripAnsi(data.output);
+                terminalOutputDiv.scrollTop = terminalOutputDiv.scrollHeight;
+                lastTerminalOutput = data.output;
+            }
+        } catch (e) {}
+        finally { fetchingTerminal = false; }
+    }
+
+    async function sendTerminalCommand(cmd) {
+        if (sendingCmd || !cmd.trim()) return;
+        sendingCmd = true;
+        try {
+            await fetch('/api/cmd/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: cmd }) });
+            await fetchTerminalOutput();
+        } catch(e) {}
+        finally { sendingCmd = false; }
+    }
+
+    // системная статистика
+    async function fetchSystemStats() {
+        try {
+            const r = await fetch('/api/data');
+            const d = await r.json();
+            document.getElementById('cpuStat').innerText = d.cpu ?? 0;
+            document.getElementById('ramStat').innerText = d.ram ?? 0;
+            document.getElementById('tempStat').innerText = d.temp ?? '--';
+            document.getElementById('fpsStat').innerText = d.fps ?? 0;
+            if (Array.isArray(d.logs) && logsOutput) {
+                logsOutput.textContent = d.logs.join('\n');
+                logsOutput.scrollTop = logsOutput.scrollHeight;
+            }
+        } catch(e) {}
+    }
+
+    // ---------- 3D облако точек (Three.js) ----------
+    function initThree() {
         const w = cloudContainer.clientWidth;
         const h = cloudContainer.clientHeight;
-        camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 50);
-        camera.position.set(0.8, 0.6, 1.4);
-        camera.lookAt(0, 0, 0);
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+        camera3D = new THREE.PerspectiveCamera(60, w / h, 0.01, 50);
+        camera3D.position.set(0.8, 0.6, 1.4);
+        camera3D.lookAt(0, 0, 0);
         renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('pointcloud-canvas'), antialias: true });
         renderer.setSize(w, h);
         renderer.setPixelRatio(window.devicePixelRatio);
-        controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.1;
-        controls.target.set(0, 0, 0);
-        controls.update();
-        pointsMesh = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 0.01, sizeAttenuation: true, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+        orbitControls = new OrbitControls(camera3D, renderer.domElement);
+        orbitControls.enableDamping = true;
+        orbitControls.dampingFactor = 0.08;
+        orbitControls.target.set(0, 0, 0);
+        orbitControls.update();
+        pointsMesh = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 0.012, sizeAttenuation: true, vertexColors: true, blending: THREE.AdditiveBlending }));
         scene.add(pointsMesh);
-        scene.add(new THREE.GridHelper(4, 40, 0x505050, 0x2c2c2c));
-        scene.add(new THREE.AxesHelper(0.5));
-        const cameraOrigin = new THREE.Mesh(new THREE.SphereGeometry(0.025, 20, 20), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-        cameraOrigin.position.set(0, 0, 0);
-        scene.add(cameraOrigin);
-        window.addEventListener('resize', onWindowResize, false);
+        scene.add(new THREE.GridHelper(4, 40, 0x606060, 0x2e2e2e));
+        scene.add(new THREE.AxesHelper(0.6));
+        const originSphere = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffaa44 }));
+        originSphere.position.set(0, 0, 0);
+        scene.add(originSphere);
+        window.addEventListener('resize', onResize3D);
     }
 
-    function onWindowResize() {
+    function onResize3D() {
         if (!pointCloudActive) return;
         const w = cloudContainer.clientWidth;
         const h = cloudContainer.clientHeight;
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
+        camera3D.aspect = w / h;
+        camera3D.updateProjectionMatrix();
         renderer.setSize(w, h);
     }
 
-    async function updatePointCloud() {
+    async function updatePointCloudData() {
         if (!pointCloudActive) return;
         try {
             const resp = await fetch('/api/pointcloud?step=2');
             const points = await resp.json();
-            if (!points.length) return;
+            if (!points || !points.length) return;
             const positions = new Float32Array(points.length * 3);
             const colors = new Float32Array(points.length * 3);
-            
-            points.forEach((p, i) => {
-                positions[i * 3] = p.x / 100.0;
-                positions[i * 3 + 1] = -p.y / 100.0;
-                positions[i * 3 + 2] = p.z / 100.0;
-                
-                // Set all points to blue (RGB: 0, 0, 255)
-                colors[i * 3] = 0.0;      // R
-                colors[i * 3 + 1] = 0.0;  // G
-                colors[i * 3 + 2] = 1.0;  // B
-            });
-            
+            for (let i = 0; i < points.length; i++) {
+                const p = points[i];
+                positions[i*3] = p.x / 100.0;
+                positions[i*3+1] = -p.y / 100.0;
+                positions[i*3+2] = p.z / 100.0;
+                // Синие точки для стиля
+                colors[i*3] = 0.2;
+                colors[i*3+1] = 0.5;
+                colors[i*3+2] = 1.0;
+            }
             pointsMesh.geometry.dispose();
-            pointsMesh.geometry = new THREE.BufferGeometry();
-            pointsMesh.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            pointsMesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        } catch (_) {}
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            pointsMesh.geometry = geom;
+        } catch(e) {}
     }
 
-    function animate() {
+    function animatePointCloud() {
         if (!pointCloudActive) return;
-        animationId = requestAnimationFrame(animate);
-        controls.update();
-        renderer.render(scene, camera);
+        animationId = requestAnimationFrame(animatePointCloud);
+        orbitControls.update();
+        renderer.render(scene, camera3D);
         const now = performance.now();
         if (now - lastPointFetch > 500) {
             lastPointFetch = now;
-            updatePointCloud();
+            updatePointCloudData();
         }
     }
 
     function startPointCloud() {
-        if (!scene) initThreeJS();
+        if (!scene) initThree();
         videoContainer.classList.add('hidden');
         cloudContainer.classList.remove('hidden');
         pointCloudActive = true;
-        lastPointFetch = 0;
-        onWindowResize();
-        animate();
+        onResize3D();
+        if (animationId) cancelAnimationFrame(animationId);
+        animatePointCloud();
     }
 
     function stopPointCloud() {
@@ -319,156 +732,130 @@
         videoContainer.classList.remove('hidden');
     }
 
-    async function fetchSystemStats() {
-        try {
-            const r = await fetch('/api/data');
-            const d = await r.json();
-            document.getElementById('cpuStat').innerText = d.cpu;
-            document.getElementById('ramStat').innerText = d.ram;
-            document.getElementById('tempStat').innerText = d.temp;
-            document.getElementById('fpsStat').innerText = d.fps;
-            if (Array.isArray(d.logs)) {
-                logsOutput.textContent = d.logs.join('\n');
-                logsOutput.scrollTop = logsOutput.scrollHeight;
+    // ----- глубина (тултип) -----
+    function initDepthTooltip() {
+        videoFeed.addEventListener('mousemove', async (e) => {
+            if (!showDepthChk.checked) {
+                depthTooltip.classList.add('hidden');
+                return;
             }
-        } catch (_) {}
-    }
-    setInterval(fetchSystemStats, 2000);
-    fetchSystemStats();
-
-    const eyeLeft = document.getElementById('eyeLeft');
-    const showDepth = document.getElementById('showDepth');
-    const depthAlpha = document.getElementById('depthAlpha');
-    function updateParams() {
-        fetch('/update', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ alpha_depth: showDepth.checked ? parseInt(depthAlpha.value) : 0, show_left: eyeLeft.checked, num_disp:5 }) }).catch(() => {});
-    }
-
-    const video = document.getElementById('video-feed');
-    const tooltip = document.getElementById('depth-tooltip');
-    video.addEventListener('mousemove', (e) => {
-        if(!showDepth.checked) { tooltip.classList.add('hidden'); return; }
-        const rect = video.getBoundingClientRect();
-        const containerRect = videoContainer.getBoundingClientRect();
-        const sx = video.naturalWidth/rect.width;
-        const sy = video.naturalHeight/rect.height;
-        const ix = Math.round((e.clientX - rect.left) * sx);
-        const iy = Math.round((e.clientY - rect.top) * sy);
-        fetch('/api/depth', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({x:ix, y:iy}) })
-            .then(res=>res.json())
-            .then(data=>{
-                if(data.depth!==null && data.depth!==undefined) {
-                    tooltip.classList.remove('hidden');
-                    tooltip.style.left=(e.clientX - containerRect.left + 10)+'px';
-                    tooltip.style.top=(e.clientY - containerRect.top + 10)+'px';
-                    tooltip.textContent=`${data.depth.toFixed(1)} см`;
+            const rect = videoFeed.getBoundingClientRect();
+            const containerRect = videoContainer.getBoundingClientRect();
+            const sx = videoFeed.naturalWidth / rect.width;
+            const sy = videoFeed.naturalHeight / rect.height;
+            const ix = Math.round((e.clientX - rect.left) * sx);
+            const iy = Math.round((e.clientY - rect.top) * sy);
+            try {
+                const resp = await fetch('/api/depth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ x: ix, y: iy })
+                });
+                const data = await resp.json();
+                if (data.depth !== null && data.depth !== undefined) {
+                    depthTooltip.classList.remove('hidden');
+                    depthTooltip.style.left = (e.clientX - containerRect.left + 12) + 'px';
+                    depthTooltip.style.top = (e.clientY - containerRect.top + 12) + 'px';
+                    depthTooltip.textContent = `${data.depth.toFixed(1)} см`;
                 } else {
-                    tooltip.classList.add('hidden');
+                    depthTooltip.classList.add('hidden');
                 }
-            }).catch(()=>tooltip.classList.add('hidden'));
-    });
-    video.addEventListener('mouseleave', ()=>tooltip.classList.add('hidden'));
+            } catch(_) { depthTooltip.classList.add('hidden'); }
+        });
+        videoFeed.addEventListener('mouseleave', () => depthTooltip.classList.add('hidden'));
+    }
 
-    const terminalOutput = document.getElementById('terminal-output');
-    const terminalCommand = document.getElementById('terminal-command');
-    let lastOutput='', fetchInProgress=false, sendInProgress=false;
-    function stripAnsi(s){ return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g,'').replace(/\x1b\\/g,'').replace(/\x07/g,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n'); }
-    async function fetchTerminalOutput(){
-        if(fetchInProgress) return;
-        fetchInProgress=true;
-        try{
-            const r=await fetch('/api/cmd/output');
-            const d=await r.json();
-            if(d.output!==lastOutput){
-                terminalOutput.textContent = stripAnsi(d.output);
-                terminalOutput.scrollTop = terminalOutput.scrollHeight;
-                lastOutput=d.output;
-            }
-        }catch(_){} finally{ fetchInProgress=false; }
-    }
-    async function sendTerminalCommand(cmd){
-        if(sendInProgress) return;
-        sendInProgress=true;
-        try{
-            await fetch('/api/cmd/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})});
-            await fetchTerminalOutput();
-        }catch(_){}
-        finally{ sendInProgress=false; }
-    }
-    terminalCommand.addEventListener('keydown',(e)=>{
-        if(e.key==='Enter'){
-            const cmd=terminalCommand.value;
-            if(cmd.trim()!==''){
-                sendTerminalCommand(cmd);
-                terminalCommand.value='';
+    // ---------- ПРИВЯЗКА ВСЕХ СОБЫТИЙ (без inline) ----------
+    function attachAllEventListeners() {
+        // вкладки видео/облако
+        tabVideo.addEventListener('click', () => {
+            setActiveTab(tabVideo, [tabVideo, tabCloud]);
+            stopPointCloud();
+        });
+        tabCloud.addEventListener('click', () => {
+            setActiveTab(tabCloud, [tabVideo, tabCloud]);
+            startPointCloud();
+        });
+        // вкладки управления камерой / трекинг
+        tabCameraControls.addEventListener('click', () => {
+            setActiveTab(tabCameraControls, [tabCameraControls, tabTrackingControls]);
+            cameraControlsDiv.classList.remove('hidden');
+            trackingControlsDiv.classList.add('hidden');
+        });
+        tabTrackingControls.addEventListener('click', () => {
+            setActiveTab(tabTrackingControls, [tabCameraControls, tabTrackingControls]);
+            trackingControlsDiv.classList.remove('hidden');
+            cameraControlsDiv.classList.add('hidden');
+        });
+        // вкладки терминал/логи
+        tabTerminal.addEventListener('click', () => {
+            setActiveTab(tabTerminal, [tabTerminal, tabLogs]);
+            terminalPane.classList.remove('hidden');
+            logsPane.classList.add('hidden');
+        });
+        tabLogs.addEventListener('click', () => {
+            setActiveTab(tabLogs, [tabTerminal, tabLogs]);
+            logsPane.classList.remove('hidden');
+            terminalPane.classList.add('hidden');
+        });
+
+        // Серво: слайдеры + обновление значений и отправка
+        for (let ch = 0; ch <= 5; ch++) {
+            const slider = document.getElementById(`servo${ch}`);
+            if (slider) {
+                const updateSpan = () => updateServoValue(ch, slider.value);
+                slider.addEventListener('input', updateSpan);
+                slider.addEventListener('change', () => setServo(ch, parseInt(slider.value)));
+                updateSpan(); // инициализация
             }
         }
-    });
-    fetchTerminalOutput();
-    setInterval(fetchTerminalOutput, 250);
 
-    const depthEnabledChk = document.getElementById('depthEnabled');
-    const wlsEnabledChk = document.getElementById('wlsEnabled');
-    const trackingEnabled = document.getElementById('trackingEnabled');
-    const trackingMode = document.getElementById('trackingMode');
-    const trackingScaleX = document.getElementById('trackingScaleX');
-    const trackingScaleY = document.getElementById('trackingScaleY');
-    const trackingOffsetX = document.getElementById('trackingOffsetX');
-    const trackingOffsetY = document.getElementById('trackingOffsetY');
-    const scaleXVal=document.getElementById('scaleXVal');
-    const scaleYVal=document.getElementById('scaleYVal');
-    const offsetXVal=document.getElementById('offsetXVal');
-    const offsetYVal=document.getElementById('offsetYVal');
-    function updateTrackingDisplay(){ scaleXVal.innerText=trackingScaleX.value; scaleYVal.innerText=trackingScaleY.value; offsetXVal.innerText=trackingOffsetX.value; offsetYVal.innerText=trackingOffsetY.value; }
-    async function loadCameraParams(){
-        try{
-            const r=await fetch('/api/camera/params');
-            const p=await r.json();
-            depthEnabledChk.checked=p.depth_enabled;
-            wlsEnabledChk.checked=p.wls_enabled;
-            trackingEnabled.checked=p.face_tracking_enabled;
-            trackingMode.value=p.tracking_mode;
-            trackingScaleX.value=p.tracking_scale_x;
-            trackingScaleY.value=p.tracking_scale_y;
-            trackingOffsetX.value=p.tracking_offset_x;
-            trackingOffsetY.value=p.tracking_offset_y;
-            updateTrackingDisplay();
-        }catch(_){}
-    }
-    async function sendCameraParams(){
-        const params={
-            depth_enabled: depthEnabledChk.checked,
-            face_tracking_enabled: trackingEnabled.checked,
-            tracking_mode: trackingMode.value,
-            wls_enabled: wlsEnabledChk.checked,
-            tracking_scale_x: parseInt(trackingScaleX.value),
-            tracking_scale_y: parseInt(trackingScaleY.value),
-            tracking_offset_x: parseInt(trackingOffsetX.value),
-            tracking_offset_y: parseInt(trackingOffsetY.value)
-        };
-        try{
-            await fetch('/api/camera/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)});
-        }catch(_){}
-    }
-    loadCameraParams();
+        // Camera controls (основной глаз, глубина, alpha)
+        eyeLeft.addEventListener('change', () => updateRenderParams());
+        eyeRight.addEventListener('change', () => updateRenderParams());
+        showDepthChk.addEventListener('change', () => updateRenderParams());
+        depthAlphaSlider.addEventListener('input', () => updateRenderParams());
+        depthEnabledChk.addEventListener('change', () => sendCameraParams());
+        wlsEnabledChk.addEventListener('change', () => sendCameraParams());
 
-    function updateServoValue(ch,val){ document.getElementById(`servo${ch}_val`).innerText = val+'°'; }
-    function setServo(ch,angle){ fetch(`/api/servo/${ch}/${angle}`,{method:'POST'}).catch(() => {}); }
-    const servoTrackingChk = document.getElementById('servoTrackingEnabled');
-    async function setServoTracking(){
-        const enabled = servoTrackingChk.checked;
-        try{
-            await fetch('/api/servo/tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
-        }catch(_){}
+        // трекинг параметры
+        trackingEnabledChk.addEventListener('change', () => sendCameraParams());
+        trackingModeSelect.addEventListener('change', () => sendCameraParams());
+        trackingScaleX.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
+        trackingScaleY.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
+        trackingOffsetX.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
+        trackingOffsetY.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
+        servoTrackingChk.addEventListener('change', () => setServoTracking());
+
+        // терминал
+        terminalInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const cmd = terminalInput.value.trim();
+                if (cmd) sendTerminalCommand(cmd);
+                terminalInput.value = '';
+            }
+        });
     }
-    async function loadServoTracking(){
-        try{
-            const r=await fetch('/api/servo/tracking');
-            const d=await r.json();
-            servoTrackingChk.checked=d.enabled;
-        }catch(_){}
+
+    // Инициализация приложения
+    async function initApp() {
+        attachAllEventListeners();
+        await loadCameraParams();
+        await loadServoTrackingState();
+        updateTrackingDisplay();
+        await updateRenderParams();
+        fetchSystemStats();
+        fetchTerminalOutput();
+        initDepthTooltip();
+        setInterval(fetchSystemStats, 2200);
+        setInterval(fetchTerminalOutput, 400);
+        // начальное состояние: видео активно
+        stopPointCloud();
+        videoContainer.classList.remove('hidden');
+        cloudContainer.classList.add('hidden');
     }
-    loadServoTracking();
-    window.addEventListener('load',()=>{ for(let ch=0;ch<=5;ch++){ const s=document.getElementById(`servo${ch}`); if(s) updateServoValue(ch,s.value); } });
+
+    initApp();
 </script>
 </body>
 </html>

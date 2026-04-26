@@ -1,3 +1,4 @@
+import subprocess
 import threading
 import time
 
@@ -28,9 +29,25 @@ def _hardware_worker():
     services.logger.log("Hardware/shell готовы")
 
 
+def _start_kiosk_browser(url="http://localhost"):
+    cmd = [
+        "chromium",
+        "--kiosk",
+        "--noerrdialogs",
+        "--disable-infobars",
+        f"--app={url}"
+    ]
+
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"Браузер запущен по адресу: {url}")
+    except FileNotFoundError:
+        print("Ошибка: Chromium не найден. Убедитесь, что он установлен (sudo apt install chromium).")
+
 def _web_worker():
     services = _ensure_services()
     services.logger.log("Web сервер запускается в отдельном потоке")
+    _start_kiosk_browser(f"http://{services.config.host}:{services.config.http_port}/screen")
     _app.run(host=services.config.host, port=services.config.http_port, debug=False, threaded=True, use_reloader=False)
 
 
