@@ -110,26 +110,33 @@ def fix_permissions(path, user):
     except Exception as e:
         log_message(f"[!] Не удалось изменить владельца: {e}")
 
+
 def apply_self_update(new_launcher_path):
     current_script = os.path.abspath(__file__)
+
+    if not os.path.exists(new_launcher_path):
+        log_message(f"[!] Ошибка: Файл для обновления не найден по пути {new_launcher_path}")
+        return False
+
     if filecmp.cmp(current_script, new_launcher_path, shallow=False):
         log_message("[L] Текущая версия лаунчера актуальна.")
         os.unlink(new_launcher_path)
         return False
 
-    log_message("[L] Обнаружена новая версия лаунчера. Выполняю замену и перезапуск...")
+    log_message("[L] Обнаружена новая версия лаунчера. Выполняю замену...")
     try:
-        shutil.move(new_launcher_path, current_script)
-        st = os.stat(current_script)
-        os.chmod(current_script, st.st_mode)
+        # Сначала даем права, потом перемещаем
+        os.chmod(new_launcher_path, 0o755)
+        shutil.copy2(new_launcher_path, current_script)  # copy2 надежнее move через разделы
         log_message("[L] Лаунчер успешно обновлён. Перезапускаю...")
-        os.execv("python3", ["python3", current_script] + sys.argv[1:])
+
+        # Очистка перед выходом
+        os.unlink(new_launcher_path)
+
+        # Перезапуск
+        os.execv(sys.executable, [sys.executable, current_script] + sys.argv[1:])
     except Exception as e:
         log_message(f"[!] Ошибка при самообновлении: {e}")
-        try:
-            os.unlink(new_launcher_path)
-        except:
-            pass
         return False
 
 def get_remote_head_commit_info(owner, repo, branch='main'):
@@ -239,11 +246,13 @@ def download_and_extract_repo(target_dir, script_name, target_user):
             os.remove(deps_flag)
             log_message("[L] Флаг зависимостей сброшен.")
 
+        os.unlink(tmp_zip)
+
         fix_permissions(target_dir, target_user)
         save_last_commit_info(target_dir, remote_sha)
 
         if new_launcher_tmp:
-            apply_self_update(new_launcher_tmp)
+            apply_self_update(new_launcher_tmp)  # ОШИБКА: Файл уже удален!
         return True
 
     except Exception as e:
