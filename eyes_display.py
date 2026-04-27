@@ -16,6 +16,8 @@ import socket
 import time
 import random
 
+os.environ['SDL_VIDEO_CENTERED'] = '1'
+
 try:
     import pygame
 except ImportError:
@@ -43,7 +45,7 @@ class FaceState:
         self._emote = "normal"
         self._anim_phase = "idle"       # 'idle', 'closing', 'opening'
         self._anim_t = 0.0              # 0..1 progress of current phase
-        self._half_duration = 0.15      # seconds per half-blink
+        self._half_duration = 0.05      # seconds per half-blink
         self._target_emote = None       # emote to swap to after closing
         self._pending_smooth_emote = None   # queued smooth change if busy
         self._last_idle_blink_time = 0.0
@@ -258,16 +260,14 @@ class RobotFace:
                 elif event.type == pygame.KEYDOWN:
                     if event.key in [pygame.K_ESCAPE, pygame.K_q]:
                         self.state.stop()
-                elif event.type == pygame.MOUSEBUTTONDOWN:
+                elif event.type == pygame.MOUSEBUTTONDOWN or event.type == pygame.FINGERDOWN:
                     mx, my = event.pos
                     if self._exit_btn_rect.collidepoint(mx, my):
                         log.info("Exit via menu")
                         self.state.stop()
                     else:
-                        # toggle menu on bottom 20% of screen
-                        if my > sh * 0.8:
-                            self._menu_visible = not getattr(self, '_menu_visible', False)
-                            self.state._menu_visible = self._menu_visible  # keep in sync
+                        self._menu_visible = not getattr(self, '_menu_visible', False)
+                        self.state._menu_visible = self._menu_visible  # keep in sync
 
             # Update animation (including random idle blinks)
             self.state.update_logic(dt)
@@ -305,8 +305,8 @@ class RobotFace:
 
                 m_w, m_h = 400, 250
                 m_rect = pygame.Rect((sw - m_w) // 2, (sh - m_h) // 2, m_w, m_h)
-                pygame.draw.rect(screen, (25, 25, 25), m_rect, border_radius=20)
-                pygame.draw.rect(screen, (200, 200, 200), m_rect, 2, border_radius=20)
+                pygame.draw.rect(screen, (25, 25, 25), m_rect, 0, 20)
+                pygame.draw.rect(screen, (200, 200, 200), m_rect, 2, 0, 20)
 
                 ip_label = font.render(f"IP: {self._get_ip()}", True, (255, 255, 255))
                 screen.blit(ip_label, (m_rect.x + 40, m_rect.y + 50))
@@ -325,8 +325,7 @@ class RobotFace:
         os._exit(0)
 
     def start(self):
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        self._run()
 
     def stop(self):
         self.state.stop()

@@ -4,18 +4,7 @@
 import argparse
 import os
 import time
-from r2_app.high_level import (
-    angle,
-    build_point_cloud,
-    emote,
-    gemini_test,
-    get_camera,
-    get_coords_stereo,
-    get_stereo_camera,
-    set_eyes_position,
-    set_servo_tracking,
-    start_background,
-)
+from r2_app.high_level import *
 
 APP_VERSION = "0.1"
 running = True
@@ -43,6 +32,7 @@ if __name__ == "__main__":
         print(f"R2 v{APP_VERSION}")
     else:
         start_background()
+
         # Main loop now runs in current thread, emote updates are pushed to display
         while running:
             main_loop()

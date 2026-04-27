@@ -529,16 +529,16 @@ def start_main():
             hold_cmd = 'echo; echo "main.py finished. Press any key to close."; read'
             full_cmd = f"{python_cmd}; {hold_cmd}"
             if shutil.which("terminator"):
-                subprocess.Popen(["terminator", "--fullscreen", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
+                subprocess.Popen(["terminator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
                 return True
             if shutil.which("gnome-terminal"):
-                subprocess.Popen(["gnome-terminal", "--full-screen", "--", "bash", "-c", full_cmd], cwd=script_dir, env=env)
+                subprocess.Popen(["gnome-terminal", "--", "bash", "-c", full_cmd], cwd=script_dir, env=env)
                 return True
             if shutil.which("x-terminal-emulator"):
                 subprocess.Popen(["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
                 return True
             if shutil.which("xterm"):
-                subprocess.Popen(["xterm", "-fullscreen", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
+                subprocess.Popen(["xterm", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
                 return True
 
             log_message("[!] Терминал GUI не найден, запускаю main.py в текущем процессе.")
