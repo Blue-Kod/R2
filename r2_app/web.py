@@ -8,9 +8,30 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, render_template, request
 
+from r2_app.config import AppConfig
+from r2_app.high_level import (
+    _camera,
+    _servo,
+    health_snapshot,
+    ip_address,
+    shell_output,
+    shell_start,
+    shell_write,
+    gemini_test,
+    set_emote,
+    get_emote,
+    supported_emotes,
+    set_eyes_position,
+    get_eyes_position,
+    servo_tracking_enabled,
+    set_servo_tracking,
+    get_logs,
+)
 
-def create_app(services, logger) -> Flask:
-    app = Flask(__name__, template_folder=str(services.config.root_dir / "templates"))
+
+def create_app() -> Flask:
+    config = AppConfig()
+    app = Flask(__name__, template_folder=str(config.root_dir / "templates"))
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.jinja_env.auto_reload = True
 
@@ -24,23 +45,24 @@ def create_app(services, logger) -> Flask:
 
     @app.route("/api/data")
     def api_data():
-        payload = services.system.health_snapshot()
-        payload["fps"] = round(services.hardware.camera.fps, 1) if services.hardware.camera else 0.0
-        payload["app_logs"] = logger.recent()
+        payload = health_snapshot()
+        payload["fps"] = round(_camera.fps, 1) if _camera else 0.0
+        payload["logs"] = get_logs(500)
         return jsonify(payload)
 
     @app.route("/api/ip")
     def api_ip():
-        return jsonify({"ip": services.system.ip_address()})
+        return jsonify({"ip": ip_address()})
 
     @app.route("/api/update", methods=["POST"])
     def api_update():
-        launcher_path = services.config.launcher_path
+        launcher_path = config.launcher_path
         if not launcher_path.exists():
             return jsonify({"status": "error", "message": "launcher.py не найден"}), 404
         try:
             subprocess.Popen([sys.executable, str(launcher_path)])
-            logger.log("Запущен процесс обновления")
+            from r2_app.high_level import log
+            log("Запущен процесс обновления")
 
             def shutdown():
                 time.sleep(1)
@@ -53,9 +75,11 @@ def create_app(services, logger) -> Flask:
 
     @app.route("/api/shutdown", methods=["POST"])
     def api_shutdown():
-        logger.log("Получена команда на завершение")
+        from r2_app.high_level import log, cleanup
+        log("Получена команда на завершение")
 
         def shutdown():
+            cleanup()
             time.sleep(1)
             os._exit(0)
 
@@ -68,22 +92,22 @@ def create_app(services, logger) -> Flask:
         command = str(data.get("command", "")).strip()
         if not command:
             return jsonify({"error": "No command"}), 400
-        if services.shell.write(command):
+        if shell_write(command):
             return jsonify({"status": "ok"})
         return jsonify({"error": "Shell not available"}), 500
 
     @app.route("/api/cmd/output", methods=["GET"])
     def cmd_output():
-        if not services.shell.running:
-            services.shell.start()
+        if not shell_output():
+            shell_start()
         time.sleep(0.1)
-        return jsonify({"output": services.shell.output()})
+        return jsonify({"output": shell_output()})
 
     @app.route("/video_feed")
     def video_feed():
         def stream():
             while True:
-                camera = services.hardware.camera
+                camera = _camera
                 if camera:
                     frame = camera.get_frame()
                     if frame is None:
@@ -100,7 +124,7 @@ def create_app(services, logger) -> Flask:
 
     @app.route("/update", methods=["POST"])
     def update_camera():
-        camera = services.hardware.camera
+        camera = _camera
         if not camera:
             return jsonify({"error": "Camera not initialized"}), 500
         data = request.get_json(silent=True) or {}
@@ -119,14 +143,14 @@ def create_app(services, logger) -> Flask:
         x, y = data.get("x"), data.get("y")
         if x is None or y is None:
             return jsonify({"error": "Missing coordinates"}), 400
-        camera = services.hardware.camera
+        camera = _camera
         if not camera:
             return jsonify({"depth": None})
         return jsonify({"depth": camera.get_depth_at(int(x), int(y))})
 
     @app.route("/api/camera/params", methods=["GET", "POST"])
     def camera_params():
-        camera = services.hardware.camera
+        camera = _camera
         if not camera:
             return jsonify({"error": "Camera not initialized"}), 500
         if request.method == "GET":
@@ -165,7 +189,7 @@ def create_app(services, logger) -> Flask:
 
     @app.route("/api/tracking/offsets")
     def tracking_offsets():
-        camera = services.hardware.camera
+        camera = _camera
         if not camera:
             return jsonify({"dx": 0, "dy": 0})
         dx, dy = camera.get_eye_offsets()
@@ -173,7 +197,7 @@ def create_app(services, logger) -> Flask:
 
     @app.route("/api/pointcloud")
     def api_pointcloud():
-        camera = services.hardware.camera
+        camera = _camera
         if not camera or not camera.depth_enabled:
             return jsonify([])
         step = request.args.get("step", default=2, type=int)
@@ -181,7 +205,7 @@ def create_app(services, logger) -> Flask:
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     def set_servo(channel, angle):
-        servo = services.hardware.servo
+        servo = _servo
         if not servo:
             return jsonify({"error": "Servo controller not initialized"}), 500
         if channel not in servo.channel_configs:
@@ -196,23 +220,22 @@ def create_app(services, logger) -> Flask:
     @app.route("/api/servo/tracking", methods=["GET", "POST"])
     def servo_tracking():
         if request.method == "GET":
-            return jsonify({"enabled": services.hardware.servo_tracking_enabled})
+            return jsonify({"enabled": servo_tracking_enabled})
 
         data = request.get_json(silent=True) or {}
-        services.hardware.servo_tracking_enabled = bool(data.get("enabled", False))
-        logger.log(
-            f"Сервотрекинг {'включён' if services.hardware.servo_tracking_enabled else 'выключен'}"
-        )
-        return jsonify({"status": "ok", "enabled": services.hardware.servo_tracking_enabled})
+        set_servo_tracking(bool(data.get("enabled", False)))
+        from r2_app.high_level import log
+        log(f"Сервотрекинг {'включён' if servo_tracking_enabled else 'выключен'}")
+        return jsonify({"status": "ok", "enabled": servo_tracking_enabled})
 
     @app.route("/api/ai/gemini/test", methods=["POST"])
-    def gemini_test():
+    def gemini_test_route():
         data = request.get_json(silent=True) or {}
         prompt = str(data.get("prompt") or "Ping from R2")
-        result = services.gemini.test(prompt=prompt)
-        if result.ok:
-            return jsonify({"status": "ok", "response": result.text})
-        return jsonify({"status": "error", "message": result.error}), 400
+        result = gemini_test(prompt=prompt)
+        if result["ok"]:
+            return jsonify({"status": "ok", "response": result["text"]})
+        return jsonify({"status": "error", "message": result["error"]}), 400
 
     @app.route("/api/emote", methods=["GET", "POST"])
     def api_emote():
@@ -220,36 +243,71 @@ def create_app(services, logger) -> Flask:
             return jsonify(
                 {
                     "status": "ok",
-                    "emote": services.emote.get_emote(),
-                    "supported": services.emote.supported_emotes(),
+                    "emote": get_emote(),
+                    "supported": supported_emotes(),
                 }
             )
         data = request.get_json(silent=True) or {}
         emotion_name = str(data.get("emotion_name") or "")
-        if services.emote.set_emote(emotion_name):
-            return jsonify({"status": "ok", "emote": services.emote.get_emote()})
+        if set_emote(emotion_name):
+            return jsonify({"status": "ok", "emote": get_emote()})
         return jsonify(
             {
                 "status": "error",
                 "message": "Unsupported emotion",
-                "supported": services.emote.supported_emotes(),
+                "supported": supported_emotes(),
             }
         ), 400
 
     @app.route("/api/eyes", methods=["GET", "POST"])
     def api_eyes():
         if request.method == "GET":
-            x, y = services.emote.get_eyes_position()
+            x, y = get_eyes_position()
             return jsonify({"status": "ok", "x": x, "y": y})
         data = request.get_json(silent=True) or {}
         try:
-            x = float(data.get("x", 0.0))
-            y = float(data.get("y", 0.0))
+            x = float(data.get("x",0.0))
+            y = float(data.get("y",0.0))
         except (TypeError, ValueError):
             return jsonify({"status": "error", "message": "x and y must be numbers"}), 400
-        services.emote.set_eyes_position(x, y)
-        x, y = services.emote.get_eyes_position()
+        set_eyes_position(x, y)
+        x, y = get_eyes_position()
         return jsonify({"status": "ok", "x": x, "y": y})
 
-    return app
+    @app.route("/api/python/exec", methods=["POST"])
+    def python_exec():
+        """Execute Python code and return the result."""
+        import io
+        import contextlib
+        import traceback
+        
+        data = request.get_json(silent=True) or {}
+        code = str(data.get("code", "")).strip()
+        
+        if not code:
+            return jsonify({"stdout": "", "stderr": "No code provided"}), 400
+        
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+        
+        try:
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                # Execute in a restricted environment with access to useful modules
+                exec_globals = {
+                    "__name__": "__main__",
+                    "print": print,
+                }
+                exec(code, exec_globals)
+            
+            return jsonify({
+                "stdout": stdout_capture.getvalue(),
+                "stderr": stderr_capture.getvalue()
+            })
+        except Exception as e:
+            stderr_capture.write(traceback.format_exc())
+            return jsonify({
+                "stdout": stdout_capture.getvalue(),
+                "stderr": stderr_capture.getvalue()
+            }), 200
 
+    return app

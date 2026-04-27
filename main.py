@@ -17,7 +17,7 @@ from r2_app.high_level import (
     start_background,
 )
 
-APP_VERSION = "2.0"
+APP_VERSION = "0.1"
 running = True
 EMOTE_CYCLE = [os.path.splitext(f)[0] for f in os.listdir("emotions") if f.endswith(".png")]
 _emote_index = 0
@@ -42,7 +42,6 @@ if __name__ == "__main__":
     if args.version:
         print(f"R2 v{APP_VERSION}")
     else:
-        print(f"R2 v{APP_VERSION} - Starting...")
         start_background()
         # Main loop now runs in current thread, emote updates are pushed to display
         while running:

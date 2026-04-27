@@ -18,7 +18,7 @@
             --text: #f0f0f0;
             --muted: #9c9c9c;
             --line: #2a2a2a;
-            --accent: #2c6e9e;
+            --accent: #44944a;
             --cam-w: 853px;
             --cam-h: 480px;
         }
@@ -192,14 +192,14 @@
 
         .tabs button.active {
             color: white;
-            background: #2a2a2a;
+            background: #44944a;
             box-shadow: 0 1px 2px rgba(0,0,0,0.2);
         }
 
         /* видео / облако */
         #video-container, #pointcloud-container {
-            width: var(--cam-w);
-            height: var(--cam-h);
+            width: var(--cam-w)+16px;
+            height: var(--cam-h)+16px;
             flex-shrink: 0;
             position: relative;
             border-radius: 16px;
@@ -248,7 +248,7 @@
 
         .servo-row input[type="range"] {
             flex: 1;
-            accent-color: #ffffff;
+            accent-color: #44944a;
             background: #2a2a2a;
             height: 4px;
             border-radius: 4px;
@@ -267,7 +267,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 10px;
+            gap: 0px;
             margin-bottom: 12px;
             flex-wrap: wrap;
         }
@@ -278,7 +278,7 @@
         }
 
         input[type="checkbox"], input[type="radio"] {
-            accent-color: #3a86ff;
+            accent-color: #44944a;
             width: 16px;
             height: 16px;
             margin-right: 6px;
@@ -290,11 +290,11 @@
             color: white;
             border-radius: 8px;
             padding: 6px 8px;
+            accent-color: #44944a;
         }
 
         #camera-controls, #tracking-controls {
             overflow-y: auto;
-            max-height: 220px;
             padding-right: 4px;
         }
 
@@ -345,20 +345,22 @@
             <div>RAM: <span id="ramStat">0</span>%</div>
             <div>Темп: <span id="tempStat">--</span></div>
             <div>FPS: <span id="fpsStat">0</span></div>
+            <button id="exitBtn" style="background: #8b0000; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: 0.2s;" onmouseover="this.style.background='#a00000'" onmouseout="this.style.background='#8b0000'">⏻ ВЫХОД</button>
+
         </div>
     </header>
 
     <div class="container">
         <!-- левая панель: сервоприводы -->
         <aside class="panel">
-            <div class="panel-title">Сервоприводы (Dynamixel)</div>
+            <div class="panel-title">Сервоприводы</div>
             <div class="servo-controls">
-                <div class="servo-row"><label>Шея (0):</label><input type="range" id="servo0" min="0" max="180" value="90"><span id="servo0_val">90°</span></div>
-                <div class="servo-row"><label>Пр. плечо (1):</label><input type="range" id="servo1" min="0" max="270" value="135"><span id="servo1_val">135°</span></div>
-                <div class="servo-row"><label>Лев. плечо (2):</label><input type="range" id="servo2" min="0" max="270" value="135"><span id="servo2_val">135°</span></div>
-                <div class="servo-row"><label>Наклон (3):</label><input type="range" id="servo3" min="0" max="180" value="90"><span id="servo3_val">90°</span></div>
-                <div class="servo-row"><label>Пов. пр.(4):</label><input type="range" id="servo4" min="0" max="270" value="135"><span id="servo4_val">135°</span></div>
-                <div class="servo-row"><label>Пов. лев.(5):</label><input type="range" id="servo5" min="0" max="270" value="135"><span id="servo5_val">135°</span></div>
+                <div class="servo-row"><label>(00) Шея:</label><input type="range" id="servo0" min="0" max="180" value="90"><span id="servo0_val">90°</span></div>
+                <div class="servo-row"><label>(01) Пр. плечо:</label><input type="range" id="servo1" min="0" max="270" value="135"><span id="servo1_val">135°</span></div>
+                <div class="servo-row"><label>(02) Лев. плечо:</label><input type="range" id="servo2" min="0" max="270" value="135"><span id="servo2_val">135°</span></div>
+                <div class="servo-row"><label>(03) Наклон:</label><input type="range" id="servo3" min="0" max="180" value="90"><span id="servo3_val">90°</span></div>
+                <div class="servo-row"><label>(04) Пов. пр.:</label><input type="range" id="servo4" min="0" max="270" value="135"><span id="servo4_val">135°</span></div>
+                <div class="servo-row"><label>(05) Пов. лев.:</label><input type="range" id="servo5" min="0" max="270" value="135"><span id="servo5_val">135°</span></div>
             </div>
         </aside>
 
@@ -419,17 +421,26 @@
         <aside class="panel">
             <div class="tabs" id="rightTabs">
                 <button id="tabTerminal" class="active">Терминал</button>
-                <button id="tabLogs">Логи системы</button>
+                <button id="tabLogs">Логи</button>
+                <button id="tabPython">Python</button>
             </div>
             <div id="terminal-pane" style="display:flex; flex-direction:column; flex:1; min-height:0;">
                 <div id="terminal-output" class="terminal-box">➜ Ожидание команд...</div>
                 <div id="terminal-input-line" style="display: flex; margin-top: 8px; gap: 8px; align-items: center;">
-                    <span id="terminal-prompt" style="color:#6a9955; font-family: monospace;">❯</span>
+                    <span id="terminal-prompt" style="color:#44944a; font-family: monospace;">❯</span>
                     <input type="text" id="terminal-command" placeholder="Введите команду (help, ls, ...)" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius: 12px; padding: 8px 12px; font-family: monospace; outline: none;">
                 </div>
             </div>
             <div id="logs-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0;">
                 <div id="logs-output" class="terminal-box">📡 Логи загрузятся автоматически...</div>
+            </div>
+            <div id="python-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0; gap: 8px;">
+                <textarea id="python-code" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius: 12px; padding: 12px; font-family: monospace; resize: none; outline: none;" placeholder="Введите Python код...">print("Hello from Python tab!")</textarea>
+                <div style="display: flex; gap: 8px;">
+                    <button id="run-python-btn" style="flex:1; background: #44944a; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: 0.2s;">▶ Запустить</button>
+                    <button id="clear-python-btn" style="background: #333; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: 0.2s;" onmouseover="this.style.background='#444'" onmouseout="this.style.background='#333'">Очистить</button>
+                </div>
+                <div id="python-output" class="terminal-box" style="flex:1;"></div>
             </div>
         </aside>
     </div>
@@ -459,8 +470,10 @@
     const trackingControlsDiv = document.getElementById('tracking-controls');
     const tabTerminal = document.getElementById('tabTerminal');
     const tabLogs = document.getElementById('tabLogs');
+    const tabPython = document.getElementById('tabPython');
     const terminalPane = document.getElementById('terminal-pane');
     const logsPane = document.getElementById('logs-pane');
+    const pythonPane = document.getElementById('python-pane');
     const logsOutput = document.getElementById('logs-output');
     const videoFeed = document.getElementById('video-feed');
     const depthTooltip = document.getElementById('depth-tooltip');
@@ -631,7 +644,20 @@
             document.getElementById('ramStat').innerText = d.ram ?? 0;
             document.getElementById('tempStat').innerText = d.temp ?? '--';
             document.getElementById('fpsStat').innerText = d.fps ?? 0;
-            if (Array.isArray(d.logs) && logsOutput) {
+            // Update logs display if on logs tab
+            if (logsOutput && logsPane && !logsPane.classList.contains('hidden')) {
+                logsOutput.textContent = d.logs.join('\n');
+                logsOutput.scrollTop = logsOutput.scrollHeight;
+            }
+        } catch(e) {}
+    }
+
+    // Fetch and display logs
+    async function fetchLogs() {
+        try {
+            const r = await fetch('/api/data');
+            const d = await r.json();
+            if (logsOutput && d.logs) {
                 logsOutput.textContent = d.logs.join('\n');
                 logsOutput.scrollTop = logsOutput.scrollHeight;
             }
@@ -787,16 +813,25 @@
             trackingControlsDiv.classList.remove('hidden');
             cameraControlsDiv.classList.add('hidden');
         });
-        // вкладки терминал/логи
+        // вкладки терминал/логи/python
         tabTerminal.addEventListener('click', () => {
-            setActiveTab(tabTerminal, [tabTerminal, tabLogs]);
+            setActiveTab(tabTerminal, [tabTerminal, tabLogs, tabPython]);
             terminalPane.classList.remove('hidden');
             logsPane.classList.add('hidden');
+            pythonPane.classList.add('hidden');
         });
         tabLogs.addEventListener('click', () => {
-            setActiveTab(tabLogs, [tabTerminal, tabLogs]);
+            setActiveTab(tabLogs, [tabTerminal, tabLogs, tabPython]);
             logsPane.classList.remove('hidden');
             terminalPane.classList.add('hidden');
+            pythonPane.classList.add('hidden');
+            fetchLogs();
+        });
+        tabPython.addEventListener('click', () => {
+            setActiveTab(tabPython, [tabTerminal, tabLogs, tabPython]);
+            pythonPane.classList.remove('hidden');
+            terminalPane.classList.add('hidden');
+            logsPane.classList.add('hidden');
         });
 
         // Серво: слайдеры + обновление значений и отправка
@@ -835,7 +870,53 @@
                 terminalInput.value = '';
             }
         });
+
+        // Python tab
+        const pythonCode = document.getElementById('python-code');
+        const runPythonBtn = document.getElementById('run-python-btn');
+        const clearPythonBtn = document.getElementById('clear-python-btn');
+        const pythonOutput = document.getElementById('python-output');
+
+        async function runPythonCode() {
+            const code = pythonCode.value;
+            if (!code.trim()) return;
+            pythonOutput.textContent = 'Выполнение...';
+            try {
+                const resp = await fetch('/api/python/exec', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code })
+                });
+                const data = await resp.json();
+                let output = '';
+                if (data.stdout) output += data.stdout;
+                if (data.stderr) output += '\n--- ОШИБКИ ---\n' + data.stderr;
+                if (!output) output = '✓ Успешно выполнено, без вывода.';
+                pythonOutput.textContent = output;
+                pythonOutput.scrollTop = pythonOutput.scrollHeight;
+            } catch(e) {
+                pythonOutput.textContent = 'Ошибка выполнения: ' + e.message;
+            }
+        }
+
+        runPythonBtn.addEventListener('click', runPythonCode);
+        clearPythonBtn.addEventListener('click', () => {
+            pythonCode.value = '';
+            pythonOutput.textContent = '';
+        });
     }
+
+    // Exit button functionality
+    const exitBtn = document.getElementById('exitBtn');
+    exitBtn.addEventListener('click', async () => {
+        try {
+            const resp = await fetch('/api/shutdown', { method: 'POST' });
+            const data = await resp.json();
+            alert(data.message || 'Завершение работы...');
+        } catch(e) {
+            alert('Ошибка при завершении работы');
+        }
+    });
 
     // Инициализация приложения
     async function initApp() {

@@ -4,7 +4,9 @@
 Robot Face Display using a single face texture (PNG).
 Texture touches left/right screen edges.
 Blinking = vertical squash of the whole face.
+Smooth emote change: close -> swap texture -> open.
 """
+
 import math
 import os
 import sys
@@ -29,59 +31,83 @@ log = logging.getLogger(__name__)
 
 
 class FaceState:
+    """
+    Manages the face emote and blink animation.
+    Animation phases: idle, closing, opening.
+    During closing the current face shrinks vertically,
+    at closed we swap to a new emote (if requested),
+    then opening grows the new face back.
+    """
     def __init__(self):
         self.lock = threading.Lock()
         self._emote = "normal"
-        self._blink_state = 0.0
-        self._menu_visible = False
+        self._anim_phase = "idle"       # 'idle', 'closing', 'opening'
+        self._anim_t = 0.0              # 0..1 progress of current phase
+        self._half_duration = 0.15      # seconds per half-blink
+        self._target_emote = None       # emote to swap to after closing
+        self._pending_smooth_emote = None   # queued smooth change if busy
+        self._last_idle_blink_time = 0.0
+        self._min_blink_interval = 1.2  # seconds between idle blinks
         self._running = True
-        self._last_blink_time = 0.0
-        self._min_blink_interval = 1.5
-        self._pending_emote = None
-        self._need_emote_change = False
 
-    def toggle_menu(self):
-        with self.lock:
-            self._menu_visible = not self._menu_visible
-            return self._menu_visible
-
+    # ------------------------------------------------------------------
+    # Public API (thread-safe)
+    # ------------------------------------------------------------------
     def get_emote(self):
         with self.lock:
             return self._emote
 
-    def update_logic(self):
+    def get_blink_scale(self):
+        """Return vertical scale factor for rendering (1 = fully open)."""
         with self.lock:
-            was_blinking = self._blink_state > 0.0
-            self._blink_state *= 0.75
-            if self._blink_state < 0.01:
-                self._blink_state = 0.0
-            if was_blinking and self._blink_state == 0.0:
-                self._apply_pending_emote()
+            if self._anim_phase == "closing":
+                return 1.0 - self._anim_t
+            elif self._anim_phase == "opening":
+                return self._anim_t
+            else:
+                return 1.0
 
-    def trigger_blink(self):
+    def request_emote_change(self, new_emote, smooth=True):
+        """
+        Ask to change the displayed emote.
+        smooth=True:  close -> change -> open (natural blink)
+        smooth=False: instantly swap (stops any running animation)
+        """
+        with self.lock:
+            if new_emote == self._emote and not self._target_emote and not self._pending_smooth_emote:
+                return  # nothing to do
+
+            if not smooth:
+                # Instant change: abort any animation, set immediately
+                self._anim_phase = "idle"
+                self._anim_t = 0.0
+                self._target_emote = None
+                self._pending_smooth_emote = None
+                self._emote = new_emote
+                return
+
+            # Smooth change
+            if self._anim_phase == "idle":
+                # Start a new blink that will swap after closing
+                self._anim_phase = "closing"
+                self._anim_t = 0.0
+                self._target_emote = new_emote
+                self._pending_smooth_emote = None
+            else:
+                # Already blinking (closing/opening) – queue for later
+                self._pending_smooth_emote = new_emote
+
+    def trigger_idle_blink(self):
+        """Start a simple blink (no emote change) if idle and interval ok."""
         with self.lock:
             now = time.time()
-            if now - self._last_blink_time >= self._min_blink_interval:
-                self._blink_state = 1.0
-                self._last_blink_time = now
+            if (self._anim_phase == "idle" and
+                now - self._last_idle_blink_time >= self._min_blink_interval):
+                self._anim_phase = "closing"
+                self._anim_t = 0.0
+                self._target_emote = None
+                self._last_idle_blink_time = now
                 return True
-        return False
-
-    def request_emote_change(self, new_emote):
-        with self.lock:
-            if new_emote == self._emote:
-                return
-            self._pending_emote = new_emote
-            self._need_emote_change = True
-            if self._blink_state == 0.0:
-                self.trigger_blink()
-
-    def _apply_pending_emote(self):
-        if self._need_emote_change and self._pending_emote is not None:
-            self._emote = self._pending_emote
-            self._need_emote_change = False
-            self._pending_emote = None
-            return True
         return False
 
     def is_running(self):
@@ -92,15 +118,71 @@ class FaceState:
         with self.lock:
             self._running = False
 
+    # ------------------------------------------------------------------
+    # Animation update – called every frame with delta time (seconds)
+    # ------------------------------------------------------------------
+    def update_logic(self, dt):
+        with self.lock:
+            was_idle = (self._anim_phase == "idle")
+
+            if self._anim_phase == "closing":
+                self._anim_t += dt / self._half_duration
+                if self._anim_t >= 1.0:
+                    self._anim_t = 1.0
+                    # Closing finished – swap emote if requested
+                    if self._target_emote is not None:
+                        self._emote = self._target_emote
+                        self._target_emote = None
+                    # Start opening
+                    self._anim_phase = "opening"
+                    self._anim_t = 0.0
+
+            elif self._anim_phase == "opening":
+                self._anim_t += dt / self._half_duration
+                if self._anim_t >= 1.0:
+                    self._anim_t = 1.0
+                    # Opening finished – back to idle
+                    self._anim_phase = "idle"
+
+                    # Check for a queued smooth change
+                    if self._pending_smooth_emote is not None:
+                        pending = self._pending_smooth_emote
+                        self._pending_smooth_emote = None
+                        # Start a new blink for it right away
+                        self._anim_phase = "closing"
+                        self._anim_t = 0.0
+                        self._target_emote = pending
+
+            # If idle, maybe trigger a random idle blink
+            if self._anim_phase == "idle":
+                now = time.time()
+                if (now - self._last_idle_blink_time >= self._min_blink_interval
+                        and random.random() < dt * 0.3):   # ~0.3 blinks per second
+                    self._anim_phase = "closing"
+                    self._anim_t = 0.0
+                    self._target_emote = None
+                    self._last_idle_blink_time = now
+
 
 class RobotFace:
     def __init__(self):
         self.state = FaceState()
         self._exit_btn_rect = pygame.Rect(0, 0, 0, 0)
-        self._textures = {}          # cache: emote_name -> pygame.Surface
+        self._textures = {}   # cache: emote_name -> pygame.Surface
+
+    def _preload_all_emotions(self):
+        """Загружает все PNG из папки emotions/ при старте."""
+        base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "emotions")
+        if not os.path.isdir(base_path):
+            return
+        for filename in os.listdir(base_path):
+            if filename.lower().endswith(".png"):
+                emote_name = os.path.splitext(filename)[0]
+                log.info(f"Preloading: {emote_name}")
+                self._get_texture_for_emote(emote_name)
 
     def _load_texture(self, emote_name):
-        """Load PNG from emotions/ (relative to script)"""
+        """Load PNG from emotions/ folder."""
         script_dir = os.path.dirname(os.path.abspath(__file__))
         base_path = os.path.join(script_dir, "emotions")
         os.makedirs(base_path, exist_ok=True)
@@ -115,9 +197,9 @@ class RobotFace:
                 surf.fill((100, 100, 100, 255))
                 try:
                     font = pygame.font.SysFont("Arial", 24)
-                    txt = font.render(emote_name, True, (255,255,255))
-                    surf.blit(txt, (200 - txt.get_width()//2, 200 - txt.get_height()//2))
-                except:
+                    txt = font.render(emote_name, True, (255, 255, 255))
+                    surf.blit(txt, (200 - txt.get_width() // 2, 200 - txt.get_height() // 2))
+                except Exception:
                     pass
                 return surf
 
@@ -145,7 +227,7 @@ class RobotFace:
             ip = s.getsockname()[0]
             s.close()
             return ip
-        except:
+        except Exception:
             return "127.0.0.1"
 
     def _run(self):
@@ -160,16 +242,16 @@ class RobotFace:
         pygame.mouse.set_visible(True)
         clock = pygame.time.Clock()
 
-        # Preload normal and default textures (display is ready)
-        self._get_texture_for_emote("normal")
-        self._get_texture_for_emote("default")
-
+        # Preload default and normal textures (display is ready)
+        self._preload_all_emotions()
+        
         font = pygame.font.SysFont("Arial", 28, bold=True)
 
         while self.state.is_running():
-            pygame.event.pump()
+            # delta time in seconds
+            dt = clock.tick(60) / 1000.0
 
-            # Event handling
+            # Process events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.state.stop()
@@ -178,75 +260,65 @@ class RobotFace:
                         self.state.stop()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = event.pos
-                    if self.state._menu_visible:
-                        if self._exit_btn_rect.collidepoint(mx, my):
-                            log.info("Exit via menu")
-                            self.state.stop()
-                        else:
-                            self.state.toggle_menu()
+                    if self._exit_btn_rect.collidepoint(mx, my):
+                        log.info("Exit via menu")
+                        self.state.stop()
                     else:
-                        if my > sh * 0.80:
-                            self.state.toggle_menu()
+                        # toggle menu on bottom 20% of screen
+                        if my > sh * 0.8:
+                            self._menu_visible = not getattr(self, '_menu_visible', False)
+                            self.state._menu_visible = self._menu_visible  # keep in sync
 
-            # Animation update
-            self.state.update_logic()
-
-            # Random blink
-            if random.random() < 0.005:
-                self.state.trigger_blink()
+            # Update animation (including random idle blinks)
+            self.state.update_logic(dt)
 
             # Clear screen
             screen.fill((0, 0, 0))
 
-            # Get current face texture
+            # Get current emote texture and blink scale
             emote = self.state.get_emote()
             tex = self._get_texture_for_emote(emote)
-
-            # Blink factor: vertical scale (1 = fully open, 0 = fully closed)
-            blink_scale = 1.0 - self.state._blink_state
-            if blink_scale < 0.05:
-                blink_scale = 0.05
+            blink_scale = self.state.get_blink_scale()
 
             # Scale texture to fill screen width (touch left/right edges)
             target_width = sw
-            target_height = int(tex.get_height() * (target_width / tex.get_width()))
-            # Apply blink: reduce height
-            target_height = int(target_height * blink_scale)
+            # original aspect-ratio height
+            orig_height = int(tex.get_height() * (target_width / tex.get_width()))
+            # apply blink squish
+            target_height = int(orig_height * blink_scale)
 
-            # If height exceeds screen height, limit (but keep aspect)
-            if target_height > sh:
-                target_height = sh
-                # Optionally recalc width to keep aspect, but user wants full width touch - ignore
+            # Prevent zero/negative height (pygame would crash)
+            if target_height < 1:
+                target_height = 1
 
             scaled_tex = pygame.transform.scale(tex, (target_width, target_height))
 
-            # Center vertically
+            # Draw centred vertically
             y_offset = (sh - target_height) // 2
             screen.blit(scaled_tex, (0, y_offset))
 
-            # Draw menu if visible
-            if self.state._menu_visible:
+            # Menu overlay (simplified – touch bottom area toggles)
+            if getattr(self, '_menu_visible', False):
                 overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
                 overlay.fill((0, 0, 0, 220))
                 screen.blit(overlay, (0, 0))
 
                 m_w, m_h = 400, 250
-                m_rect = pygame.Rect((sw - m_w)//2, (sh - m_h)//2, m_w, m_h)
-                pygame.draw.rect(screen, (25,25,25), m_rect, border_radius=20)
-                pygame.draw.rect(screen, (200,200,200), m_rect, 2, border_radius=20)
+                m_rect = pygame.Rect((sw - m_w) // 2, (sh - m_h) // 2, m_w, m_h)
+                pygame.draw.rect(screen, (25, 25, 25), m_rect, border_radius=20)
+                pygame.draw.rect(screen, (200, 200, 200), m_rect, 2, border_radius=20)
 
-                ip_label = font.render(f"IP: {self._get_ip()}", True, (255,255,255))
-                screen.blit(ip_label, (m_rect.x+40, m_rect.y+50))
+                ip_label = font.render(f"IP: {self._get_ip()}", True, (255, 255, 255))
+                screen.blit(ip_label, (m_rect.x + 40, m_rect.y + 50))
 
-                self._exit_btn_rect = pygame.Rect(m_rect.x+50, m_rect.y+130, 300, 70)
-                pygame.draw.rect(screen, (180,40,40), self._exit_btn_rect, border_radius=15)
-                pygame.draw.rect(screen, (255,100,100), self._exit_btn_rect, 2, border_radius=15)
+                self._exit_btn_rect = pygame.Rect(m_rect.x + 50, m_rect.y + 130, 300, 70)
+                pygame.draw.rect(screen, (180, 40, 40), self._exit_btn_rect, border_radius=15)
+                pygame.draw.rect(screen, (255, 100, 100), self._exit_btn_rect, 2, border_radius=15)
 
-                txt = font.render("Exit", True, (255,255,255))
+                txt = font.render("Exit", True, (255, 255, 255))
                 screen.blit(txt, txt.get_rect(center=self._exit_btn_rect.center))
 
             pygame.display.flip()
-            clock.tick(60)
 
         log.info("Shutting down...")
         pygame.quit()
@@ -259,20 +331,24 @@ class RobotFace:
     def stop(self):
         self.state.stop()
 
-    def update_emote(self, name):
-        self.state.request_emote_change(name)
+    def update_emote(self, name, smooth=True):
+        self.state.request_emote_change(name, smooth)
 
-    # gaze position not used with single face, but keep for compatibility
+    # kept for backwards compatibility (does nothing)
     def update_eyes_position(self, x, y):
         pass
 
 
-# Backward compatibility wrappers
+# ----------------------------------------------------------------------
+# Backward compatibility wrappers (same as original)
+# ----------------------------------------------------------------------
 class EyeAPI:
     def __init__(self, robot_face):
         self._face = robot_face
+
     def update_emote(self, name):
         self._face.update_emote(name)
+
     def update_eyes_position(self, x, y):
         self._face.update_eyes_position(x, y)
 
@@ -281,11 +357,14 @@ class EyeDisplay:
     def __init__(self):
         self._face = RobotFace()
         self._api = EyeAPI(self._face)
+
     @property
     def api(self):
         return self._api
+
     def start(self):
         self._face.start()
+
     def stop(self):
         self._face.stop()
 
