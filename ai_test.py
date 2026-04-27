@@ -61,7 +61,7 @@ async def execute_python(code):
 
 # --- НАСТРОЙКИ ---
 
-OBSCURED_API_KEY = "dzVaY3hUckhwcDdleTliRzhKUUlsVFpXelpScUpuem1CeVNheklB"
+OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
 
 def get_real_key(obscured):
     try:
