@@ -266,8 +266,10 @@ class RobotFace:
                         log.info("Exit via menu")
                         self.state.stop()
                     else:
-                        self._menu_visible = not getattr(self, '_menu_visible', False)
-                        self.state._menu_visible = self._menu_visible  # keep in sync
+                        # toggle menu on bottom 20% of screen
+                        if my > sh * 0.8:
+                            self._menu_visible = not getattr(self, '_menu_visible', False)
+                            self.state._menu_visible = self._menu_visible  # keep in sync
 
             # Update animation (including random idle blinks)
             self.state.update_logic(dt)
@@ -305,8 +307,8 @@ class RobotFace:
 
                 m_w, m_h = 400, 250
                 m_rect = pygame.Rect((sw - m_w) // 2, (sh - m_h) // 2, m_w, m_h)
-                pygame.draw.rect(screen, (25, 25, 25), m_rect, 0, 20)
-                pygame.draw.rect(screen, (200, 200, 200), m_rect, 2, 0, 20)
+                pygame.draw.rect(screen, (25, 25, 25), m_rect) # Убрали 0 и 20
+                pygame.draw.rect(screen, (200, 200, 200), m_rect, 2) # Убрали 20
 
                 ip_label = font.render(f"IP: {self._get_ip()}", True, (255, 255, 255))
                 screen.blit(ip_label, (m_rect.x + 40, m_rect.y + 50))
