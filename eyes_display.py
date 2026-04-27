@@ -314,8 +314,8 @@ class RobotFace:
                 screen.blit(ip_label, (m_rect.x + 40, m_rect.y + 50))
 
                 self._exit_btn_rect = pygame.Rect(m_rect.x + 50, m_rect.y + 130, 300, 70)
-                pygame.draw.rect(screen, (180, 40, 40), self._exit_btn_rect, border_radius=15)
-                pygame.draw.rect(screen, (255, 100, 100), self._exit_btn_rect, 2, border_radius=15)
+                pygame.draw.rect(screen, (180, 40, 40), self._exit_btn_rect)
+                pygame.draw.rect(screen, (255, 100, 100), self._exit_btn_rect, 2)
 
                 txt = font.render("Exit", True, (255, 255, 255))
                 screen.blit(txt, txt.get_rect(center=self._exit_btn_rect.center))
