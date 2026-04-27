@@ -42,7 +42,7 @@ class FaceState:
     """
     def __init__(self):
         self.lock = threading.Lock()
-        self._emote = "normal"
+        self._emote = "neutral"
         self._anim_phase = "idle"       # 'idle', 'closing', 'opening'
         self._anim_t = 0.0              # 0..1 progress of current phase
         self._half_duration = 0.05      # seconds per half-blink
@@ -171,6 +171,16 @@ class RobotFace:
         self.state = FaceState()
         self._exit_btn_rect = pygame.Rect(0, 0, 0, 0)
         self._textures = {}   # cache: emote_name -> pygame.Surface
+        
+        # Jiggle effect parameters
+        self._jiggle_x = 0.0
+        self._jiggle_y = 0.0
+        self._jiggle_target_x = 0.0
+        self._jiggle_target_y = 0.0
+        self._jiggle_intensity = 13.0  # max pixels to jiggle
+        self._jiggle_smooth = 2.0  # how fast to move towards target (higher = faster)
+        self._jiggle_change_interval = 1  # seconds between target changes
+        self._jiggle_timer = 0.0
 
     def _preload_all_emotions(self):
         """Загружает все PNG из папки emotions/ при старте."""
@@ -191,9 +201,9 @@ class RobotFace:
 
         filename = os.path.join(base_path, f"{emote_name}.png")
         if not os.path.isfile(filename):
-            filename = os.path.join(base_path, "default.png")
+            filename = os.path.join(base_path, "neutral.png")
             if not os.path.isfile(filename):
-                log.error(f"No texture for '{emote_name}' and no default.png in {base_path}")
+                log.error(f"No texture for '{emote_name}' and no neutral.png in {base_path}")
                 # fallback: grey rectangle with text
                 surf = pygame.Surface((400, 400), pygame.SRCALPHA)
                 surf.fill((100, 100, 100, 255))
@@ -274,6 +284,17 @@ class RobotFace:
             # Update animation (including random idle blinks)
             self.state.update_logic(dt)
 
+            # Update jiggle effect
+            self._jiggle_timer += dt
+            if self._jiggle_timer >= self._jiggle_change_interval:
+                self._jiggle_timer = 0.0
+                self._jiggle_target_x = random.uniform(-self._jiggle_intensity, self._jiggle_intensity)
+                self._jiggle_target_y = random.uniform(-self._jiggle_intensity, self._jiggle_intensity)
+            
+            # Smoothly interpolate towards target position
+            self._jiggle_x += (self._jiggle_target_x - self._jiggle_x) * min(1.0, self._jiggle_smooth * dt)
+            self._jiggle_y += (self._jiggle_target_y - self._jiggle_y) * min(1.0, self._jiggle_smooth * dt)
+
             # Clear screen
             screen.fill((0, 0, 0))
 
@@ -295,9 +316,11 @@ class RobotFace:
 
             scaled_tex = pygame.transform.scale(tex, (target_width, target_height))
 
-            # Draw centred vertically
+            # Draw centred vertically with jiggle effect
             y_offset = (sh - target_height) // 2
-            screen.blit(scaled_tex, (0, y_offset))
+            x_offset = int(self._jiggle_x)
+            y_offset = int(y_offset + self._jiggle_y)
+            screen.blit(scaled_tex, (x_offset, y_offset))
 
             # Menu overlay (simplified – touch bottom area toggles)
             if getattr(self, '_menu_visible', False):
@@ -376,7 +399,7 @@ def optimize_for_arm():
 
 def main():
     log.info("Robot Face Display (single texture, full width)")
-    log.info("Place your face PNGs in 'emotions/' folder (normal.png, default.png, ...)")
+    log.info("Place your face PNGs in 'emotions/' folder (neutral.png, ...)")
     face = RobotFace()
     face.start()
     try:
