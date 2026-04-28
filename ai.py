@@ -53,36 +53,9 @@ def enable_ai_audio(enabled: bool) -> None:
 # --- High-level functions available to AI ---
 # These are the only functions the AI can execute via #EXECUTE blocks
 
-def find(obj_name: str):
-    """Find an object by name. Returns dict with name, x, y, z or None."""
-    from r2_app.high_level import get_stereo_camera
-    camera = get_stereo_camera()
-    if camera is None:
-        return None
-    # Mock implementation - in real scenario would use CV
-    print(f"[AI-EXEC] Looking for: {obj_name}")
-    if obj_name == "user":
-        return {"name": "user", "x": 45, "y": 10, "z": 0}
-    return None
-
-
-def move(x: float, y: float, z: float) -> bool:
-    """Move robot to position. Returns success."""
-    from r2_app.high_level import angle
-    print(f"[AI-EXEC] Moving to: x={x}, y={y}, z={z}")
-    # Convert to servo angles (simplified)
-    try:
-        angle(0, int(x))  # neck
-        angle(3, int(y))  # tilt
-        return True
-    except Exception as e:
-        print(f"[AI-EXEC] Move failed: {e}")
-        return False
-
-
 def log(message: str) -> None:
     """Log a message (not visible to user)."""
-    print(f"[AI-LOG]: {message}")
+    print(f"[AI-LOG]: {str(message)}")
 
 
 def set_emote(emotion: str) -> bool:
@@ -102,19 +75,21 @@ def set_eyes(x: float, y: float) -> None:
 def get_cpu_temp() -> str:
     """Get CPU temperature."""
     from r2_app.high_level import cpu_temp
-    return cpu_temp()
+    temp = cpu_temp()
+    log(temp)
+    return temp
 
 
 def get_system_stats() -> dict:
     """Get system statistics."""
     from r2_app.high_level import health_snapshot
-    return health_snapshot()
+    stats = health_snapshot()
+    log(stats)
+    return stats
 
 
 # Available functions for AI execution
 _AI_EXEC_GLOBALS = {
-    "find": find,
-    "move": move,
     "log": log,
     "print": log,
     "set_emote": set_emote,
