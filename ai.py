@@ -30,6 +30,7 @@ MODEL_RATE = 24000
 HARDWARE_RATE = 48000
 BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
 WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
+VOICE = "Enceladus"
 MAX_HISTORY_CHARS = 8000
 
 # Global state
@@ -132,7 +133,7 @@ CHARACTER_PROMPT = """
 
 CONFIG_BASE = {
     "response_modalities": ["AUDIO"],
-    "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": "Aoede"}}},
+    "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE}}},
     "safety_settings": [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
