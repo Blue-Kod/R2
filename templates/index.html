@@ -575,12 +575,8 @@
                     aiLiveResponse.scrollTop = aiLiveResponse.scrollHeight;
                     // зелёная вспышка
                     aiLiveResponse.classList.add('flash-green');
-                    setTimeout(() => aiLiveResponse.classList.remove('flash-green'), 200);
+                    setTimeout(() => aiLiveResponse.classList.remove('flash-green'), 300);
                     // дублируем в логи, если вкладка логов активна
-                    if (logsOutput && logsPane && !logsPane.classList.contains('hidden')) {
-                        logsOutput.textContent = currentText;
-                        logsOutput.scrollTop = logsOutput.scrollHeight;
-                    }
                 }
             } catch(e) {
                 console.warn("polling error", e);
