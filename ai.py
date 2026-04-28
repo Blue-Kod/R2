@@ -252,13 +252,9 @@ async def receive_turn(websocket, full_text_response_buffer):
                         # 2. Ресемплинг 24к -> 48к
                         mono_48k = np.repeat(audio_array, 2)
 
-                        # 3. ФОРМИРУЕМ СТЕРЕО-МАТРИЦУ (N, 2)
-                        # Вместо flatten() мы просто упаковываем два канала рядом
-                        stereo_audio = np.column_stack((mono_48k, mono_48k))
-
                         if _output_stream:
                             # Теперь stereo_audio имеет форму (кол-во семплов, 2)
-                            _output_stream.write(stereo_audio)
+                            _output_stream.write(mono_48k)
 
                 except Exception as e:
                     print(f"\n[Ошибка аудио]: {e}")
@@ -298,9 +294,9 @@ async def _command_async(text: str) -> str:
     if _output_stream is None and _audio_enabled:
         _output_stream = sd.OutputStream(
             samplerate=HARDWARE_RATE,
-            channels=2,  # МЕНЯЕМ НА 2
+            channels=1,  # МЕНЯЕМ НА 2
             dtype='int16',
-            device=None,  # Лучше ставить None для выбора дефолтного устройства
+            device=1,  # Лучше ставить None для выбора дефолтного устройства
             latency='low'
         )
         _output_stream.start()
