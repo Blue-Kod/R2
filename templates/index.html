@@ -349,6 +349,21 @@
             .layout { height: auto; }
             #video-container, #pointcloud-container { width: 100%; }
         }
+
+        /* Стиль для кнопки обновления */
+        .update-btn {
+            background: #1e4a76;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .update-btn:hover {
+            background: #2c6b9e;
+        }
     </style>
 </head>
 <body>
@@ -363,7 +378,8 @@
             <div>RAM: <span id="ramStat">0</span>%</div>
             <div>Темп: <span id="tempStat">--</span></div>
             <div>FPS: <span id="fpsStat">0</span></div>
-            <button id="exitBtn" style="background: #8b0000; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;">⏻ ВЫХОД</button>
+            <button id="updateBtn" class="update-btn">↻</button>
+            <button id="exitBtn" style="background: #8b0000; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;">⏻</button>
         </div>
     </header>
 
@@ -963,6 +979,24 @@
         clearPythonBtn.addEventListener('click', () => { pythonCode.value = ''; pythonOutput.textContent = ''; });
     }
 
+    // --- Кнопка обновления ---
+    const updateBtn = document.getElementById('updateBtn');
+    updateBtn.addEventListener('click', async () => {
+        try {
+            updateBtn.disabled = true;
+            updateBtn.textContent = 'Обновление...';
+            const resp = await fetch('/api/update', { method: 'POST' });
+            const data = await resp.json();
+            alert(data.message || 'Обновление запущено. Приложение будет перезапущено.');
+            // Не закрываем страницу принудительно – сервер сам завершит процесс через пару секунд.
+        } catch(e) {
+            alert('Ошибка при запуске обновления: ' + e.message);
+            updateBtn.disabled = false;
+            updateBtn.textContent = '🔄 ОБНОВЛЕНИЕ';
+        }
+    });
+
+    // --- Кнопка выключения ---
     document.getElementById('exitBtn').addEventListener('click', async () => {
         try {
             const resp = await fetch('/api/shutdown', { method: 'POST' });

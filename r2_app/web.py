@@ -39,10 +39,6 @@ def create_app() -> Flask:
     def index():
         return render_template("index.html")
 
-    @app.route("/screen")
-    def screen():
-        return render_template("screen.html")
-
     @app.route("/api/data")
     def api_data():
         payload = health_snapshot()
@@ -262,7 +258,7 @@ def create_app() -> Flask:
         except (ImportError, AttributeError):
             current = ""
         return jsonify({"response": current})
-    
+
     @app.route("/api/ai/audio", methods=["POST"])
     def ai_audio():
         """Enable or disable AI audio output."""
