@@ -20,7 +20,6 @@ def parse_args():
 def main_loop():
     global _emote_index
     emotion = EMOTE_CYCLE[_emote_index]
-    print(emotion)
     emote(emotion)
     _emote_index = (_emote_index + 1) % len(EMOTE_CYCLE)
     time.sleep(3)

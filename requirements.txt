@@ -9,3 +9,4 @@ PCA9685-smbus2
 mediapipe
 pygame
 python-dotenv
+websockets

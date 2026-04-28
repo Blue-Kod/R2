@@ -73,7 +73,8 @@ def get_real_key(obscured):
 # Когда нужно использовать ключ:
 API_KEY = get_real_key(OBSCURED_API_KEY)
 MODEL_ID = "gemini-3.1-flash-live-preview"
-RATE = 24000
+MODEL_RATE = 24000
+HARDWARE_RATE = 48000
 BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
 WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
 MAX_HISTORY_CHARS = 8000
@@ -182,7 +183,8 @@ async def receive_turn(websocket, output_stream):
             if not is_code_block and not has_code_symbols:
                 try:
                     audio_array = np.frombuffer(base64.b64decode(data["audio"]), dtype=np.int16)
-                    output_stream.write(audio_array)
+                    resampled_audio = np.repeat(audio_array, 2)
+                    output_stream.write(resampled_audio)
                 except (ValueError, binascii.Error):
                     print("\n[Система: Некорректный аудиофрагмент]")
 
@@ -212,7 +214,7 @@ async def main_loop(websocket, output_stream, chat_history):
 
 
 async def main():
-    output_stream = sd.OutputStream(samplerate=RATE, channels=1, dtype='int16')
+    output_stream = sd.OutputStream(samplerate=HARDWARE_RATE, channels=1, dtype='int16', device=1)
     output_stream.start()
     chat_history = []
     pending_user_msg = None
