@@ -56,7 +56,9 @@ def enable_ai_audio(enabled: bool) -> None:
 
 def log(message: str) -> None:
     """Log a message (not visible to user)."""
-    print(f"[AI-LOG]: {str(message)}")
+    formatted_msg = f"[LOG]: {message}"
+    _chat_history.append(formatted_msg)
+    print(formatted_msg)
 
 
 def set_emote(emotion: str) -> bool:
@@ -180,7 +182,7 @@ async def receive_turn(websocket, full_text_response_buffer):
     """Receive one turn from the AI."""
     full_text_response = ""
     is_refusal = False
-    print("Астра: ", end="", flush=True)
+    print("AI: ", end="", flush=True)
 
     while True:
         try:
@@ -295,6 +297,7 @@ async def _command_async(text: str) -> str:
             await websocket.send(json.dumps({"api_key": API_KEY, "model_id": MODEL_ID, "config": config}))
             # Send user command
             await websocket.send(json.dumps({"text": text}))
+            print(f"INPUT -> AI: {text}")
             _chat_history.append(f"Пользователь: {text}")
 
             # Get response
