@@ -12,3 +12,4 @@ python-dotenv
 websockets
 sounddevice
 scipy
+sherpa-onnx
