@@ -36,7 +36,7 @@ VOICE = "Enceladus"
 MAX_HISTORY_CHARS = 8000
 INPUT_SAMPLERATE = 32000          # микрофон 32кГц
 TARGET_SAMPLERATE = 16000         # ожидаемый Gemini Live
-MIC_DEVICE = 0                    # индекс микрофона
+MIC_DEVICE = 1                    # индекс микрофона
 
 # Global state
 _audio_enabled = True
@@ -301,6 +301,7 @@ async def _voice_interaction_loop(websocket):
                     _current_response += clean_chunk
 
             if any(phrase in _current_response.lower() for phrase in BANNED_PHRASES):
+                is_refusal = True
                 is_refusal = True
 
             # Аудио‑ответ (воспроизведение)
