@@ -208,7 +208,7 @@ def _mic_callback_factory(loop: asyncio.AbstractEventLoop, audio_queue: asyncio.
         # Преобразуем в int16
         int16_data = (mono * 32767).astype(np.int16)
         # Ресемплинг
-        resampled = _resample_to_16000(int16_data)
+        resampled = _resample_to_16000(int16_data, INPUT_SAMPLERATE)
         # В байты
         audio_bytes = resampled.tobytes()
         asyncio.run_coroutine_threadsafe(audio_queue.put(audio_bytes), loop)
