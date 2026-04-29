@@ -26,3 +26,5 @@ if __name__ == "__main__":
         start_background()
         command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.'")
         # start_voice_mode()
+        while True:
+            time.sleep(1)
