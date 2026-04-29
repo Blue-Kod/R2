@@ -11,3 +11,4 @@ pygame
 python-dotenv
 websockets
 sounddevice
+scipy

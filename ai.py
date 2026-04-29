@@ -15,6 +15,7 @@ import sounddevice as sd
 import websockets
 import threading
 from collections import deque
+from scipy.signal import resample as _scipy_resample
 
 # --- Configuration ---
 OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
@@ -34,7 +35,7 @@ BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
 WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
 VOICE = "Enceladus"
 MAX_HISTORY_CHARS = 8000
-INPUT_SAMPLERATE = 16000          # микрофон 32кГц
+INPUT_SAMPLERATE = 44100          # микрофон 32кГц
 TARGET_SAMPLERATE = 16000         # ожидаемый Gemini Live
 MIC_DEVICE = 1                    # индекс микрофона
 
@@ -188,9 +189,13 @@ async def execute_python(code):
 
 # --- Аудио‑захват (микрофон) ---
 
-def _resample_32000_to_16000(audio_chunk: np.ndarray) -> np.ndarray:
-    """Простой дециматор: каждый второй сэмпл (32 кГц -> 16 кГц)."""
-    return audio_chunk[::2]
+def _resample_to_16000(audio_chunk: np.ndarray, orig_rate: int) -> np.ndarray:
+    """Переводит из orig_rate в 16 кГц."""
+    if orig_rate == 16000:
+        return audio_chunk
+    duration = len(audio_chunk) / orig_rate
+    target_samples = int(duration * 16000)
+    return _scipy_resample(audio_chunk, target_samples).astype(np.int16)
 
 
 def _mic_callback_factory(loop: asyncio.AbstractEventLoop, audio_queue: asyncio.Queue):
@@ -203,7 +208,7 @@ def _mic_callback_factory(loop: asyncio.AbstractEventLoop, audio_queue: asyncio.
         # Преобразуем в int16
         int16_data = (mono * 32767).astype(np.int16)
         # Ресемплинг
-        resampled = _resample_32000_to_16000(int16_data)
+        resampled = _resample_to_16000(int16_data)
         # В байты
         audio_bytes = resampled.tobytes()
         asyncio.run_coroutine_threadsafe(audio_queue.put(audio_bytes), loop)
