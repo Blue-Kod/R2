@@ -34,7 +34,7 @@ BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
 WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
 VOICE = "Enceladus"
 MAX_HISTORY_CHARS = 8000
-INPUT_SAMPLERATE = 32000          # микрофон 32кГц
+INPUT_SAMPLERATE = 16000          # микрофон 32кГц
 TARGET_SAMPLERATE = 16000         # ожидаемый Gemini Live
 MIC_DEVICE = 1                    # индекс микрофона
 
