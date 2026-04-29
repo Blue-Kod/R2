@@ -10,3 +10,4 @@ mediapipe
 pygame
 python-dotenv
 websockets
+sounddevice

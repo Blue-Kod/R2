@@ -318,6 +318,7 @@ def create_app() -> Flask:
         
         data = request.get_json(silent=True) or {}
         code = str(data.get("code", "")).strip()
+        code = f"from r2_app.high_level import *\n{code}"
         
         if not code:
             return jsonify({"stdout": "", "stderr": "No code provided"}), 400
