@@ -4,7 +4,7 @@
 import argparse
 import os
 import time
-from ai import command, start_voice_mode
+from ai import command, start_voice_mode, AUDIO_INPUT
 from r2_app.high_level import *
 
 APP_VERSION = "0.1"
@@ -24,8 +24,9 @@ if __name__ == "__main__":
         print(f"R2 v{APP_VERSION}")
     else:
         start_background()
-        # Первый вызов command() – при AUDIO_INPUT=True он перейдёт в бесконечный голосовой режим
+        # Первый command() запускает голосовой диалог, если AUDIO_INPUT = True
         command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.'")
-        # Если голосовой ввод выключен (режим по умолчанию), просто держим процесс
+        # Если command() вернулся (например, в текстовом режиме или после ошибки) –
+        # оставляем процесс живым, чтобы веб-сервер и остальные потоки работали.
         while True:
-            time.sleep(3)
+            time.sleep(1)
