@@ -1,35 +1,23 @@
 #!/usr/bin/env python3
 import sys
 import os
-import io
 import time
 import numpy as np
 import noisereduce as nr
 
-# ---------- 1. Полное подавление ALSA-логов ----------
-class FilterStderr:
-    """Фильтрует stderr, убирая строки с 'ALSA'."""
-    def __init__(self, stream):
-        self.stream = stream
-    def write(self, message):
-        if "ALSA" not in message:
-            self.stream.write(message)
-    def flush(self):
-        self.stream.flush()
+# 1. Полное подавление ALSA-сообщений: перенаправляем stderr (fd 2) в /dev/null
+devnull = os.open(os.devnull, os.O_WRONLY)
+os.dup2(devnull, 2)          # всё, что пишется в stderr, теперь уходит вникуда
 
-sys.stderr = FilterStderr(sys.stderr)
-
-# Теперь можно импортировать и работать спокойно
 import speech_recognition as sr
 
 # Глобальные переменные шумоподавления
 noise_profile = None
-noise_sample_duration = 2   # секунд записи образца шума
+noise_sample_duration = 2    # секунд для образца шума
 
 
 def reduce_noise(audio_data: sr.AudioData, sample_rate: int = 48000) -> sr.AudioData:
     """Спектральное шумоподавление с помощью noisereduce."""
-    global noise_profile
     if noise_profile is None:
         return audio_data
 
@@ -39,7 +27,7 @@ def reduce_noise(audio_data: sr.AudioData, sample_rate: int = 48000) -> sr.Audio
         y=audio_np,
         sr=sample_rate,
         y_noise=noise_profile,
-        prop_decrease=0.9,
+        prop_decrease=0.9,       # подавляем 90% шума
         n_fft=1024,
         win_length=1024,
         hop_length=512
@@ -50,12 +38,12 @@ def reduce_noise(audio_data: sr.AudioData, sample_rate: int = 48000) -> sr.Audio
 
 
 def capture_noise_profile(recognizer, mic):
-    """Записывает образец шума (вентилятор) без речи."""
+    """Записывает образец шума (без речи)."""
     global noise_profile
     print(f"Запись образца шума ({noise_sample_duration} сек, молчите)...")
     with mic as source:
-        audio_sample = recognizer.listen(source, timeout=noise_sample_duration,
-                                         phrase_time_limit=noise_sample_duration)
+        # record просто пишет поток, не дожидаясь речи
+        audio_sample = recognizer.record(source, duration=noise_sample_duration)
     audio_np = np.frombuffer(audio_sample.get_raw_data(), dtype=np.int16).astype(np.float32) / 32768.0
     noise_profile = audio_np
     print("Профиль шума сохранён.")
@@ -75,17 +63,18 @@ def callback(recognizer, audio):
 
 def main():
     recognizer = sr.Recognizer()
+    # Настройки порога и пауз (можно подкрутить при необходимости)
     recognizer.dynamic_energy_threshold = True
     recognizer.energy_threshold = 4000
-    recognizer.pause_threshold = 1.2
-    recognizer.phrase_threshold = 0.2
+    recognizer.pause_threshold = 1.2      # увеличенная пауза перед концом фразы
+    recognizer.phrase_threshold = 0.2     # минимальная длительность фразы
 
     mic = sr.Microphone(device_index=1, sample_rate=48000)
 
-    # Захват шума
+    # Захват профиля шума
     capture_noise_profile(recognizer, mic)
 
-    # Калибровка
+    # Калибровка после захвата профиля
     with mic as source:
         recognizer.adjust_for_ambient_noise(source, duration=1)
         print(f"Порог энергии после калибровки: {recognizer.energy_threshold:.1f}")
@@ -93,6 +82,7 @@ def main():
     print("Слушаю... (нажмите Enter для выхода)")
 
     stop_listening = recognizer.listen_in_background(mic, callback)
+
     input()
     stop_listening(wait_for_stop=True)
     print("Микрофон освобождён. Выход.")
