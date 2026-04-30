@@ -221,15 +221,6 @@ def create_app() -> Flask:
         log(f"Servo tracking {'enabled' if servo_tracking_enabled else 'disabled'}")
         return jsonify({"status": "ok", "enabled": servo_tracking_enabled})
 
-    @app.route("/api/ai/gemini/test", methods=["POST"])
-    def gemini_test_route():
-        data = request.get_json(silent=True) or {}
-        prompt = str(data.get("prompt") or "Ping from R2")
-        result = gemini_test(prompt=prompt)
-        if result["ok"]:
-            return jsonify({"status": "ok", "response": result["text"]})
-        return jsonify({"status": "error", "message": result["error"]}), 400
-
     @app.route("/api/ai/command", methods=["POST"])
     def ai_command():
         """Send command to AI and get response."""
