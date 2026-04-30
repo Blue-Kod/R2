@@ -1,7 +1,7 @@
 """
 AI Library for R2 Robot - High-level interface for AI interactions.
 Provides command(), enable_ai_audio(), and start_voice_mode() functions.
-Now with continuous audio input support.
+Now with continuous audio input support and fixed mic overflow.
 """
 
 import asyncio
@@ -15,6 +15,7 @@ import numpy as np
 import sounddevice as sd
 import websockets
 import threading
+import queue   # потокобезопасная очередь для сырых аудиоданных
 from collections import deque
 from scipy.signal import resample as _scipy_resample
 
@@ -52,13 +53,16 @@ _current_response = ""
 _voice_mode_active = False
 _ai_executing = False
 _audio_input_active = False
-_mic_queue = None
 _mic_stream = None
 _last_transcribed_text = ""       # last user speech recognised
 
 # Audio output related flags
 _ai_speaking = False
 _speaking_reset_task = None
+
+# Mic worker thread and stop event
+_mic_worker_thread = None
+_mic_thread_stop_event = threading.Event()
 
 def get_current_response():
     return _current_response
@@ -195,7 +199,7 @@ async def execute_python(code):
         return f"ОШИБКА В КОДЕ:\n{err}"
 
 
-# --- Audio input (microphone) routines ---
+# --- Audio input (microphone) with overflow-safe design ---
 
 def _resample_to_16000(audio_chunk: np.ndarray, orig_rate: int) -> np.ndarray:
     """Resample from orig_rate to 16 kHz."""
@@ -206,28 +210,50 @@ def _resample_to_16000(audio_chunk: np.ndarray, orig_rate: int) -> np.ndarray:
     return _scipy_resample(audio_chunk, target_samples).astype(np.int16)
 
 
-def _mic_callback_factory(loop: asyncio.AbstractEventLoop, audio_queue: asyncio.Queue):
-    """Create a callback for sounddevice.InputStream that pushes audio into the queue."""
+def _mic_worker(raw_queue: queue.Queue, async_queue: asyncio.Queue,
+                loop: asyncio.AbstractEventLoop):
+    """Читает сырые float32‑сэмплы, ресэмплит и пересылает в async_queue."""
+    while not _mic_thread_stop_event.is_set():
+        try:
+            mono = raw_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        # Преобразование и ресэмплинг
+        int16_data = (mono * 32767).astype(np.int16)
+        resampled = _resample_to_16000(int16_data, INPUT_SAMPLERATE)
+        audio_bytes = resampled.tobytes()
+        # Передача в asyncio-очередь
+        asyncio.run_coroutine_threadsafe(async_queue.put(audio_bytes), loop)
+
+
+def _mic_callback_factory(raw_queue: queue.Queue):
+    """Лёгкая callback: только копирует данные в raw_queue."""
     def callback(indata, frames, time, status):
         if status:
             print(f"[Mic] status: {status}")
-        # indata: (frames, channels) float32
-        mono = indata[:, 0].copy()
-        # Convert to int16
-        int16_data = (mono * 32767).astype(np.int16)
-        # Resample
-        resampled = _resample_to_16000(int16_data, INPUT_SAMPLERATE)
-        # Convert to bytes
-        audio_bytes = resampled.tobytes()
-        asyncio.run_coroutine_threadsafe(audio_queue.put(audio_bytes), loop)
+        raw_queue.put(indata[:, 0].copy())
     return callback
 
 
-def _start_microphone(loop: asyncio.AbstractEventLoop, audio_queue: asyncio.Queue):
-    """Start the microphone in a background thread."""
-    global _mic_stream
+def _start_microphone(loop: asyncio.AbstractEventLoop, async_queue: asyncio.Queue):
+    """Запуск микрофона и фонового потока-обработчика."""
+    global _mic_stream, _mic_worker_thread, _mic_thread_stop_event
+
     if _mic_stream is not None:
         return
+
+    # Потокобезопасная очередь для сырых данных
+    raw_queue = queue.Queue(maxsize=100)
+
+    _mic_thread_stop_event.clear()
+    _mic_worker_thread = threading.Thread(
+        target=_mic_worker,
+        args=(raw_queue, async_queue, loop),
+        daemon=True,
+        name="mic-worker"
+    )
+    _mic_worker_thread.start()
+
     try:
         _mic_stream = sd.InputStream(
             samplerate=INPUT_SAMPLERATE,
@@ -235,21 +261,27 @@ def _start_microphone(loop: asyncio.AbstractEventLoop, audio_queue: asyncio.Queu
             channels=1,
             dtype='float32',
             blocksize=1024,
-            callback=_mic_callback_factory(loop, audio_queue)
+            callback=_mic_callback_factory(raw_queue)
         )
         _mic_stream.start()
         print("[AI] Microphone started")
     except Exception as e:
         print(f"[AI] Failed to start microphone: {e}")
+        _mic_thread_stop_event.set()
+        _mic_worker_thread = None
 
 
 def _stop_microphone():
-    global _mic_stream
+    global _mic_stream, _mic_worker_thread, _mic_thread_stop_event
     if _mic_stream is not None:
         _mic_stream.stop()
         _mic_stream.close()
         _mic_stream = None
         print("[AI] Microphone stopped")
+    _mic_thread_stop_event.set()
+    if _mic_worker_thread and _mic_worker_thread.is_alive():
+        _mic_worker_thread.join(timeout=1.0)
+    _mic_worker_thread = None
 
 
 # --- Audio output / speaking guard ---
@@ -294,9 +326,9 @@ async def _audio_sender_task(websocket, audio_queue: asyncio.Queue):
         # otherwise drop (not listening / executing / speaking)
 
 
-# --- Voice session loop (used inside command() when AUDIO_INPUT is True) ---
+# --- Voice interaction loop (used by both continuous and standalone voice modes) ---
 
-async def _voice_session_loop(websocket):
+async def _voice_interaction_loop(websocket):
     """
     Continuous loop that handles incoming messages, plays audio,
     executes code, and feeds microphone audio when allowed.
@@ -359,7 +391,6 @@ async def _voice_session_loop(websocket):
                             mono_48k = np.repeat(audio_array, 2)
                             if _output_stream:
                                 _output_stream.write(mono_48k)
-                            # Signal that AI is speaking
                             await _note_audio_output()
                     except Exception as e:
                         print(f"\n[Ошибка аудио]: {e}")
@@ -381,7 +412,6 @@ async def _voice_session_loop(websocket):
                     cleaned = re.sub(r'\+', '', assistant_text_accum.strip())
                     _chat_history.append(f"Ассистент: {cleaned}")
                     print("\n")
-                # Reset accumulators for next turn
                 _current_response = ""
                 assistant_text_accum = ""
                 is_refusal = False
@@ -390,7 +420,7 @@ async def _voice_session_loop(websocket):
         print("[AI] Voice WebSocket closed")
     except Exception as e:
         print(f"[AI] Voice error: {e}")
-        raise  # re-raise so outer retry logic can catch it
+        raise
     finally:
         _audio_input_active = False
         _ai_executing = False
@@ -488,7 +518,6 @@ async def main_loop(websocket):
 async def _command_async(text: str) -> str:
     """Async implementation of command function, with optional continuous audio input."""
     global _output_stream, _chat_history
-    # Initialize audio output if needed
     if _output_stream is None and _audio_enabled:
         _output_stream = sd.OutputStream(
             samplerate=HARDWARE_RATE,
@@ -499,7 +528,6 @@ async def _command_async(text: str) -> str:
         )
         _output_stream.start()
 
-    # Wake up the proxy service
     for attempt in range(1, 6):
         try:
             response = requests.get(BASE_URL, timeout=10)
@@ -511,10 +539,9 @@ async def _command_async(text: str) -> str:
         if attempt < 5:
             time.sleep(2)
 
-    # The message to send initially (may be updated on retry)
     text_to_send = text
 
-    while True:  # retry loop for voice mode
+    while True:
         try:
             async with websockets.connect(WS_URL, open_timeout=30) as websocket:
                 config = build_config(_chat_history)
@@ -523,18 +550,14 @@ async def _command_async(text: str) -> str:
                     "model_id": MODEL_ID,
                     "config": config
                 }))
-                # Send user command
                 await websocket.send(json.dumps({"text": text_to_send}))
                 print(f"INPUT -> AI: {text_to_send}")
                 _chat_history.append(f"Пользователь: {text_to_send}")
 
                 if AUDIO_INPUT:
-                    # Enter continuous voice interaction loop
-                    await _voice_session_loop(websocket)
-                    # If it returns (unlikely), break the outer retry loop
+                    await _voice_interaction_loop(websocket)
                     break
                 else:
-                    # Traditional text-only mode
                     assistant_response = await main_loop(websocket)
                     if assistant_response:
                         _chat_history.append(f"Ассистент: {assistant_response}")
@@ -544,42 +567,30 @@ async def _command_async(text: str) -> str:
         except Exception as e:
             print(f"[AI] Connection error: {e}")
             if not AUDIO_INPUT:
-                # In text mode, just return the error
                 return f"Ошибка: {str(e)}"
 
-            # In voice mode, attempt to resume with the last known user speech
             if _last_transcribed_text:
                 text_to_send = _last_transcribed_text
                 print(f"[AI] Re-sending as text: {text_to_send}")
             else:
-                text_to_send = text  # original command
-
-            time.sleep(2)  # wait before reconnecting
+                text_to_send = text
+            time.sleep(2)
             continue
 
-    # Should never reach here in voice mode, but satisfy return type
     return "Voice session ended."
 
 
 def command(text: str) -> str:
-    """
-    Send a command to the AI and get response.
-    When AUDIO_INPUT is True, the call blocks and enters a continuous
-    voice interaction mode.
-    """
     try:
         return asyncio.run(_command_async(text))
     except Exception as e:
         return f"Ошибка выполнения: {str(e)}"
 
 
-# --- Dedicated voice mode entry point (kept for backwards compatibility) ---
+# --- Standalone voice mode (backward compatible) ---
 
 def start_voice_mode():
-    """
-    Standalone voice mode that opens its own connection.
-    Use command() with AUDIO_INPUT=True for integrated behaviour.
-    """
+    """Standalone voice mode that opens its own connection."""
     global _voice_mode_active
     if _voice_mode_active:
         print("[AI] Voice mode already active")
@@ -637,7 +648,6 @@ def start_voice_mode():
 
 
 def cleanup():
-    """Clean up resources."""
     global _output_stream
     if _output_stream:
         _output_stream.stop()
