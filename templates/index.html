@@ -651,7 +651,7 @@
     }
 
     async function updateRenderParams() {
-        const alpha = parseInt(depthAlphaSlider.value, 10) : 0;
+        const alpha = parseInt(depthAlphaSlider.value, 10);
         const showLeft = eyeLeft.checked;
         try {
             await fetch('/update', {
