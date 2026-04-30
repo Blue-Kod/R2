@@ -17,7 +17,6 @@ from r2_app.high_level import (
     shell_output,
     shell_start,
     shell_write,
-    gemini_test,
     set_emote,
     get_emote,
     supported_emotes,
