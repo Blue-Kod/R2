@@ -14,7 +14,7 @@ class StereoCamera:
             cfg = json.load(f)
 
         self.img_size = tuple(cfg['imSize'])
-        self.depth_scale = 0.25
+        self.depth_scale = 0.35
         self.low_size = (int(self.img_size[0] * self.depth_scale),
                          int(self.img_size[1] * self.depth_scale))
 
@@ -36,11 +36,11 @@ class StereoCamera:
         self.Q_low = self.Q.copy()
         self.Q_low[:2, :3] *= self.depth_scale
 
-        self.num_disp = 5
-        self.block_size = 9
+        self.num_disp = 7
+        self.block_size = 7
         self.alpha_depth = 0.3
         self.show_left = True
-        self.wls_enabled = False
+        self.wls_enabled = True
 
         self.depth_enabled = True
         self.tracking_mode = "person"   # "person" (тело), "face", "motion"
@@ -112,7 +112,7 @@ class StereoCamera:
         max_d = self.num_disp * 16
         self.matcher_l = cv2.StereoSGBM_create(
             minDisparity=0, numDisparities=max_d, blockSize=self.block_size,
-            P1=8 * 3 * self.block_size ** 2, P2=32 * 3 * self.block_size ** 2,
+            P1=8 * 3 * self.block_size ** 2, P2 = 32 * 3 * self.block_size ** 2,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
         if self.wls_enabled:

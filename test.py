@@ -1,161 +1,119 @@
 #!/usr/bin/env python3
-"""
-Умный захват речи: детектор тишины + Google STT.
-Микрофон 48000 Гц, автоматическое определение конца фразы,
-вывод задержки между концом речи и результатом распознавания.
-"""
-
-import time
-import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
-from scipy.signal import resample_poly
+import numpy as np
+import time
 
-# ---------- настройки ----------
-DEVICE = 1                # индекс микрофона
-SAMPLE_RATE = 48000       # частота захвата
-TARGET_RATE = 16000       # частота для Google STT
+# Настройки
+DEVICE = 1
+SAMPLE_RATE = 48000
+TARGET_RATE = 16000
+SILENCE_THRESHOLD = 0.02       # RMS порог тишины (подберите под микрофон, если нужно)
+SILENCE_DURATION = 1.0         # секунд тишины для завершения фразы
+CHUNK_DURATION = 0.1           # длительность маленького чанка для анализа
 
-# VAD (Voice Activity Detection)
-SILENCE_THRESH = 0.02     # порог RMS для тишины (подберите под ваш микрофон)
-SILENCE_LIMIT = 1.0       # секунд тишины, после которых считаем фразу законченной
-SPEECH_MIN_DUR  = 0.3     # минимальная длина фразы (игнорируем щелчки)
-
-# общие
-CHUNK_SEC = 0.1           # размер обрабатываемого кусочка (секунд)
-# ---------------------------------
-
-class ContinuousListener:
-    def __init__(self, device, sample_rate, target_rate):
-        self.device = device
-        self.sample_rate = sample_rate
-        self.target_rate = target_rate
+class RealtimePhraseRecognizer:
+    def __init__(self):
         self.recognizer = sr.Recognizer()
-        self.stream = None
+        self.silence_threshold = SILENCE_THRESHOLD
+        self.silence_duration = SILENCE_DURATION
+        self.chunk_samples = int(SAMPLE_RATE * CHUNK_DURATION)
 
-    def start(self):
-        """Открывает микрофон."""
-        self.stream = sd.InputStream(
-            device=self.device,
-            channels=1,
-            samplerate=self.sample_rate,
-            dtype='int16',
-            blocksize=int(self.sample_rate * CHUNK_SEC)
-        )
-        self.stream.start()
+        self.phrase_buffer = np.array([], dtype=np.int16)
+        self.is_speaking = False
+        self.silence_start = None
+        self.last_phrase_end_time = None
 
-    def stop(self):
-        """Корректно закрывает микрофон."""
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+    def process_chunk(self, chunk):
+        """Принимает numpy-чанк int16, обновляет состояние VAD."""
+        rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
 
-    def rms(self, data):
-        """Среднеквадратичная энергия для int16."""
-        return np.sqrt(np.mean(data.astype(np.float32) ** 2))
-
-    def resample_to_target(self, audio):
-        """Полифазный ресемплинг int16 -> int16."""
-        # resample_poly работает с float, поэтому конвертируем туда-обратно
-        audio_float = audio.astype(np.float32) / 32768.0
-        resampled = resample_poly(audio_float, self.target_rate, self.sample_rate)
-        # обратно в int16
-        resampled_int = (resampled * 32767).astype(np.int16)
-        return np.clip(resampled_int, -32768, 32767)
-
-    def listen_for_phrase(self):
-        """
-        Слушает до тех пор, пока не начнётся речь, а затем не наступит пауза.
-        Возвращает аудио-фрагмент (int16, target_rate) или None.
-        """
-        audio_buffer = []
-        silence_frames = 0
-        speech_frames = 0
-        speaking = False
-        frames_per_silence = int(SILENCE_LIMIT / CHUNK_SEC)
-
-        print("Ожидаю речь...", end="", flush=True)
-        while True:
-            chunk, _ = self.stream.read(int(self.sample_rate * CHUNK_SEC))
-            chunk = chunk.flatten()
-            energy = self.rms(chunk)
-
-            if energy > SILENCE_THRESH:
-                # Голос
-                if not speaking:
-                    print("\nГоворите...", end="", flush=True)
-                    speaking = True
-                    audio_buffer = []  # очищаем предыдущую тишину
-                silence_frames = 0
-                speech_frames += 1
-                audio_buffer.append(chunk)
+        if rms > self.silence_threshold:
+            # Речь
+            if not self.is_speaking:
+                print("🎤 Фраза началась...")
+                self.is_speaking = True
+                self.phrase_buffer = chunk
             else:
-                # Тишина
-                if speaking:
-                    silence_frames += 1
-                    audio_buffer.append(chunk)  # сохраняем хвост тишины (помогает распознаванию)
-                    if silence_frames >= frames_per_silence:
-                        # Проверяем минимальную длительность речи
-                        if speech_frames * CHUNK_SEC >= SPEECH_MIN_DUR:
-                            break
-                        else:
-                            # Слишком коротко – игнорируем, ждём заново
-                            print("\n(короткий звук, игнорирую) Ожидаю речь...", end="", flush=True)
-                            speaking = False
-                            audio_buffer = []
-                            silence_frames = 0
-                            speech_frames = 0
-                else:
-                    # Тишина вне речи – просто пропускаем
-                    pass
+                self.phrase_buffer = np.concatenate([self.phrase_buffer, chunk])
+            self.silence_start = None
+        else:
+            # Тишина
+            if self.is_speaking:
+                if self.silence_start is None:
+                    self.silence_start = time.time()
+                elif time.time() - self.silence_start >= self.silence_duration:
+                    # Конец фразы
+                    phrase_end_time = time.time()
+                    print("⏹ Конец фразы, распознаю...")
+                    text, latency = self.recognize_phrase(self.phrase_buffer, phrase_end_time)
+                    if text:
+                        print(f"✅ Распознано: '{text}'")
+                        print(f"⏱ Задержка от конца речи до результата: {latency:.3f} сек")
+                    else:
+                        print("🤷 Не удалось разобрать")
+                    # Сброс
+                    self.is_speaking = False
+                    self.phrase_buffer = np.array([], dtype=np.int16)
+                    self.silence_start = None
+                    return True  # фраза завершена
+        return False
 
-        # Конец фразы
-        phrase_end_time = time.time()
-        print(" Обработка...", end="", flush=True)
+    def recognize_phrase(self, audio_int16, phrase_end_time):
+        """Ресемплирует, отправляет в Google, возвращает (text, latency)."""
+        # Ресемплинг 48k -> 16k (простой дециматор)
+        audio_16k = audio_int16[::SAMPLE_RATE // TARGET_RATE]
 
-        # Объединяем буфер и ресемплируем в 16 кГц
-        raw_audio = np.concatenate(audio_buffer)
-        audio_16k = self.resample_to_target(raw_audio)
-        return audio_16k, phrase_end_time
+        # Создаём AudioData
+        audio_data = sr.AudioData(audio_16k.tobytes(), TARGET_RATE, 2)
 
-    def recognize_google(self, audio_16k):
-        """Отправляет аудио в Google STT и возвращает текст + время получения."""
-        start_recog = time.time()
-        audio_data = sr.AudioData(audio_16k.tobytes(), self.target_rate, 2)
+        start_recognition = time.time()
         try:
             text = self.recognizer.recognize_google(audio_data, language="ru-RU")
-            recog_time = time.time()
-            return text, recog_time
+            latency = time.time() - phrase_end_time
+            return text, latency
         except sr.UnknownValueError:
-            return None, time.time()
+            return None, 0
         except sr.RequestError as e:
-            print(f"\nОшибка Google: {e}")
-            return None, time.time()
+            print(f"🌐 Ошибка сети: {e}")
+            return None, 0
+        except Exception as e:
+            print(f"Ошибка распознавания: {e}")
+            return None, 0
 
-    def run_forever(self):
-        """Вечный цикл распознавания с выводом задержки."""
-        self.start()
-        print("Микрофон активирован. Для выхода нажмите Ctrl+C.\n")
-        try:
-            while True:
-                phrase_audio, phrase_end = self.listen_for_phrase()
-                if phrase_audio is None:
-                    continue
-                text, recog_end = self.recognize_google(phrase_audio)
-                delay = recog_end - phrase_end
-                if text:
-                    print(f"\n✅ Распознано: \"{text}\"")
-                else:
-                    print("\n🤷 Не распознано")
-                print(f"⏱️ Задержка от конца речи до ответа: {delay:.2f} сек\n")
-        except KeyboardInterrupt:
-            print("\nЗавершение...")
-        finally:
-            self.stop()
-            print("Микрофон освобождён.")
+def main():
+    print("Запуск непрерывного распознавания...")
+    print(f"Микрофон: устройство {DEVICE}, порог тишины {SILENCE_THRESHOLD}, ожидание тишины {SILENCE_DURATION} с")
+    print("Нажмите Ctrl+C для выхода.\n")
 
-# ------------------ запуск ------------------
+    phrase_recognizer = RealtimePhraseRecognizer()
+
+    def audio_callback(indata, frames, time_info, status):
+        if status:
+            print(f"Ошибка потока: {status}")
+        # indata shape: (frames, 1), float32 -> int16
+        chunk = (indata[:, 0] * 32767).astype(np.int16)
+        phrase_recognizer.process_chunk(chunk)
+
+    stream = sd.InputStream(
+        device=DEVICE,
+        channels=1,
+        samplerate=SAMPLE_RATE,
+        dtype='float32',
+        callback=audio_callback,
+        blocksize=phrase_recognizer.chunk_samples
+    )
+    stream.start()
+
+    try:
+        while True:
+            time.sleep(0.1)  # освобождаем главный поток
+    except KeyboardInterrupt:
+        print("\nОстановка...")
+    finally:
+        stream.stop()
+        stream.close()
+        print("Микрофон освобождён.")
+
 if __name__ == "__main__":
-    listener = ContinuousListener(DEVICE, SAMPLE_RATE, TARGET_RATE)
-    listener.run_forever()
+    main()

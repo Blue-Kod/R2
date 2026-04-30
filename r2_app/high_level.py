@@ -84,9 +84,7 @@ _eyes_y = 0.0
 _emote_lock = threading.Lock()
 _supported_emotes = [os.path.splitext(f)[0] for f in os.listdir("emotions") if f.endswith(".png")]
 
-# Gemini state
-_gemini_api_key = os.getenv("GEMINI_API_KEY")
-_gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+# Gemini stat
 
 # Thread tracking for cleanup
 _all_threads = []
@@ -128,7 +126,7 @@ class MockStereoCamera:
         cx = int((self._tick * 7) % self.img_size[0])
         cy = int(self.img_size[1] / 2 + np.sin(self._tick / 15.0) * 120)
         cv2.putText(frame, "SIMULATION MODE", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 2)
-        cv2.putText(frame, "Orange Pi robot is emulated", (40, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        cv2.putText(frame, "No camera / Camera init failed", (40, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
         cv2.circle(frame, (cx, cy), 40, (0, 200, 255), -1)
         return frame
 
@@ -454,24 +452,6 @@ def health_snapshot() -> dict:
         "ram": psutil.virtual_memory().percent,
         "temp": cpu_temp(),
     }
-
-
-# --- Gemini Lib ---
-def gemini_test(prompt: str = "Ping from R2") -> dict:
-    """Test Gemini API."""
-    if not _gemini_api_key:
-        return {
-            "ok": False,
-            "text": "",
-            "error": "Gemini API key is not configured",
-        }
-
-    return {
-        "ok": True,
-        "text": f"Gemini gateway is ready for model {_gemini_model}. Prompt: {prompt}",
-        "error": None,
-    }
-
 
 # --- Display Worker ---
 def _display_worker():

@@ -163,7 +163,6 @@ def create_app() -> Flask:
                         "alpha_depth": camera.alpha_depth,
                         "show_left": camera.show_left,
                         "num_disp": camera.num_disp,
-                        "wls_enabled": camera.wls_enabled,
                     }
                 )
 
@@ -179,7 +178,6 @@ def create_app() -> Flask:
             alpha_depth=data.get("alpha_depth"),
             show_left=data.get("show_left"),
             num_disp=data.get("num_disp"),
-            wls_enabled=data.get("wls_enabled"),
         )
         return jsonify({"status": "ok"})
 

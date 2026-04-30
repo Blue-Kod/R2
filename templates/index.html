@@ -426,11 +426,9 @@
                         <label><input type="radio" name="mainEye" id="eyeRight"> Правый</label>
                     </div>
                 </div>
-                <div class="control-row"><label>Показывать глубину:</label><input type="checkbox" id="showDepth" checked></div>
                 <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30"></div>
                 <div class="control-group">
                     <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled"></div>
-                    <div class="control-row"><label>WLS фильтр:</label><input type="checkbox" id="wlsEnabled"></div>
                 </div>
             </div>
 
@@ -535,10 +533,8 @@
     // параметры камеры
     const eyeLeft = document.getElementById('eyeLeft');
     const eyeRight = document.getElementById('eyeRight');
-    const showDepthChk = document.getElementById('showDepth');
     const depthAlphaSlider = document.getElementById('depthAlpha');
     const depthEnabledChk = document.getElementById('depthEnabled');
-    const wlsEnabledChk = document.getElementById('wlsEnabled');
     const trackingEnabledChk = document.getElementById('trackingEnabled');
     const trackingModeSelect = document.getElementById('trackingMode');
     const trackingScaleX = document.getElementById('trackingScaleX');
@@ -640,7 +636,6 @@
             depth_enabled: depthEnabledChk.checked,
             face_tracking_enabled: trackingEnabledChk.checked,
             tracking_mode: trackingModeSelect.value,
-            wls_enabled: wlsEnabledChk.checked,
             tracking_scale_x: parseInt(trackingScaleX.value, 10),
             tracking_scale_y: parseInt(trackingScaleY.value, 10),
             tracking_offset_x: parseInt(trackingOffsetX.value, 10),
@@ -656,7 +651,7 @@
     }
 
     async function updateRenderParams() {
-        const alpha = showDepthChk.checked ? parseInt(depthAlphaSlider.value, 10) : 0;
+        const alpha = parseInt(depthAlphaSlider.value, 10) : 0;
         const showLeft = eyeLeft.checked;
         try {
             await fetch('/update', {
@@ -672,7 +667,6 @@
             const res = await fetch('/api/camera/params');
             const p = await res.json();
             depthEnabledChk.checked = p.depth_enabled;
-            wlsEnabledChk.checked = p.wls_enabled;
             trackingEnabledChk.checked = p.face_tracking_enabled;
             trackingModeSelect.value = p.tracking_mode || 'face';
             trackingScaleX.value = p.tracking_scale_x ?? 50;
@@ -847,7 +841,6 @@
 
     function initDepthTooltip() {
         videoFeed.addEventListener('mousemove', async (e) => {
-            if (!showDepthChk.checked) return depthTooltip.classList.add('hidden');
             const rect = videoFeed.getBoundingClientRect();
             const sx = videoFeed.naturalWidth / rect.width;
             const sy = videoFeed.naturalHeight / rect.height;
@@ -927,10 +920,8 @@
 
         eyeLeft.addEventListener('change', updateRenderParams);
         eyeRight.addEventListener('change', updateRenderParams);
-        showDepthChk.addEventListener('change', updateRenderParams);
         depthAlphaSlider.addEventListener('input', updateRenderParams);
         depthEnabledChk.addEventListener('change', sendCameraParams);
-        wlsEnabledChk.addEventListener('change', sendCameraParams);
         trackingEnabledChk.addEventListener('change', sendCameraParams);
         trackingModeSelect.addEventListener('change', sendCameraParams);
         trackingScaleX.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
