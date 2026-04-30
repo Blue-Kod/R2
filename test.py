@@ -1,58 +1,38 @@
 #!/usr/bin/env python3
-import sys
-import os
-import time
+import sys, os, time
 import numpy as np
-import noisereduce as nr
+import rnnoise
 
-# 1. Полное подавление ALSA-сообщений: перенаправляем stderr (fd 2) в /dev/null
+# Полностью заглушаем ALSA‑логи
 devnull = os.open(os.devnull, os.O_WRONLY)
-os.dup2(devnull, 2)          # всё, что пишется в stderr, теперь уходит вникуда
+os.dup2(devnull, 2)
 
 import speech_recognition as sr
 
-# Глобальные переменные шумоподавления
-noise_profile = None
-noise_sample_duration = 2    # секунд для образца шума
+# ----- Настройки шумоподавления -----
+PROP_DECREASE = 0.6          # 0.0..1.0 – сила подавления noisereduce (ниже → меньше агрессии)
+USE_RNNOISE = True          # True, если хотите использовать rnnoise вместо noisereduce
+# ------------------------------------
 
 
-def reduce_noise(audio_data: sr.AudioData, sample_rate: int = 48000) -> sr.AudioData:
-    """Спектральное шумоподавление с помощью noisereduce."""
-    if noise_profile is None:
-        return audio_data
-
-    audio_np = np.frombuffer(audio_data.get_raw_data(), dtype=np.int16).astype(np.float32) / 32768.0
-
-    reduced = nr.reduce_noise(
-        y=audio_np,
-        sr=sample_rate,
-        y_noise=noise_profile,
-        prop_decrease=0.9,       # подавляем 90% шума
-        n_fft=1024,
-        win_length=1024,
-        hop_length=512
-    )
-
-    reduced_int16 = (reduced * 32767).astype(np.int16)
-    return sr.AudioData(reduced_int16.tobytes(), sample_rate, 2)
-
-
-def capture_noise_profile(recognizer, mic):
-    """Записывает образец шума (без речи)."""
-    global noise_profile
-    print(f"Запись образца шума ({noise_sample_duration} сек, молчите)...")
-    with mic as source:
-        # record просто пишет поток, не дожидаясь речи
-        audio_sample = recognizer.record(source, duration=noise_sample_duration)
-    audio_np = np.frombuffer(audio_sample.get_raw_data(), dtype=np.int16).astype(np.float32) / 32768.0
-    noise_profile = audio_np
-    print("Профиль шума сохранён.")
+def reduce_noise(audio_data: sr.AudioData, sample_rate=48000):
+    denoiser = rnnoise.RNNoise()
+    audio_np = np.frombuffer(audio_data.get_raw_data(), dtype=np.int16)
+    # RNNoise ожидает float32 в диапазоне -1..1
+    audio_float = audio_np.astype(np.float32) / 32768.0
+    # Обработка покадрово (размер кадра 480 семплов для 48 кГц)
+    frame_size = 480
+    output = np.zeros_like(audio_float)
+    for i in range(0, len(audio_float) - frame_size + 1, frame_size):
+        frame = audio_float[i:i+frame_size]
+        output[i:i+frame_size] = denoiser.process_frame(frame)
+    output_int16 = (np.clip(output, -1, 1) * 32767).astype(np.int16)
+    return sr.AudioData(output_int16.tobytes(), sample_rate, 2)
 
 
 def callback(recognizer, audio):
-    """Фоновая обработка полученного аудио."""
     try:
-        cleaned = reduce_noise(audio, sample_rate=48000)
+        cleaned = reduce_noise(audio, 48000)
         text = recognizer.recognize_google(cleaned, language="ru-RU")
         print(f"User said: {text}")
     except sr.UnknownValueError:
@@ -60,33 +40,25 @@ def callback(recognizer, audio):
     except sr.RequestError as e:
         print(f"Ошибка сервиса распознавания: {e}")
 
-
 def main():
-    recognizer = sr.Recognizer()
-    # Настройки порога и пауз (можно подкрутить при необходимости)
-    recognizer.dynamic_energy_threshold = True
-    recognizer.energy_threshold = 4000
-    recognizer.pause_threshold = 1.2      # увеличенная пауза перед концом фразы
-    recognizer.phrase_threshold = 0.2     # минимальная длительность фразы
+    r = sr.Recognizer()
+    r.dynamic_energy_threshold = True
+    r.energy_threshold = 4000
+    r.pause_threshold = 1.2
+    r.phrase_threshold = 0.2
 
     mic = sr.Microphone(device_index=1, sample_rate=48000)
 
-    # Захват профиля шума
-    capture_noise_profile(recognizer, mic)
-
-    # Калибровка после захвата профиля
     with mic as source:
-        recognizer.adjust_for_ambient_noise(source, duration=1)
-        print(f"Порог энергии после калибровки: {recognizer.energy_threshold:.1f}")
+        r.adjust_for_ambient_noise(source, duration=1)
+        r.energy_threshold = max(r.energy_threshold * 0.3, 100)   # снижаем порог
+        print(f"Порог энергии: {r.energy_threshold:.1f}")
 
-    print("Слушаю... (нажмите Enter для выхода)")
-
-    stop_listening = recognizer.listen_in_background(mic, callback)
-
+    print("Слушаю... (Enter для выхода)")
+    stop = r.listen_in_background(mic, callback)
     input()
-    stop_listening(wait_for_stop=True)
-    print("Микрофон освобождён. Выход.")
-
+    stop(wait_for_stop=True)
+    print("Микрофон освобождён.")
 
 if __name__ == "__main__":
     main()
