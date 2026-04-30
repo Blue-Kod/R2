@@ -4,7 +4,7 @@
 import argparse
 import os
 import time
-from ai import command, start_voice_mode, AUDIO_INPUT
+from ai import command
 from r2_app.high_level import *
 
 APP_VERSION = "0.1"
