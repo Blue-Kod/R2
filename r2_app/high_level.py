@@ -583,6 +583,15 @@ def get_camera(left: bool):
     camera.update_params(show_left=old_show_left)
     return frame
 
+def get_raw_frame(left=True):
+    """
+    Возвращает чистый ректифицированный кадр (BGR) с левой или правой камеры.
+    Не использовать для веб‑стрима, он не содержит визуализации глубины.
+    """
+    camera = get_stereo_camera()
+    if camera is not None:
+        return camera.get_rectified_frame(left)
+    return None
 
 def angle(servo: int, angle_value: int):
     if _servo is None:

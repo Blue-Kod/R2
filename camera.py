@@ -17,6 +17,8 @@ class StereoCamera:
         self.depth_scale = 0.35
         self.low_size = (int(self.img_size[0] * self.depth_scale),
                          int(self.img_size[1] * self.depth_scale))
+        self.rectL = None
+        self.rectR = None
 
         self.Kl, self.Dl = np.array(cfg['Kl']), np.array(cfg['Dl'])
         self.Kr, self.Dr = np.array(cfg['Kr']), np.array(cfg['Dr'])
@@ -237,6 +239,9 @@ class StereoCamera:
 
             rectL = cv2.remap(imgL, self.mapL1, self.mapL2, cv2.INTER_LINEAR)
             rectR = cv2.remap(imgR, self.mapR1, self.mapR2, cv2.INTER_LINEAR)
+            with self.lock:
+                self.rectL = rectL.copy()
+                self.rectR = rectR.copy()
             main_view = rectL if self.show_left else rectR
 
             # ----- Трекинг цели с пропуском кадров и EMA -----
@@ -417,6 +422,19 @@ class StereoCamera:
             if wls_enabled is not None:
                 self.wls_enabled = wls_enabled
                 self._init_matchers()
+
+    def get_rectified_frame(self, left=True):
+        """
+        Возвращает чистый ректифицированный кадр (без depth overlay).
+        Потокобезопасно, используется, например, для отправки в AI.
+        """
+        with self.lock:
+            if left and self.rectL is not None:
+                return self.rectL.copy()
+            elif not left and self.rectR is not None:
+                return self.rectR.copy()
+            else:
+                return None
 
     def stop(self):
         self.running = False

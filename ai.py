@@ -1,7 +1,7 @@
 """
 AI Library for R2 Robot - High-level interface for AI interactions.
 Provides command() to send text and receive text/audio response.
-No microphone input.
+Sends video frames from the main camera to the AI during the session.
 """
 
 import asyncio
@@ -14,6 +14,7 @@ import requests
 import numpy as np
 import sounddevice as sd
 import websockets
+import cv2
 
 # --- Configuration ---
 OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
@@ -100,10 +101,10 @@ _AI_EXEC_GLOBALS = {
 
 _execution_logs = []
 
-def _log(message):
-    formatted_msg = f"[LOG]: {message}"
-    _execution_logs.append(formatted_msg)
-    print(formatted_msg)
+def _exec_log(message):
+    formatted = f"[LOG]: {message}"
+    _execution_logs.append(formatted)
+    print(formatted)
 
 
 # --- Character Prompt ---
@@ -111,6 +112,8 @@ CHARACTER_PROMPT = """
 Ты — робот R2. Стиль: краткий, немного официальный.
 Говори на русском. Всегда используй '+' перед ударными гласными. Мужской род.
 Говор+и внятно, не тор+опся. Произнос+и слов+а полн+остью, избег+ай сокращ+ений. Твоя речь должна быть разборчивой, как у диктора.
+
+Ты видишь мир через камеру робота. Тебе периодически приходят кадры с основной камеры (левая или правая, зависит от режима). Используй эту информацию для навигации, распознавания людей и объектов. Если видишь человека, можешь поздороваться или спросить, чем помочь.
 
 ИНСТРУМЕНТЫ (Python):
 - log(msg) -> запись в лог. Пользователь её НЕ видит.
@@ -172,7 +175,6 @@ async def execute_python(code):
 
 
 # --- Text‑only response handling (no microphone) ---
-
 async def receive_turn(websocket):
     """Receive one turn from the AI (text + optional audio)."""
     global _current_response
@@ -254,6 +256,32 @@ async def main_loop(websocket):
         return cleaned_response
 
 
+# --- Отправка видео кадров ---
+async def video_stream(websocket, stop_event: asyncio.Event):
+    """
+    Асинхронно отправляет JPEG-кадры с основной камеры каждую секунду.
+    Завершается при установке stop_event.
+    """
+    # Импортируем нашу функцию получения raw-кадра
+    from r2_app.high_level import get_raw_frame
+
+    while not stop_event.is_set():
+        try:
+            frame = get_raw_frame(left=True)   # BGR-кадр 1280x720
+            if frame is not None:
+                ret, jpeg = cv2.imencode('.jpg', frame,
+                                          [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                if ret:
+                    b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+                    await websocket.send(json.dumps({
+                        "image_b64": b64,
+                        "mime_type": "image/jpeg"
+                    }))
+        except Exception as e:
+            print(f"[VideoStream] Ошибка отправки кадра: {e}")
+        await asyncio.sleep(1.0)
+
+
 async def _command_async(text: str) -> str:
     """Async implementation of command function."""
     global _output_stream, _chat_history
@@ -290,6 +318,10 @@ async def _command_async(text: str) -> str:
                 "config": config
             }))
 
+            # Запускаем параллельную задачу для отправки видео
+            stop_video = asyncio.Event()
+            video_task = asyncio.create_task(video_stream(websocket, stop_video))
+
             # Send user command as text
             await websocket.send(json.dumps({"text": text}))
             print(f"INPUT -> AI: {text}")
@@ -299,6 +331,10 @@ async def _command_async(text: str) -> str:
             assistant_response = await main_loop(websocket)
             if assistant_response:
                 _chat_history.append(f"Ассистент: {assistant_response}")
+
+            # Останавливаем видеострим после окончания диалога
+            stop_video.set()
+            await video_task
 
             print("\n")
             return assistant_response if assistant_response else "Нет ответа."
@@ -311,11 +347,13 @@ def command(text: str) -> str:
     """
     Send a text command to the AI and get a text response.
     Audio output is played automatically if enabled.
+    Video from the main camera is sent every second during the session.
     """
     try:
         return asyncio.run(_command_async(text))
     except Exception as e:
         return f"Ошибка выполнения: {str(e)}"
+
 
 def cleanup():
     global _output_stream
@@ -327,6 +365,6 @@ def cleanup():
 
 if __name__ == "__main__":
     print("Testing AI library...")
-    response = command("Привет! Как дела?")
+    response = command("Привет! Что ты видишь перед собой?")
     print(f"Response: {response}")
     cleanup()
