@@ -138,9 +138,9 @@ async def execute_python(code):
 class AISession:
     def __init__(self):
         self.ws = None
-        self.send_queue = asyncio.Queue()        # сообщения для отправки (текст, видео, логи)
-        self.incoming_queue = asyncio.Queue()    # сообщения от модели
-        self.command_queue = asyncio.Queue()     # задания на диалог
+        self.send_queue = None        # будет создано в _session_loop
+        self.incoming_queue = None    # аналогично
+        self.command_queue = None
         self.loop = None
         self.thread = None
         self.running = False
@@ -179,6 +179,11 @@ class AISession:
     async def _session_loop(self):
         """Главный цикл: поддерживать WebSocket и переподключаться."""
         while self.running:
+            # Создаём очереди в текущем event loop, чтобы избежать ошибки "different loop"
+            self.send_queue = asyncio.Queue()
+            self.incoming_queue = asyncio.Queue()
+            self.command_queue = asyncio.Queue()
+
             try:
                 self.ws = await self._connect()
                 print("[AI] Соединение с прокси установлено")
@@ -204,12 +209,7 @@ class AISession:
             except Exception as e:
                 print(f"[AI] Неожиданная ошибка: {e}")
 
-            # Очищаем очереди, чтобы не было мусора после обрыва
-            while not self.incoming_queue.empty():
-                self.incoming_queue.get_nowait()
-            while not self.command_queue.empty():
-                self.command_queue.get_nowait()
-
+            # Очереди будут пересозданы на следующей итерации, старые сообщения потеряны, но это нормально
             if self.running:
                 wait = 2
                 print(f"[AI] Повторное подключение через {wait} сек...")
@@ -333,13 +333,17 @@ class AISession:
 
     def send_command(self, text: str):
         """Потокобезопасно добавить команду в очередь диалогов."""
-        if self.loop and self.running:
+        if self.loop and self.running and self.command_queue is not None:
             asyncio.run_coroutine_threadsafe(self.command_queue.put(text), self.loop)
+        else:
+            print("[AI] Сессия не готова, команда не отправлена")
 
     def send_message(self, message: dict):
         """Потокобезопасно добавить сообщение в очередь отправки (видео и т.п.)."""
-        if self.loop and self.running:
+        if self.loop and self.running and self.send_queue is not None:
             asyncio.run_coroutine_threadsafe(self.send_queue.put(message), self.loop)
+        else:
+            print("[AI] Сессия не готова, сообщение не отправлено")
 
     def stop(self):
         self.running = False
