@@ -1,9 +1,9 @@
 """
-AI Library for R2 Robot – Persistent, self-healing session with Gemini Live.
-- command(text)  -> отправить текст модели (асинхронно, ответ обрабатывается полностью)
-- send_frame()   -> отправить кадр с камеры
+AI Library for R2 Robot – Persistent session, synchronous command().
+- command(text)         -> блокирует поток, возвращает ответ строкой.
+- send_frame()          -> неблокирующая отправка кадра с камеры.
 - Сессия автоматически переподключается при обрыве.
-- Модель может выполнять Python-код через #EXECUTE блоки.
+- Модель выполняет Python-код через #EXECUTE блоки.
 """
 
 import asyncio
@@ -13,6 +13,7 @@ import re
 import traceback
 import threading
 import time
+import uuid
 import requests
 import numpy as np
 import sounddevice as sd
@@ -83,10 +84,18 @@ _AI_EXEC_GLOBALS = {
 
 _execution_logs = []
 
-def _exec_log(message):
-    formatted = f"[LOG]: {message}"
-    _execution_logs.append(formatted)
-    print(formatted)
+async def execute_python(code):
+    global _execution_logs
+    _execution_logs = []
+    print(f"\n--- [AI EXECUTION START] ---\n{code}\n-------------------------")
+    try:
+        exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
+        return "\n".join(_execution_logs) if _execution_logs else "Код выполнен."
+    except Exception:
+        err = traceback.format_exc()
+        print(f"[AI ERROR]:\n{err}")
+        return f"ОШИБКА В КОДЕ:\n{err}"
+
 
 # --- Character Prompt ---
 CHARACTER_PROMPT = """
@@ -118,33 +127,19 @@ CONFIG = {
     "system_instruction": CHARACTER_PROMPT
 }
 
-BANNED_PHRASES = ["i'm"]
 
-async def execute_python(code):
-    """Выполнить Python-код от имени робота. Возвращает строку-отчёт."""
-    global _execution_logs
-    _execution_logs = []
-    print(f"\n--- [AI EXECUTION START] ---\n{code}\n-------------------------")
-    try:
-        exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
-        return "\n".join(_execution_logs) if _execution_logs else "Код выполнен."
-    except Exception:
-        err = traceback.format_exc()
-        print(f"[AI ERROR]:\n{err}")
-        return f"ОШИБКА В КОДЕ:\n{err}"
-
-
-# --- AISession: постоянное соединение, диалоги и видео ---
 class AISession:
     def __init__(self):
         self.ws = None
-        self.send_queue = None        # будет создано в _session_loop
-        self.incoming_queue = None    # аналогично
-        self.command_queue = None
+        self.send_queue = None
+        self.incoming_queue = None
+        self.command_queue = None          # элементы: (request_id, text)
+        self.pending_commands = {}         # request_id -> (threading.Event, container)
         self.loop = None
         self.thread = None
         self.running = False
         self._output_stream = None
+        self._ready = threading.Event()
 
     async def _ensure_output_stream(self):
         if self._output_stream is None and _audio_enabled:
@@ -158,7 +153,6 @@ class AISession:
             self._output_stream.start()
 
     async def _connect(self):
-        """Подключиться к прокси и отправить конфиг."""
         for attempt in range(1, 6):
             try:
                 resp = requests.get(BASE_URL, timeout=10)
@@ -176,19 +170,26 @@ class AISession:
         }))
         return ws
 
+    def _cancel_all_pending(self, reason="Соединение потеряно"):
+        """Разблокировать все ожидающие вызовы command()."""
+        for rid, (evt, container) in self.pending_commands.items():
+            if not evt.is_set():
+                container["result"] = reason
+                evt.set()
+        self.pending_commands.clear()
+
     async def _session_loop(self):
-        """Главный цикл: поддерживать WebSocket и переподключаться."""
         while self.running:
-            # Создаём очереди в текущем event loop, чтобы избежать ошибки "different loop"
+            # Пересоздаём очереди в свежем event loop
             self.send_queue = asyncio.Queue()
             self.incoming_queue = asyncio.Queue()
             self.command_queue = asyncio.Queue()
+            self._ready.set()
 
             try:
                 self.ws = await self._connect()
                 print("[AI] Соединение с прокси установлено")
 
-                # Запускаем воркеры
                 receiver_task = asyncio.create_task(self._receiver())
                 sender_task = asyncio.create_task(self._sender())
                 dialog_manager = asyncio.create_task(self._dialog_manager())
@@ -200,23 +201,26 @@ class AISession:
                 for task in pending:
                     task.cancel()
                 for task in done:
-                    exc = task.exception()
-                    if exc:
-                        print(f"[AI] Ошибка в задаче: {exc}")
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass  # исключения уже выведены в задачах
 
             except (websockets.ConnectionClosed, OSError, asyncio.TimeoutError) as e:
                 print(f"[AI] Соединение потеряно: {e}")
             except Exception as e:
                 print(f"[AI] Неожиданная ошибка: {e}")
 
-            # Очереди будут пересозданы на следующей итерации, старые сообщения потеряны, но это нормально
+            # Отпускаем все ожидающие команды, так как соединение разорвано
+            self._cancel_all_pending()
+            self._ready.clear()
+
             if self.running:
                 wait = 2
                 print(f"[AI] Повторное подключение через {wait} сек...")
                 await asyncio.sleep(wait)
 
     async def _receiver(self):
-        """Читает сообщения от WebSocket и кладёт во входящую очередь."""
         while True:
             try:
                 raw = await self.ws.recv()
@@ -227,77 +231,77 @@ class AISession:
                 break
             except Exception as e:
                 print(f"[AI] Ошибка приёма: {e}")
-                continue
+                break  # любая ошибка приёма – разрыв
 
     async def _sender(self):
-        """Читает очередь отправки и шлёт в WebSocket."""
         while True:
             message = await self.send_queue.get()
             try:
                 await self.ws.send(json.dumps(message))
             except Exception as e:
                 print(f"[AI] Ошибка отправки: {e}")
-                # Возвращаем сообщение обратно, чтобы отправить после переподключения
                 await self.send_queue.put(message)
                 break
 
     async def _dialog_manager(self):
-        """Последовательно обрабатывает запросы из command_queue."""
         while True:
-            text = await self.command_queue.get()
-            # Добавляем в историю
+            request_id, text = await self.command_queue.get()
             _chat_history.append(f"Пользователь: {text}")
             print(f"INPUT -> AI: {text}")
+            await self._handle_dialog(request_id, text)
 
-            # Запускаем диалог
-            await self._handle_dialog(text)
-
-    async def _handle_dialog(self, initial_text: str):
-        """Обрабатывает один диалог: отправляет текст, получает ответы, выполняет код, до финала."""
-        # Отправляем начальный текст
+    async def _handle_dialog(self, request_id: str, initial_text: str):
         await self.send_queue.put({"text": initial_text})
 
-        full_text = ""
+        final_answer = ""
         while True:
-            # Собираем ответные сообщения до turn_complete
             turn_text = ""
-            while True:
-                data = await self.incoming_queue.get()
+            try:
+                # Ожидаем ответ с таймаутом 120 секунд
+                while True:
+                    data = await asyncio.wait_for(self.incoming_queue.get(), timeout=120)
 
-                # Обрабатываем текстовый фрагмент
-                if "text" in data:
-                    chunk = data["text"]
-                    turn_text += chunk
-                    # Выводим в консоль без маркеров ударений
-                    display_chunk = re.sub(r"\+", "", chunk)
-                    print(f"AI: {display_chunk}", end="", flush=True)
+                    if "text" in data:
+                        chunk = data["text"]
+                        turn_text += chunk
+                        display_chunk = re.sub(r"\+", "", chunk)
+                        print(f"AI: {display_chunk}", end="", flush=True)
 
-                # Проигрываем аудио, если есть
-                if "audio" in data and _audio_enabled:
-                    await self._play_audio(data["audio"])
+                    if "audio" in data and _audio_enabled:
+                        await self._play_audio(data["audio"])
 
-                # Если конец реплики, заканчиваем сбор
-                if data.get("end_of_turn"):
-                    print("")  # перевод строки
-                    break
+                    if data.get("end_of_turn"):
+                        print("")
+                        break
 
-            # Обработка #EXECUTE
+            except asyncio.TimeoutError:
+                print("[AI] Таймаут ожидания ответа")
+                final_answer = "Модель не ответила вовремя"
+                break
+            except Exception:
+                final_answer = "Ошибка при получении ответа"
+                break
+
+            # Проверяем #EXECUTE
             code_match = re.search(r"#EXECUTE\n(.*?)\n#END", turn_text, re.DOTALL)
             if code_match:
-                # Выполняем код и отправляем результат
                 report = await execute_python(code_match.group(1).strip())
                 _chat_history.append(f"[SYSTEM_LOGS]: {report}")
                 await self.send_queue.put({"text": f"[SYSTEM_LOGS]:\n{report}"})
-                # Продолжаем слушать ответ модели
                 continue
             else:
-                # Финальный ответ (без кода). Завершаем диалог.
                 cleaned = re.sub(r"\+", "", turn_text.strip())
+                final_answer = cleaned
                 _chat_history.append(f"Ассистент: {cleaned}")
-                return
+                break
+
+        # Уведомляем ожидающий поток
+        if request_id in self.pending_commands:
+            evt, container = self.pending_commands.pop(request_id)
+            container["result"] = final_answer
+            evt.set()
 
     async def _play_audio(self, audio_b64: str):
-        """Декодирует и проигрывает аудио из base64."""
         try:
             missing_padding = len(audio_b64) % 4
             if missing_padding:
@@ -309,17 +313,16 @@ class AISession:
             if audio_array.size > 0:
                 await self._ensure_output_stream()
                 if self._output_stream:
-                    # Ресэмплинг 24k -> 48k (повтор сэмплов)
                     mono_48k = np.repeat(audio_array, 2)
                     self._output_stream.write(mono_48k)
         except Exception as e:
             print(f"\n[Ошибка аудио]: {e}")
 
     def start(self):
-        """Запустить фоновый поток с event loop."""
         if self.running:
             return
         self.running = True
+        self._ready.clear()
 
         def run():
             loop = asyncio.new_event_loop()
@@ -327,35 +330,49 @@ class AISession:
             self.loop = loop
             loop.run_until_complete(self._session_loop())
             self.running = False
+            # Когда поток завершился (штатно или нет), отпускаем все ожидающие
+            self._cancel_all_pending()
 
         self.thread = threading.Thread(target=run, daemon=True)
         self.thread.start()
 
-    def send_command(self, text: str):
-        """Потокобезопасно добавить команду в очередь диалогов."""
-        if self.loop and self.running and self.command_queue is not None:
-            asyncio.run_coroutine_threadsafe(self.command_queue.put(text), self.loop)
-        else:
-            print("[AI] Сессия не готова, команда не отправлена")
+    def send_command(self, text: str) -> str:
+        """Синхронная отправка команды. Возвращает ответ модели."""
+        if not self._ready.wait(timeout=10):
+            return "AI сессия не готова"
+
+        event = threading.Event()
+        container = {"result": None}
+        request_id = str(uuid.uuid4())
+        asyncio.run_coroutine_threadsafe(
+            self.command_queue.put((request_id, text)),
+            self.loop
+        )
+        # Сохраняем до того, как диалог начнётся
+        self.pending_commands[request_id] = (event, container)
+        event.wait(timeout=120)  # увеличенный таймаут
+        if not event.is_set():
+            # На случай зависания – возвращаем ошибку
+            self.pending_commands.pop(request_id, None)
+            return "Таймаут ожидания ответа"
+        return container["result"] if container["result"] else "Нет ответа"
 
     def send_message(self, message: dict):
-        """Потокобезопасно добавить сообщение в очередь отправки (видео и т.п.)."""
         if self.loop and self.running and self.send_queue is not None:
             asyncio.run_coroutine_threadsafe(self.send_queue.put(message), self.loop)
-        else:
-            print("[AI] Сессия не готова, сообщение не отправлено")
 
     def stop(self):
         self.running = False
         if self.loop:
             asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
+        self._cancel_all_pending()
         if self._output_stream:
             self._output_stream.stop()
             self._output_stream.close()
             self._output_stream = None
 
 
-# --- Глобальная сессия и публичные функции ---
+# --- Глобальная сессия ---
 _session = None
 _lock = threading.Lock()
 
@@ -367,10 +384,10 @@ def _get_session():
             _session.start()
         return _session
 
-def command(text: str) -> None:
-    """Отправить текст модели. Диалог обрабатывается асинхронно."""
+def command(text: str) -> str:
+    """Отправить текст модели и получить ответ (блокирующий)."""
     session = _get_session()
-    session.send_command(text)
+    return session.send_command(text)
 
 def send_frame() -> None:
     """Отправить текущий кадр с основной камеры."""
