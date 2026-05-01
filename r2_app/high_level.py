@@ -157,35 +157,12 @@ class MockStereoCamera:
                     setattr(self, key, value)
 
 
-class MockServoController:
-    def __init__(self):
-        self.channel_configs = {
-            0: (0, 180, 120, 520),
-            1: (0, 270, 120, 520),
-            2: (0, 270, 120, 520),
-            3: (0, 180, 120, 520),
-            4: (0, 270, 120, 520),
-            5: (0, 270, 120, 520),
-        }
-        self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 135, 5: 135}
-        self._lock = threading.Lock()
-
-    def set_servo(self, channel, angle, smooth=True, step_delay=0.01, step_angle=2):
-        _ = (smooth, step_delay, step_angle)
-        if channel not in self.channel_configs:
-            return False
-        with self._lock:
-            self.current_angles[channel] = angle
-        return True
-
-
 def _init_hardware():
     """Initialize camera and servo libs directly."""
     global _camera, _servo
 
     if platform.system() == "Windows":
         _camera = MockStereoCamera()
-        _servo = MockServoController()
         log("Simulation mode enabled: mock camera and mock servo are active")
     else:
         # Try real hardware
@@ -210,7 +187,6 @@ def _init_hardware():
                     _servo.set_servo(channel, angle, smooth=False)
         except Exception as exc:
             log(f"Servo init error: {exc}")
-            _servo = MockServoController()
             log("Falling back to mock servo")
 
 
