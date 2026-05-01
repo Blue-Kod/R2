@@ -394,6 +394,8 @@
                 <div class="servo-row"><label>(03) Наклон:</label><input type="range" id="servo3" min="0" max="180" value="90"><span id="servo3_val">90°</span></div>
                 <div class="servo-row"><label>(04) Пов. пр.:</label><input type="range" id="servo4" min="0" max="270" value="135"><span id="servo4_val">135°</span></div>
                 <div class="servo-row"><label>(05) Пов. лев.:</label><input type="range" id="servo5" min="0" max="270" value="135"><span id="servo5_val">135°</span></div>
+                <div class="servo-row"><label>(06) Пр. локоть:</label><input type="range" id="servo6" min="0" max="180" value="90"><span id="servo6_val">90°</span></div>
+                <div class="servo-row"><label>(07) Лев. локоть:</label><input type="range" id="servo7" min="0" max="180" value="90"><span id="servo7_val">90°</span></div>
             </div>
         </aside>
 
@@ -685,6 +687,20 @@
         } catch(e) {}
     }
 
+    async function loadServoPositions() {
+        try {
+            const res = await fetch('/api/servo/positions');
+            const positions = await res.json();
+            for (let ch = 0; ch <= 7; ch++) {
+                const slider = document.getElementById(`servo${ch}`);
+                if (slider && positions[ch] !== undefined) {
+                    slider.value = positions[ch];
+                    updateServoValue(ch, positions[ch]);
+                }
+            }
+        } catch(e) { console.warn("load servo positions", e); }
+    }
+
     async function setServoTracking() {
         try {
             await fetch('/api/servo/tracking', {
@@ -909,7 +925,7 @@
             logsPane.classList.add('hidden');
         });
 
-        for (let ch = 0; ch <= 5; ch++) {
+        for (let ch = 0; ch <= 7; ch++) {
             const slider = document.getElementById(`servo${ch}`);
             if (slider) {
                 slider.addEventListener('input', () => updateServoValue(ch, slider.value));
@@ -996,6 +1012,7 @@
         attachEvents();
         await loadCameraParams();
         await loadServoTrackingState();
+        await loadServoPositions();
         updateTrackingDisplay();
         await updateRenderParams();
         fetchSystemStats();

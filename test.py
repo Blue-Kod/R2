@@ -135,4 +135,4 @@ def main():
     print("Микрофон освобождён.")
 
 if __name__ == "__main__":
-    main()
+    main()g

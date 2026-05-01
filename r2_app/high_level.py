@@ -166,8 +166,10 @@ class MockServoController:
             3: (0, 180, 120, 520),
             4: (0, 270, 120, 520),
             5: (0, 270, 120, 520),
+            6: (0, 180, 120, 520),
+            7: (0, 180, 120, 520),
         }
-        self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 135, 5: 135}
+        self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 135, 5: 135, 6: 90, 7: 90}
         self._lock = threading.Lock()
 
     def set_servo(self, channel, angle, smooth=True, step_delay=0.01, step_angle=2):
