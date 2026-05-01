@@ -1,9 +1,6 @@
 """
-AI Library for R2 Robot – Persistent session, synchronous command().
-- command(text)         -> блокирует поток, возвращает ответ строкой.
-- send_frame()          -> неблокирующая отправка кадра с камеры.
-- Сессия переподключается при обрыве, все ожидающие запросы сохраняются.
-- Модель выполняет Python-код через #EXECUTE блоки.
+AI Library for R2 Robot – persistent Gemini Live session.
+Supports continuous video feed and text commands.
 """
 
 import asyncio
@@ -11,16 +8,18 @@ import json
 import base64
 import re
 import traceback
-import threading
 import time
-import uuid
-import requests
+import threading
+from typing import Optional
+
+import cv2
 import numpy as np
 import sounddevice as sd
 import websockets
-import cv2
 
-# --- Configuration ---
+# -------------------------------------------------------------------
+# Configuration
+# -------------------------------------------------------------------
 OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
 
 def get_real_key(obscured):
@@ -34,363 +33,330 @@ API_KEY = get_real_key(OBSCURED_API_KEY)
 MODEL_ID = "gemini-3.1-flash-live-preview"
 MODEL_RATE = 24000
 HARDWARE_RATE = 48000
-BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
 WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
 VOICE = "Enceladus"
 MAX_HISTORY_CHARS = 8000
 
+# -------------------------------------------------------------------
 # Global state
+# -------------------------------------------------------------------
+_loop: Optional[asyncio.AbstractEventLoop] = None
+_loop_thread: Optional[threading.Thread] = None
+_websocket = None                     # текущий WebSocket
+_stop_event = asyncio.Event()         # сигнал завершения
+_audio_output_stream = None
 _audio_enabled = True
 _chat_history = []
-_output_stream = None
 
-# --- High-level functions available to AI ---
+# Для ожидания ответов на текстовые команды
+_response_events = {}                 # id -> threading.Event
+_response_texts = {}                  # id -> str
+_response_counter = 0
+_lock = threading.Lock()
+
+# Очередь сообщений, которые нужно отправить в WebSocket (из любого потока)
+_send_queue: Optional[asyncio.Queue] = None
+
+# -------------------------------------------------------------------
+# High‑level функции для AI (без изменений)
+# -------------------------------------------------------------------
 def log(message: str) -> None:
     _chat_history.append(f"[LOG]: {message}")
     print(f"[LOG]: {message}")
 
 def set_emote(emotion: str) -> bool:
     from r2_app.high_level import emote
-    print(f"[AI-EXEC] Setting emote: {emotion}")
     return emote(emotion)
 
 def set_eyes(x: float, y: float) -> None:
     from r2_app.high_level import set_eyes_position
-    print(f"[AI-EXEC] Setting eyes: x={x}, y={y}")
     set_eyes_position(x, y)
 
 def get_cpu_temp() -> str:
     from r2_app.high_level import cpu_temp
-    temp = cpu_temp()
-    log(temp)
-    return temp
+    return cpu_temp()
 
 def get_system_stats() -> dict:
     from r2_app.high_level import health_snapshot
-    stats = health_snapshot()
-    log(stats)
-    return stats
+    return health_snapshot()
 
 _AI_EXEC_GLOBALS = {
-    "log": log,
-    "print": log,
-    "set_emote": set_emote,
-    "set_eyes": set_eyes,
-    "get_cpu_temp": get_cpu_temp,
+    "log": log, "print": log, "set_emote": set_emote,
+    "set_eyes": set_eyes, "get_cpu_temp": get_cpu_temp,
     "get_system_stats": get_system_stats,
 }
 
-# --- Character Prompt ---
+_execution_logs = []
+
+async def execute_python(code: str) -> str:
+    global _execution_logs
+    _execution_logs = []
+    print(f"\n--- [AI EXEC] ---\n{code}\n-----------------")
+    try:
+        exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
+        return "\n".join(_execution_logs) if _execution_logs else "Код выполнен."
+    except Exception:
+        return f"ОШИБКА В КОДЕ:\n{traceback.format_exc()}"
+
+# -------------------------------------------------------------------
+# Системный промпт
+# -------------------------------------------------------------------
 CHARACTER_PROMPT = """
 Ты — робот R2. Стиль: краткий, немного официальный.
 Говори на русском. Всегда используй '+' перед ударными гласными. Мужской род.
-Говор+и внятно, не тор+опся. Произнос+и слов+а полн+остью, избег+ай сокращ+ений. Твоя речь должна быть разборчивой, как у диктора.
+Говор+и внятно, не тор+опся. Произнос+и слов+а полн+остью.
 
-Ты видишь мир через камеру робота. Кадры приходят регулярно, используй их, чтобы описывать окружение, людей, предметы. Если видишь человека, поздоровайся или спроси, чем помочь.
+Ты видишь мир через камеру. Перед каждым ответом тебе показывают кадры.
+Используй это, чтобы описывать окружение, людей, предметы.
 
 ИНСТРУМЕНТЫ (Python):
-- log(msg) -> запись в лог. Пользователь её НЕ видит.
-- set_emote(emotion) -> установить эмоцию (happy, sad, neutral, и т.д.).
-- set_eyes(x, y) -> положение глаз (от -1.0 до 1.0).
-- get_cpu_temp() -> температура CPU.
-- get_system_stats() -> статистика системы.
+- log(msg)
+- set_emote(emotion)
+- set_eyes(x, y)
+- get_cpu_temp()
+- get_system_stats()
 
-АЛГОРИТМ РЕКУРСИИ:
-1. Если нужно действие/расчет: скажи "Выполн+яю..." и напиши #EXECUTE ... #END.
-2. В блоке #EXECUTE пиши ТОЛЬКО код.
-3. Если ты получила [SYSTEM_LOGS], проанализируй их и дай ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.
-4. ТВОЙ ОТВЕТ БЕЗ БЛОКА #EXECUTE ЯВЛЯЕТСЯ СИГНАЛОМ ЗАВЕРШЕНИЯ ЗАДАЧИ.
-5. Пиши код только если тебе реально нужно получить данные или выявить команду.
-6. Не пиши ничего после блока кода. Закончился блок кода - ВСЁ. КОНЕЦ. Только после следующего сообщения можешь что-то писать.
+АЛГОРИТМ:
+1. Если нужен код: напиши #EXECUTE ... #END и замолчи.
+2. После получения [SYSTEM_LOGS] ответь обычным текстом.
+3. Ответ без #EXECUTE – конец задачи.
 """
 
-CONFIG = {
+CONFIG_BASE = {
     "response_modalities": ["AUDIO"],
     "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE}}},
+    "safety_settings": [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ],
     "system_instruction": CHARACTER_PROMPT
 }
 
-async def execute_python(code):
-    exec_logs = []
-    print(f"\n--- [AI EXECUTION START] ---\n{code}\n-------------------------")
+def build_config():
+    history_text = "\n".join(_chat_history)[-MAX_HISTORY_CHARS:] if _chat_history else ""
+    prompt = CHARACTER_PROMPT + ("\n\nКОНТЕКСТ:\n" + history_text if history_text else "")
+    cfg = dict(CONFIG_BASE)
+    cfg["system_instruction"] = prompt
+    return cfg
+
+# -------------------------------------------------------------------
+# Вспомогательные функции обработки ответов
+# -------------------------------------------------------------------
+def _play_audio(audio_b64: str):
+    """Декодирует и воспроизводит аудио (вызывается из event loop)."""
+    if not _audio_enabled or _audio_output_stream is None:
+        return
     try:
-        exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
-        return "\n".join(exec_logs) if exec_logs else "Код выполнен."
-    except Exception:
-        err = traceback.format_exc()
-        print(f"[AI ERROR]:\n{err}")
-        return f"ОШИБКА В КОДЕ:\n{err}"
+        missing = len(audio_b64) % 4
+        if missing:
+            audio_b64 += '=' * (4 - missing)
+        raw = base64.b64decode(audio_b64)
+        if len(raw) % 2:
+            raw = raw[:-1]
+        arr = np.frombuffer(raw, dtype=np.int16)
+        if arr.size > 0:
+            upsampled = np.repeat(arr, 2)
+            _audio_output_stream.write(upsampled)
+    except Exception as e:
+        print(f"[Audio] Ошибка воспроизведения: {e}")
 
+# -------------------------------------------------------------------
+# Асинхронные задачи внутри event loop
+# -------------------------------------------------------------------
+async def _process_incoming(websocket):
+    """Читает сообщения от прокси, раздаёт текст/аудио."""
+    global _response_texts, _response_events, _chat_history, _current_response
 
-class AISession:
-    def __init__(self):
-        self.ws = None
-        self.send_queue = None
-        self.incoming_queue = None
-        self.command_queue = None
-        self.pending_commands = {}   # request_id -> (event, container, text)
-        self.loop = None
-        self.thread = None
-        self.running = False
-        self._output_stream = None
-        self._ready = threading.Event()
+    async for raw in websocket:
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
 
-    async def _ensure_output_stream(self):
-        if self._output_stream is None and _audio_enabled:
-            self._output_stream = sd.OutputStream(
-                samplerate=HARDWARE_RATE,
-                channels=1,
-                dtype='int16',
-                device=1,
-                latency='low'
-            )
-            self._output_stream.start()
+        text_chunk = msg.get("text")
+        audio_b64 = msg.get("audio")
+        end_of_turn = msg.get("end_of_turn", False)
 
-    async def _connect(self):
-        for attempt in range(1, 6):
+        # Сборка полного текста ответа
+        if text_chunk:
+            clean = re.sub(r'\+(?=[а-яёa-z])', '', text_chunk, flags=re.IGNORECASE)
+            # Ищем активный запрос (последний добавленный)
+            with _lock:
+                keys = list(_response_texts.keys())
+                if keys:
+                    last_id = keys[-1]
+                    _response_texts[last_id] = _response_texts.get(last_id, "") + clean
+
+        if audio_b64:
+            await asyncio.to_thread(_play_audio, audio_b64)
+
+        if end_of_turn:
+            # Завершился ответ – разблокируем ожидающий поток (для последнего запроса)
+            with _lock:
+                keys = list(_response_events.keys())
+                if keys:
+                    last_id = keys[-1]
+                    ev = _response_events.pop(last_id, None)
+                    if ev:
+                        ev.set()
+
+async def _process_outgoing(websocket, queue: asyncio.Queue):
+    """Отправляет всё из очереди в WebSocket."""
+    while True:
+        msg = await queue.get()
+        if msg is None:          # сигнал завершения
+            break
+        await websocket.send(json.dumps(msg))
+
+async def _session_main():
+    """Главная корутина: соединяется, держит сессию, слушает очередь."""
+    global _websocket, _send_queue, _stop_event
+
+    # Инициализация аудиовыхода (если включён)
+    global _audio_output_stream
+    if _audio_output_stream is None and _audio_enabled:
+        _audio_output_stream = sd.OutputStream(
+            samplerate=HARDWARE_RATE, channels=1, dtype='int16',
+            device=1, latency='low')
+        _audio_output_stream.start()
+
+    _send_queue = asyncio.Queue()
+
+    try:
+        async with websockets.connect(WS_URL, open_timeout=30) as ws:
+            _websocket = ws
+            # Отправляем конфиг
+            await ws.send(json.dumps({
+                "api_key": API_KEY,
+                "model_id": MODEL_ID,
+                "config": build_config()
+            }))
+            print("[AI] Сессия Gemini Live запущена.")
+
+            # Запускаем обработчики
+            incoming = asyncio.create_task(_process_incoming(ws))
+            outgoing = asyncio.create_task(_process_outgoing(ws, _send_queue))
+
+            # Ожидаем сигнала остановки
+            await _stop_event.wait()
+
+            # Корректное завершение
+            await _send_queue.put(None)   # сигнал outgoing‑таске
+            incoming.cancel()
+            outgoing.cancel()
             try:
-                resp = requests.get(BASE_URL, timeout=10)
-                if resp.status_code < 500:
-                    break
-            except requests.RequestException:
+                await asyncio.gather(incoming, outgoing, return_exceptions=True)
+            except Exception:
                 pass
-            if attempt < 5:
-                await asyncio.sleep(2)
-        ws = await websockets.connect(WS_URL, open_timeout=30)
-        await ws.send(json.dumps({
-            "api_key": API_KEY,
-            "model_id": MODEL_ID,
-            "config": CONFIG
-        }))
-        return ws
 
-    async def _session_loop(self):
-        while self.running:
-            self.send_queue = asyncio.Queue()
-            self.incoming_queue = asyncio.Queue()
-            self.command_queue = asyncio.Queue()
-            # Если есть незавершённые команды с прошлого раза, ставим их в очередь сейчас
-            for rid, (evt, cont, text) in list(self.pending_commands.items()):
-                await self.command_queue.put((rid, text))
-            self._ready.set()
+    except Exception as e:
+        print(f"[AI] Критическая ошибка сессии: {e}")
+    finally:
+        _websocket = None
+        print("[AI] Сессия завершена.")
 
-            try:
-                self.ws = await self._connect()
-                print("[AI] Соединение с прокси установлено")
+def _run_event_loop():
+    """Точка входа для фонового потока."""
+    global _loop, _stop_event
+    _loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_loop)
+    _stop_event = asyncio.Event()
+    _loop.run_until_complete(_session_main())
 
-                tasks = [
-                    asyncio.create_task(self._receiver()),
-                    asyncio.create_task(self._sender()),
-                    asyncio.create_task(self._dialog_manager())
-                ]
-                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for t in pending:
-                    t.cancel()
-                for t in done:
-                    try:
-                        await t
-                    except (asyncio.CancelledError, Exception) as e:
-                        print(f"[AI] Задача завершилась: {e}")
+# -------------------------------------------------------------------
+# Публичный интерфейс (вызывается из main.py)
+# -------------------------------------------------------------------
+def start_ai():
+    """Запускает фоновую сессию. Можно вызывать один раз при старте."""
+    global _loop_thread
+    if _loop_thread and _loop_thread.is_alive():
+        return
+    print("[AI] Запуск фоновой сессии...")
+    _loop_thread = threading.Thread(target=_run_event_loop, daemon=True)
+    _loop_thread.start()
+    # Даём немного времени на установку соединения
+    time.sleep(1.0)
 
-            except (websockets.ConnectionClosed, OSError, asyncio.TimeoutError) as e:
-                print(f"[AI] Соединение потеряно: {e}")
-            except Exception as e:
-                print(f"[AI] Неожиданная ошибка: {e}")
-            finally:
-                self._ready.clear()
-
-            if self.running:
-                wait = 2
-                print(f"[AI] Повторное подключение через {wait} сек...")
-                await asyncio.sleep(wait)
-
-    async def _receiver(self):
-        while True:
-            try:
-                raw = await self.ws.recv()
-                data = json.loads(raw)
-                await self.incoming_queue.put(data)
-            except websockets.ConnectionClosed:
-                print("[AI] WebSocket закрыт")
-                break
-            except Exception as e:
-                print(f"[AI] Ошибка приёма: {e}")
-                break
-
-    async def _sender(self):
-        while True:
-            message = await self.send_queue.get()
-            try:
-                await self.ws.send(json.dumps(message))
-            except Exception as e:
-                print(f"[AI] Ошибка отправки: {e}")
-                await self.send_queue.put(message)
-                break
-
-    async def _dialog_manager(self):
-        while True:
-            rid, text = await self.command_queue.get()
-            _chat_history.append(f"Пользователь: {text}")
-            print(f"INPUT -> AI: {text}")
-            await self._handle_dialog(rid, text)
-
-    async def _handle_dialog(self, request_id: str, initial_text: str):
-        answer = "Ошибка диалога"
-        try:
-            await self.send_queue.put({"text": initial_text})
-            final = ""
-            while True:
-                turn = ""
-                try:
-                    while True:
-                        data = await asyncio.wait_for(self.incoming_queue.get(), timeout=120)
-                        if "text" in data:
-                            chunk = data["text"]
-                            turn += chunk
-                            print(f"AI: {re.sub(r'\+', '', chunk)}", end="", flush=True)
-                        if "audio" in data and _audio_enabled:
-                            await self._play_audio(data["audio"])
-                        if data.get("end_of_turn"):
-                            print("")
-                            break
-                except asyncio.TimeoutError:
-                    final = "Модель не ответила вовремя"
-                    break
-                except (asyncio.CancelledError, Exception) as e:
-                    final = f"Соединение потеряно: {e}"
-                    break
-
-                code = re.search(r"#EXECUTE\n(.*?)\n#END", turn, re.DOTALL)
-                if code:
-                    report = await execute_python(code.group(1).strip())
-                    _chat_history.append(f"[SYSTEM_LOGS]: {report}")
-                    await self.send_queue.put({"text": f"[SYSTEM_LOGS]:\n{report}"})
-                    continue
-                else:
-                    final = re.sub(r"\+", "", turn.strip())
-                    _chat_history.append(f"Ассистент: {final}")
-                    break
-            answer = final
-        except asyncio.CancelledError:
-            answer = "Диалог прерван"
-        except Exception as e:
-            answer = f"Ошибка: {e}"
-        finally:
-            # Уведомляем ожидающий поток
-            if request_id in self.pending_commands:
-                evt, cont, _ = self.pending_commands.pop(request_id)
-                cont["result"] = answer
-                evt.set()
-
-    async def _play_audio(self, audio_b64: str):
-        try:
-            missing_padding = len(audio_b64) % 4
-            if missing_padding:
-                audio_b64 += '=' * (4 - missing_padding)
-            raw_bytes = base64.b64decode(audio_b64)
-            if len(raw_bytes) % 2 != 0:
-                raw_bytes = raw_bytes[:-1]
-            audio_array = np.frombuffer(raw_bytes, dtype=np.int16)
-            if audio_array.size > 0:
-                await self._ensure_output_stream()
-                if self._output_stream:
-                    self._output_stream.write(np.repeat(audio_array, 2))
-        except Exception as e:
-            print(f"\n[Ошибка аудио]: {e}")
-
-    def start(self):
-        if self.running:
+def send_frame():
+    """
+    Отправляет текущий кадр с основной камеры.
+    Безопасно вызывать из любого потока, в том числе каждую секунду.
+    """
+    if _loop is None or _send_queue is None:
+        return
+    try:
+        from r2_app.high_level import get_raw_frame
+        frame = get_raw_frame(left=True)
+        if frame is None:
             return
-        self.running = True
-        self._ready.clear()
-
-        def run():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self.loop = loop
-            loop.run_until_complete(self._session_loop())
-            self.running = False
-            # При полном завершении отпускаем все ожидающие команды
-            for evt, cont, _ in self.pending_commands.values():
-                if not evt.is_set():
-                    cont["result"] = "Сессия остановлена"
-                    evt.set()
-            self.pending_commands.clear()
-
-        self.thread = threading.Thread(target=run, daemon=True)
-        self.thread.start()
-
-    def send_command(self, text: str) -> str:
-        # Ждём готовности сессии (до 30 секунд, чтобы покрыть переподключение)
-        if not self._ready.wait(timeout=30):
-            return "AI сессия не готова"
-
-        event = threading.Event()
-        container = {"result": None}
-        request_id = str(uuid.uuid4())
-        # Сохраняем для возможного повтора после обрыва
-        self.pending_commands[request_id] = (event, container, text)
+        ret, jpeg = cv2.imencode('.jpg', frame,
+                                  [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if not ret:
+            return
+        b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+        # Отправляем в event loop
         asyncio.run_coroutine_threadsafe(
-            self.command_queue.put((request_id, text)),
-            self.loop
+            _send_queue.put({"image_b64": b64, "mime_type": "image/jpeg"}),
+            _loop
         )
-        # Ожидаем ответа (до 120 секунд)
-        if not event.wait(timeout=120):
-            self.pending_commands.pop(request_id, None)
-            return "Таймаут ожидания ответа"
-        return container["result"] if container["result"] else "Нет ответа"
-
-    def send_message(self, message: dict):
-        if self.loop and self.running and self.send_queue is not None:
-            asyncio.run_coroutine_threadsafe(self.send_queue.put(message), self.loop)
-
-    def stop(self):
-        self.running = False
-        if self.loop:
-            asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
-        if self._output_stream:
-            self._output_stream.stop()
-            self._output_stream.close()
-            self._output_stream = None
-
-
-# --- Глобальная сессия и публичные функции ---
-_session = None
-_lock = threading.Lock()
-
-def _get_session():
-    global _session
-    with _lock:
-        if _session is None or not _session.running:
-            _session = AISession()
-            _session.start()
-        return _session
+    except Exception as e:
+        print(f"[send_frame] Ошибка: {e}")
 
 def command(text: str) -> str:
-    session = _get_session()
-    return session.send_command(text)
+    """
+    Отправляет текст в ИИ и БЛОКИРУЕТСЯ до получения полного ответа.
+    Возвращает ответ (текст без маркеров ударения).
+    """
+    if _loop is None or _send_queue is None:
+        return "AI не запущен. Вызовите start_ai()."
 
-def send_frame() -> None:
-    from r2_app.high_level import get_raw_frame
-    session = _get_session()
-    frame = get_raw_frame(left=True)
-    if frame is None:
-        print("[send_frame] Кадр не получен")
-        return
-    ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-    if not ret:
-        print("[send_frame] Ошибка JPEG кодирования")
-        return
-    b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
-    session.send_message({"image_b64": b64, "mime_type": "image/jpeg"})
+    # Регистрируем будущий ответ
+    global _response_counter
+    with _lock:
+        msg_id = _response_counter
+        _response_counter += 1
+        ev = threading.Event()
+        _response_events[msg_id] = ev
+        _response_texts[msg_id] = ""
+
+    # Кладём сообщение в очередь
+    asyncio.run_coroutine_threadsafe(
+        _send_queue.put({"text": text}),
+        _loop
+    )
+
+    # Ожидаем ответа (таймаут 60 секунд)
+    if ev.wait(timeout=60.0):
+        with _lock:
+            resp = _response_texts.pop(msg_id, "")
+        return resp if resp else "Нет текстового ответа."
+    else:
+        with _lock:
+            _response_events.pop(msg_id, None)
+            _response_texts.pop(msg_id, None)
+        return "Таймаут ожидания ответа."
+
+def enable_audio(enabled: bool):
+    global _audio_enabled
+    _audio_enabled = enabled
 
 def cleanup():
-    global _session
-    if _session:
-        _session.stop()
-        _session = None
-    global _output_stream
-    if _output_stream:
-        _output_stream.stop()
-        _output_stream.close()
-        _output_stream = None
+    global _stop_event, _loop
+    print("[AI] Завершение сессии...")
+    if _loop is not None:
+        # Устанавливаем событие остановки
+        asyncio.run_coroutine_threadsafe(_set_stop(), _loop)
+    if _loop_thread and _loop_thread.is_alive():
+        _loop_thread.join(timeout=5.0)
+    if _audio_output_stream:
+        _audio_output_stream.stop()
+        _audio_output_stream.close()
+
+async def _set_stop():
+    global _stop_event
+    _stop_event.set()
+
+# Для обратной совместимости с main.py: он вызывает command() и потом что-то ещё.
+# Если хотите полностью новое поведение, main.py надо чуть поправить (см. ниже).
