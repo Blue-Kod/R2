@@ -20,20 +20,20 @@ class ServoController:
         self.initialized = False
 
         # Текущие углы для плавного движения
-        self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 45, 5: 45, 6: 135, 7:135}
+        self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 45, 5: 45, 6: 135, 7: 135}
         self.lock = threading.Lock()
 
-        # Конфигурация каналов по умолчанию (6 каналов)
+        # Конфигурация каналов по умолчанию (8 каналов)
         if channel_configs is None:
             self.channel_configs = {
-                0: (0, 180, 120, 520),   # Шея
-                1: (0, 270, 120, 520),   # Правое плечо
-                2: (0, 270, 120, 520),   # Левое плечо
-                3: (0, 180, 120, 520),   # Наклон головы
-                4: (0, 270, 120, 520),   # Поворот правого плеча
-                5: (0, 270, 120, 520),   # Поворот левого плеча
-                6: (0, 270, 120, 520),   # Правый локоть
-                7: (0, 270, 120, 520)    # Левый локоть
+                0: (0, 180, 120, 520),   # Шея (180°)
+                1: (0, 270, 102, 512),   # Правое плечо (270°)
+                2: (0, 270, 102, 512),   # Левое плечо (270°)
+                3: (0, 180, 120, 520),   # Наклон головы (180°)
+                4: (0, 270, 102, 512),   # Поворот правого плеча (270°)
+                5: (0, 270, 102, 512),   # Поворот левого плеча (270°)
+                6: (0, 270, 102, 512),   # Правый локоть (270°)
+                7: (0, 270, 102, 512)    # Левый локоть (270°)
             }
         else:
             self.channel_configs = channel_configs
@@ -98,7 +98,6 @@ class ServoController:
             self.pwm.set_pwm(channel, 0, pulse)
             with self.lock:
                 self.current_angles[channel] = angle
-            # print(f"Сервопривод {channel} установлен в угол {angle}° (импульс {pulse})")
             return True
         except Exception as e:
             print(f"Ошибка установки сервопривода {channel}: {e}")
@@ -106,7 +105,7 @@ class ServoController:
 
     def test_cycle(self, channels=None, delay=1):
         if channels is None:
-            channels = [0, 1, 2, 3, 4, 5]
+            channels = [0, 1, 2, 3, 4, 5, 6, 7]   # теперь все 8 каналов
         if not self.initialized:
             return
         for ch in channels:
