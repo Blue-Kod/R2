@@ -42,6 +42,7 @@ MAX_HISTORY_CHARS = 8000
 # Global state
 _audio_enabled = True
 _chat_history = []
+_execution_logs = []
 _output_stream = None
 _current_response = ""
 
@@ -113,7 +114,7 @@ CONFIG = {
 }
 
 async def execute_python(code):
-    global _execution_logs = []
+    global _execution_logs
     print(f"\n--- [AI EXECUTION START] ---\n{code}\n-------------------------")
     try:
         exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
