@@ -4,7 +4,7 @@
 import argparse
 import os
 import time
-from ai import command
+from ai import command, send_frame
 from r2_app.high_level import *
 
 APP_VERSION = "0.1"
@@ -24,9 +24,7 @@ if __name__ == "__main__":
         print(f"R2 v{APP_VERSION}")
     else:
         start_background()
-        # Первый command() запускает голосовой диалог, если AUDIO_INPUT = True
         command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.'")
-        # Если command() вернулся (например, в текстовом режиме или после ошибки) –
-        # оставляем процесс живым, чтобы веб-сервер и остальные потоки работали.
         while True:
             time.sleep(1)
+            send_frame()

@@ -1,6 +1,9 @@
 """
-AI Library for R2 Robot - High-level interface for AI interactions.
-Sends video frames from the main camera to the AI during the session.
+AI Library for R2 Robot – Persistent, self-healing session with Gemini Live.
+- command(text)  -> отправить текст модели (асинхронно, ответ обрабатывается полностью)
+- send_frame()   -> отправить кадр с камеры
+- Сессия автоматически переподключается при обрыве.
+- Модель может выполнять Python-код через #EXECUTE блоки.
 """
 
 import asyncio
@@ -8,6 +11,7 @@ import json
 import base64
 import re
 import traceback
+import threading
 import time
 import requests
 import numpy as np
@@ -40,18 +44,7 @@ _chat_history = []
 _output_stream = None
 _current_response = ""
 
-# Флаг подробного логирования видео (можно включать для отладки)
-_verbose_video_log = False
-
-def get_current_response():
-    return _current_response
-
-def enable_ai_audio(enabled: bool) -> None:
-    global _audio_enabled
-    _audio_enabled = bool(enabled)
-    print(f"[AI] Audio {'enabled' if _audio_enabled else 'disabled'}")
-
-# --- High-level functions available to AI (не менялись) ---
+# --- High-level functions available to AI ---
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
     _chat_history.append(formatted_msg)
@@ -95,13 +88,13 @@ def _exec_log(message):
     _execution_logs.append(formatted)
     print(formatted)
 
-# --- Character Prompt (добавлено упоминание зрения) ---
+# --- Character Prompt ---
 CHARACTER_PROMPT = """
 Ты — робот R2. Стиль: краткий, немного официальный.
 Говори на русском. Всегда используй '+' перед ударными гласными. Мужской род.
 Говор+и внятно, не тор+опся. Произнос+и слов+а полн+остью, избег+ай сокращ+ений. Твоя речь должна быть разборчивой, как у диктора.
 
-Ты видишь мир через камеру робота. Перед каждым ответом тебе показывают несколько кадров с основной камеры. Используй эту информацию, чтобы описывать окружение, людей, предметы. Если видишь человека, поздоровайся или спроси, чем помочь.
+Ты видишь мир через камеру робота. Кадры приходят регулярно, используй их, чтобы описывать окружение, людей, предметы. Если видишь человека, поздоровайся или спроси, чем помочь.
 
 ИНСТРУМЕНТЫ (Python):
 - log(msg) -> запись в лог. Пользователь её НЕ видит.
@@ -119,32 +112,16 @@ CHARACTER_PROMPT = """
 6. Не пиши ничего после блока кода. Закончился блок кода - ВСЁ. КОНЕЦ. Только после следующего сообщения можешь что-то писать.
 """
 
-CONFIG_BASE = {
+CONFIG = {
     "response_modalities": ["AUDIO"],
     "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE}}},
-    "safety_settings": [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ],
     "system_instruction": CHARACTER_PROMPT
 }
 
 BANNED_PHRASES = ["i'm"]
 
-def build_system_prompt(chat_history):
-    if not chat_history:
-        return CHARACTER_PROMPT
-    history_text = "\n".join(chat_history)[-MAX_HISTORY_CHARS:]
-    return f"{CHARACTER_PROMPT}\n\nКОНТЕКСТ ДИАЛОГА ДО ПОСЛЕДНЕГО СБОЯ:\n{history_text}"
-
-def build_config(chat_history):
-    config = dict(CONFIG_BASE)
-    config["system_instruction"] = build_system_prompt(chat_history)
-    return config
-
 async def execute_python(code):
+    """Выполнить Python-код от имени робота. Возвращает строку-отчёт."""
     global _execution_logs
     _execution_logs = []
     print(f"\n--- [AI EXECUTION START] ---\n{code}\n-------------------------")
@@ -156,198 +133,269 @@ async def execute_python(code):
         print(f"[AI ERROR]:\n{err}")
         return f"ОШИБКА В КОДЕ:\n{err}"
 
-# --- Приём ответов (не менялся) ---
-async def receive_turn(websocket):
-    global _current_response
-    _current_response = ""
-    full_text_response = ""
-    is_refusal = False
-    print("AI: ", end="", flush=True)
 
-    while True:
+# --- AISession: постоянное соединение, диалоги и видео ---
+class AISession:
+    def __init__(self):
+        self.ws = None
+        self.send_queue = asyncio.Queue()        # сообщения для отправки (текст, видео, логи)
+        self.incoming_queue = asyncio.Queue()    # сообщения от модели
+        self.command_queue = asyncio.Queue()     # задания на диалог
+        self.loop = None
+        self.thread = None
+        self.running = False
+        self._output_stream = None
+
+    async def _ensure_output_stream(self):
+        if self._output_stream is None and _audio_enabled:
+            self._output_stream = sd.OutputStream(
+                samplerate=HARDWARE_RATE,
+                channels=1,
+                dtype='int16',
+                device=1,
+                latency='low'
+            )
+            self._output_stream.start()
+
+    async def _connect(self):
+        """Подключиться к прокси и отправить конфиг."""
+        for attempt in range(1, 6):
+            try:
+                resp = requests.get(BASE_URL, timeout=10)
+                if resp.status_code < 500:
+                    break
+            except requests.RequestException:
+                pass
+            if attempt < 5:
+                await asyncio.sleep(2)
+        ws = await websockets.connect(WS_URL, open_timeout=30)
+        await ws.send(json.dumps({
+            "api_key": API_KEY,
+            "model_id": MODEL_ID,
+            "config": CONFIG
+        }))
+        return ws
+
+    async def _session_loop(self):
+        """Главный цикл: поддерживать WebSocket и переподключаться."""
+        while self.running:
+            try:
+                self.ws = await self._connect()
+                print("[AI] Соединение с прокси установлено")
+
+                # Запускаем воркеры
+                receiver_task = asyncio.create_task(self._receiver())
+                sender_task = asyncio.create_task(self._sender())
+                dialog_manager = asyncio.create_task(self._dialog_manager())
+
+                done, pending = await asyncio.wait(
+                    [receiver_task, sender_task, dialog_manager],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    exc = task.exception()
+                    if exc:
+                        print(f"[AI] Ошибка в задаче: {exc}")
+
+            except (websockets.ConnectionClosed, OSError, asyncio.TimeoutError) as e:
+                print(f"[AI] Соединение потеряно: {e}")
+            except Exception as e:
+                print(f"[AI] Неожиданная ошибка: {e}")
+
+            # Очищаем очереди, чтобы не было мусора после обрыва
+            while not self.incoming_queue.empty():
+                self.incoming_queue.get_nowait()
+            while not self.command_queue.empty():
+                self.command_queue.get_nowait()
+
+            if self.running:
+                wait = 2
+                print(f"[AI] Повторное подключение через {wait} сек...")
+                await asyncio.sleep(wait)
+
+    async def _receiver(self):
+        """Читает сообщения от WebSocket и кладёт во входящую очередь."""
+        while True:
+            try:
+                raw = await self.ws.recv()
+                data = json.loads(raw)
+                await self.incoming_queue.put(data)
+            except websockets.ConnectionClosed:
+                print("[AI] WebSocket закрыт")
+                break
+            except Exception as e:
+                print(f"[AI] Ошибка приёма: {e}")
+                continue
+
+    async def _sender(self):
+        """Читает очередь отправки и шлёт в WebSocket."""
+        while True:
+            message = await self.send_queue.get()
+            try:
+                await self.ws.send(json.dumps(message))
+            except Exception as e:
+                print(f"[AI] Ошибка отправки: {e}")
+                # Возвращаем сообщение обратно, чтобы отправить после переподключения
+                await self.send_queue.put(message)
+                break
+
+    async def _dialog_manager(self):
+        """Последовательно обрабатывает запросы из command_queue."""
+        while True:
+            text = await self.command_queue.get()
+            # Добавляем в историю
+            _chat_history.append(f"Пользователь: {text}")
+            print(f"INPUT -> AI: {text}")
+
+            # Запускаем диалог
+            await self._handle_dialog(text)
+
+    async def _handle_dialog(self, initial_text: str):
+        """Обрабатывает один диалог: отправляет текст, получает ответы, выполняет код, до финала."""
+        # Отправляем начальный текст
+        await self.send_queue.put({"text": initial_text})
+
+        full_text = ""
+        while True:
+            # Собираем ответные сообщения до turn_complete
+            turn_text = ""
+            while True:
+                data = await self.incoming_queue.get()
+
+                # Обрабатываем текстовый фрагмент
+                if "text" in data:
+                    chunk = data["text"]
+                    turn_text += chunk
+                    # Выводим в консоль без маркеров ударений
+                    display_chunk = re.sub(r"\+", "", chunk)
+                    print(f"AI: {display_chunk}", end="", flush=True)
+
+                # Проигрываем аудио, если есть
+                if "audio" in data and _audio_enabled:
+                    await self._play_audio(data["audio"])
+
+                # Если конец реплики, заканчиваем сбор
+                if data.get("end_of_turn"):
+                    print("")  # перевод строки
+                    break
+
+            # Обработка #EXECUTE
+            code_match = re.search(r"#EXECUTE\n(.*?)\n#END", turn_text, re.DOTALL)
+            if code_match:
+                # Выполняем код и отправляем результат
+                report = await execute_python(code_match.group(1).strip())
+                _chat_history.append(f"[SYSTEM_LOGS]: {report}")
+                await self.send_queue.put({"text": f"[SYSTEM_LOGS]:\n{report}"})
+                # Продолжаем слушать ответ модели
+                continue
+            else:
+                # Финальный ответ (без кода). Завершаем диалог.
+                cleaned = re.sub(r"\+", "", turn_text.strip())
+                _chat_history.append(f"Ассистент: {cleaned}")
+                return
+
+    async def _play_audio(self, audio_b64: str):
+        """Декодирует и проигрывает аудио из base64."""
         try:
-            raw_data = await asyncio.wait_for(websocket.recv(), timeout=30)
-            data = json.loads(raw_data)
-        except asyncio.TimeoutError:
-            print("\n[Система: Тайм-аут ответа модели]")
-            break
-        except json.JSONDecodeError:
-            print("\n[Система: Получен некорректный JSON от сервера]")
-            continue
+            missing_padding = len(audio_b64) % 4
+            if missing_padding:
+                audio_b64 += '=' * (4 - missing_padding)
+            raw_bytes = base64.b64decode(audio_b64)
+            if len(raw_bytes) % 2 != 0:
+                raw_bytes = raw_bytes[:-1]
+            audio_array = np.frombuffer(raw_bytes, dtype=np.int16)
+            if audio_array.size > 0:
+                await self._ensure_output_stream()
+                if self._output_stream:
+                    # Ресэмплинг 24k -> 48k (повтор сэмплов)
+                    mono_48k = np.repeat(audio_array, 2)
+                    self._output_stream.write(mono_48k)
+        except Exception as e:
+            print(f"\n[Ошибка аудио]: {e}")
 
-        if "text" in data:
-            chunk = data["text"]
-            full_text_response += chunk
-            if any(phrase in full_text_response.lower() for phrase in BANNED_PHRASES):
-                is_refusal = True
-            if not is_refusal:
-                display_text = re.sub(r"\+(?=[а-яёa-z])", "", chunk, flags=re.IGNORECASE)
-                if display_text:
-                    print(display_text, end="", flush=True)
-                    _current_response += display_text
+    def start(self):
+        """Запустить фоновый поток с event loop."""
+        if self.running:
+            return
+        self.running = True
 
-        if "audio" in data and not is_refusal and _audio_enabled:
-            text_so_far = full_text_response.lower()
-            is_code_block = "#execute" in text_so_far and "#end" not in text_so_far
-            if not is_code_block:
-                try:
-                    audio_b64 = data["audio"]
-                    missing_padding = len(audio_b64) % 4
-                    if missing_padding:
-                        audio_b64 += '=' * (4 - missing_padding)
-                    raw_bytes = base64.b64decode(audio_b64)
-                    if len(raw_bytes) % 2 != 0:
-                        raw_bytes = raw_bytes[:-1]
-                    audio_array = np.frombuffer(raw_bytes, dtype=np.int16)
-                    if audio_array.size > 0:
-                        mono_48k = np.repeat(audio_array, 2)
-                        if _output_stream:
-                            _output_stream.write(mono_48k)
-                except Exception as e:
-                    print(f"\n[Ошибка аудио]: {e}")
+        def run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self.loop = loop
+            loop.run_until_complete(self._session_loop())
+            self.running = False
 
-        if data.get("end_of_turn"):
-            break
+        self.thread = threading.Thread(target=run, daemon=True)
+        self.thread.start()
 
-    if is_refusal:
-        print("[Система: Сообщение заблокировано фильтром отказов]")
-    return full_text_response
+    def send_command(self, text: str):
+        """Потокобезопасно добавить команду в очередь диалогов."""
+        if self.loop and self.running:
+            asyncio.run_coroutine_threadsafe(self.command_queue.put(text), self.loop)
 
-async def main_loop(websocket):
-    global _chat_history
-    while True:
-        full_text_response = await receive_turn(websocket)
-        code_match = re.search(r"#EXECUTE\n(.*?)\n#END", full_text_response, re.DOTALL)
-        if code_match:
-            report = await execute_python(code_match.group(1).strip())
-            _chat_history.append(f"[SYSTEM_LOGS]: {report}")
-            await websocket.send(json.dumps({"text": f"[SYSTEM_LOGS]:\n{report}"}))
-            continue
-        cleaned_response = re.sub(r'\+', '', full_text_response.strip())
-        return cleaned_response
+    def send_message(self, message: dict):
+        """Потокобезопасно добавить сообщение в очередь отправки (видео и т.п.)."""
+        if self.loop and self.running:
+            asyncio.run_coroutine_threadsafe(self.send_queue.put(message), self.loop)
 
-# --- Новый видеострим с предварительным запуском ---
-async def video_stream(websocket, stop_event: asyncio.Event, warmup_seconds=2.0):
-    """
-    Отправляет JPEG-кадры с основной камеры каждые 1 сек.
-    Запускается заранее (warmup_seconds) до отправки текста, чтобы модель
-    успела «увидеть» окружение.
-    """
-    # Импорт здесь, чтобы избежать циклических зависимостей
+    def stop(self):
+        self.running = False
+        if self.loop:
+            asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
+        if self._output_stream:
+            self._output_stream.stop()
+            self._output_stream.close()
+            self._output_stream = None
+
+
+# --- Глобальная сессия и публичные функции ---
+_session = None
+_lock = threading.Lock()
+
+def _get_session():
+    global _session
+    with _lock:
+        if _session is None or not _session.running:
+            _session = AISession()
+            _session.start()
+        return _session
+
+def command(text: str) -> None:
+    """Отправить текст модели. Диалог обрабатывается асинхронно."""
+    session = _get_session()
+    session.send_command(text)
+
+def send_frame() -> None:
+    """Отправить текущий кадр с основной камеры."""
     from r2_app.high_level import get_raw_frame
 
-    # Прогрев: отправляем несколько кадров до текстового запроса
-    warmup_start = time.time()
-    while time.time() - warmup_start < warmup_seconds and not stop_event.is_set():
-        await _send_frame(websocket, get_raw_frame)
-        await asyncio.sleep(1.0)
+    session = _get_session()
+    frame = get_raw_frame(left=True)
+    if frame is None:
+        print("[send_frame] Кадр не получен")
+        return
 
-    # Основной цикл: пока не остановят, шлём кадры
-    while not stop_event.is_set():
-        await _send_frame(websocket, get_raw_frame)
-        await asyncio.sleep(1.0)
+    ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    if not ret:
+        print("[send_frame] Ошибка JPEG кодирования")
+        return
 
-async def _send_frame(websocket, frame_getter):
-    """Отправляет один кадр, если он доступен."""
-    try:
-        frame = frame_getter(left=True)
-        if frame is None:
-            if _verbose_video_log:
-                print("[VideoStream] Кадр не получен (None)")
-            return
-        ret, jpeg = cv2.imencode('.jpg', frame,
-                                  [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-        if not ret:
-            if _verbose_video_log:
-                print("[VideoStream] Ошибка кодирования JPEG")
-            return
-        b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
-        await websocket.send(json.dumps({
-            "image_b64": b64,
-            "mime_type": "image/jpeg"
-        }))
-        if _verbose_video_log:
-            print(f"[VideoStream] Отправлен кадр, размер base64: {len(b64)}")
-    except Exception as e:
-        print(f"[VideoStream] Ошибка: {e}")
-
-async def _command_async(text: str) -> str:
-    global _output_stream, _chat_history
-
-    if _output_stream is None and _audio_enabled:
-        _output_stream = sd.OutputStream(
-            samplerate=HARDWARE_RATE,
-            channels=1,
-            dtype='int16',
-            device=1,
-            latency='low'
-        )
-        _output_stream.start()
-
-    # Прогрев прокси
-    for attempt in range(1, 6):
-        try:
-            resp = requests.get(BASE_URL, timeout=10)
-            if resp.status_code < 500:
-                print(f"[Система: Render прогрет ({resp.status_code})]")
-                break
-        except requests.RequestException:
-            pass
-        if attempt < 5:
-            time.sleep(2)
-
-    try:
-        async with websockets.connect(WS_URL, open_timeout=30) as websocket:
-            config = build_config(_chat_history)
-            await websocket.send(json.dumps({
-                "api_key": API_KEY,
-                "model_id": MODEL_ID,
-                "config": config
-            }))
-
-            # Создаём задачу видеострима с предварительным прогревом 2 секунды
-            stop_video = asyncio.Event()
-            video_task = asyncio.create_task(video_stream(websocket, stop_video, warmup_seconds=2.0))
-
-            # Ждём 2 секунды, чтобы кадры начали поступать
-            await asyncio.sleep(2.0)
-
-            # Отправляем текст
-            await websocket.send(json.dumps({"text": text}))
-            print(f"INPUT -> AI: {text}")
-            _chat_history.append(f"Пользователь: {text}")
-
-            # Получаем ответ
-            assistant_response = await main_loop(websocket)
-            if assistant_response:
-                _chat_history.append(f"Ассистент: {assistant_response}")
-
-            # Останавливаем видео
-            stop_video.set()
-            await video_task
-
-            print("\n")
-            return assistant_response if assistant_response else "Нет ответа."
-
-    except Exception as e:
-        return f"Ошибка: {str(e)}"
-
-def command(text: str) -> str:
-    """Отправляет текстовую команду ИИ. Во время сеанса передаётся видео с камеры."""
-    try:
-        return asyncio.run(_command_async(text))
-    except Exception as e:
-        return f"Ошибка выполнения: {str(e)}"
+    b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+    session.send_message({
+        "image_b64": b64,
+        "mime_type": "image/jpeg"
+    })
 
 def cleanup():
+    global _session
+    if _session:
+        _session.stop()
+        _session = None
     global _output_stream
     if _output_stream:
         _output_stream.stop()
         _output_stream.close()
         _output_stream = None
-
-if __name__ == "__main__":
-    print("Testing AI library...")
-    response = command("Привет! Что ты видишь перед собой?")
-    print(f"Response: {response}")
-    cleanup()
