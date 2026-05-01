@@ -12,7 +12,16 @@ class AppConfig:
     launcher_script: str = "launcher.py"
     tracking_timeout_seconds: float = 10.0
     default_servo_angles: Dict[int, int] = field(
-        default_factory=lambda: {0: 90, 1: 135, 2: 135, 3: 90, 4: 135, 5: 135}
+        default_factory=lambda: {
+            0: 90,  # Шея
+            1: 135,  # Правое плечо
+            2: 135,  # Левое плечо
+            3: 90,  # Наклон головы
+            4: 45,  # Поворот правого плеча
+            5: 45,  # Поворот левого плеча
+            6: 135,  # Правый локоть
+            7: 135  # Левый локоть
+        }
     )
 
     @property
