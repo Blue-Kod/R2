@@ -2,7 +2,7 @@
 AI Library for R2 Robot – Persistent session, synchronous command().
 - command(text)         -> блокирует поток, возвращает ответ строкой.
 - send_frame()          -> неблокирующая отправка кадра с камеры.
-- Сессия автоматически переподключается при обрыве.
+- Сессия переподключается при обрыве, все ожидающие запросы сохраняются.
 - Модель выполняет Python-код через #EXECUTE блоки.
 """
 
@@ -42,15 +42,12 @@ MAX_HISTORY_CHARS = 8000
 # Global state
 _audio_enabled = True
 _chat_history = []
-_execution_logs = []
 _output_stream = None
-_current_response = ""
 
 # --- High-level functions available to AI ---
 def log(message: str) -> None:
-    formatted_msg = f"[LOG]: {message}"
-    _chat_history.append(formatted_msg)
-    print(formatted_msg)
+    _chat_history.append(f"[LOG]: {message}")
+    print(f"[LOG]: {message}")
 
 def set_emote(emotion: str) -> bool:
     from r2_app.high_level import emote
@@ -114,11 +111,11 @@ CONFIG = {
 }
 
 async def execute_python(code):
-    global _execution_logs
+    exec_logs = []
     print(f"\n--- [AI EXECUTION START] ---\n{code}\n-------------------------")
     try:
         exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
-        return "\n".join(_execution_logs) if _execution_logs else "Код выполнен."
+        return "\n".join(exec_logs) if exec_logs else "Код выполнен."
     except Exception:
         err = traceback.format_exc()
         print(f"[AI ERROR]:\n{err}")
@@ -131,7 +128,7 @@ class AISession:
         self.send_queue = None
         self.incoming_queue = None
         self.command_queue = None
-        self.pending_commands = {}
+        self.pending_commands = {}   # request_id -> (event, container, text)
         self.loop = None
         self.thread = None
         self.running = False
@@ -167,18 +164,14 @@ class AISession:
         }))
         return ws
 
-    def _cancel_all_pending(self, reason="Соединение потеряно"):
-        for rid, (evt, container) in list(self.pending_commands.items()):
-            if not evt.is_set():
-                container["result"] = reason
-                evt.set()
-        self.pending_commands.clear()
-
     async def _session_loop(self):
         while self.running:
             self.send_queue = asyncio.Queue()
             self.incoming_queue = asyncio.Queue()
             self.command_queue = asyncio.Queue()
+            # Если есть незавершённые команды с прошлого раза, ставим их в очередь сейчас
+            for rid, (evt, cont, text) in list(self.pending_commands.items()):
+                await self.command_queue.put((rid, text))
             self._ready.set()
 
             try:
@@ -190,13 +183,12 @@ class AISession:
                     asyncio.create_task(self._sender()),
                     asyncio.create_task(self._dialog_manager())
                 ]
-
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for task in pending:
-                    task.cancel()
-                for task in done:
+                for t in pending:
+                    t.cancel()
+                for t in done:
                     try:
-                        await task
+                        await t
                     except (asyncio.CancelledError, Exception) as e:
                         print(f"[AI] Задача завершилась: {e}")
 
@@ -205,7 +197,6 @@ class AISession:
             except Exception as e:
                 print(f"[AI] Неожиданная ошибка: {e}")
             finally:
-                self._cancel_all_pending()
                 self._ready.clear()
 
             if self.running:
@@ -238,66 +229,57 @@ class AISession:
 
     async def _dialog_manager(self):
         while True:
-            request_id, text = await self.command_queue.get()
+            rid, text = await self.command_queue.get()
             _chat_history.append(f"Пользователь: {text}")
             print(f"INPUT -> AI: {text}")
-            await self._handle_dialog(request_id, text)
+            await self._handle_dialog(rid, text)
 
     async def _handle_dialog(self, request_id: str, initial_text: str):
         answer = "Ошибка диалога"
         try:
             await self.send_queue.put({"text": initial_text})
-
-            final_answer = ""
+            final = ""
             while True:
-                turn_text = ""
+                turn = ""
                 try:
                     while True:
                         data = await asyncio.wait_for(self.incoming_queue.get(), timeout=120)
-
                         if "text" in data:
                             chunk = data["text"]
-                            turn_text += chunk
-                            display_chunk = re.sub(r"\+", "", chunk)
-                            print(f"AI: {display_chunk}", end="", flush=True)
-
+                            turn += chunk
+                            print(f"AI: {re.sub(r'\+', '', chunk)}", end="", flush=True)
                         if "audio" in data and _audio_enabled:
                             await self._play_audio(data["audio"])
-
                         if data.get("end_of_turn"):
                             print("")
                             break
-
                 except asyncio.TimeoutError:
-                    print("[AI] Таймаут ожидания ответа")
-                    final_answer = "Модель не ответила вовремя"
+                    final = "Модель не ответила вовремя"
                     break
                 except (asyncio.CancelledError, Exception) as e:
-                    print(f"[AI] Диалог прерван: {e}")
-                    final_answer = "Соединение потеряно"
+                    final = f"Соединение потеряно: {e}"
                     break
 
-                code_match = re.search(r"#EXECUTE\n(.*?)\n#END", turn_text, re.DOTALL)
-                if code_match:
-                    report = await execute_python(code_match.group(1).strip())
+                code = re.search(r"#EXECUTE\n(.*?)\n#END", turn, re.DOTALL)
+                if code:
+                    report = await execute_python(code.group(1).strip())
                     _chat_history.append(f"[SYSTEM_LOGS]: {report}")
                     await self.send_queue.put({"text": f"[SYSTEM_LOGS]:\n{report}"})
                     continue
                 else:
-                    cleaned = re.sub(r"\+", "", turn_text.strip())
-                    final_answer = cleaned
-                    _chat_history.append(f"Ассистент: {cleaned}")
+                    final = re.sub(r"\+", "", turn.strip())
+                    _chat_history.append(f"Ассистент: {final}")
                     break
-
-            answer = final_answer
+            answer = final
         except asyncio.CancelledError:
-            answer = "Диалог отменён"
+            answer = "Диалог прерван"
         except Exception as e:
             answer = f"Ошибка: {e}"
         finally:
+            # Уведомляем ожидающий поток
             if request_id in self.pending_commands:
-                evt, container = self.pending_commands.pop(request_id)
-                container["result"] = answer
+                evt, cont, _ = self.pending_commands.pop(request_id)
+                cont["result"] = answer
                 evt.set()
 
     async def _play_audio(self, audio_b64: str):
@@ -312,8 +294,7 @@ class AISession:
             if audio_array.size > 0:
                 await self._ensure_output_stream()
                 if self._output_stream:
-                    mono_48k = np.repeat(audio_array, 2)
-                    self._output_stream.write(mono_48k)
+                    self._output_stream.write(np.repeat(audio_array, 2))
         except Exception as e:
             print(f"\n[Ошибка аудио]: {e}")
 
@@ -329,26 +310,32 @@ class AISession:
             self.loop = loop
             loop.run_until_complete(self._session_loop())
             self.running = False
-            self._cancel_all_pending()
+            # При полном завершении отпускаем все ожидающие команды
+            for evt, cont, _ in self.pending_commands.values():
+                if not evt.is_set():
+                    cont["result"] = "Сессия остановлена"
+                    evt.set()
+            self.pending_commands.clear()
 
         self.thread = threading.Thread(target=run, daemon=True)
         self.thread.start()
 
     def send_command(self, text: str) -> str:
-        if not self._ready.wait(timeout=10):
+        # Ждём готовности сессии (до 30 секунд, чтобы покрыть переподключение)
+        if not self._ready.wait(timeout=30):
             return "AI сессия не готова"
 
         event = threading.Event()
         container = {"result": None}
         request_id = str(uuid.uuid4())
+        # Сохраняем для возможного повтора после обрыва
+        self.pending_commands[request_id] = (event, container, text)
         asyncio.run_coroutine_threadsafe(
             self.command_queue.put((request_id, text)),
             self.loop
         )
-        self.pending_commands[request_id] = (event, container)
-        event.wait(timeout=120)
-        # На случай, если событие не было установлено
-        if not event.is_set():
+        # Ожидаем ответа (до 120 секунд)
+        if not event.wait(timeout=120):
             self.pending_commands.pop(request_id, None)
             return "Таймаут ожидания ответа"
         return container["result"] if container["result"] else "Нет ответа"
@@ -361,7 +348,6 @@ class AISession:
         self.running = False
         if self.loop:
             asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
-        self._cancel_all_pending()
         if self._output_stream:
             self._output_stream.stop()
             self._output_stream.close()
@@ -381,30 +367,22 @@ def _get_session():
         return _session
 
 def command(text: str) -> str:
-    """Отправить текст модели и получить ответ (блокирующий)."""
     session = _get_session()
     return session.send_command(text)
 
 def send_frame() -> None:
-    """Отправить текущий кадр с основной камеры."""
     from r2_app.high_level import get_raw_frame
-
     session = _get_session()
     frame = get_raw_frame(left=True)
     if frame is None:
         print("[send_frame] Кадр не получен")
         return
-
     ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     if not ret:
         print("[send_frame] Ошибка JPEG кодирования")
         return
-
     b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
-    session.send_message({
-        "image_b64": b64,
-        "mime_type": "image/jpeg"
-    })
+    session.send_message({"image_b64": b64, "mime_type": "image/jpeg"})
 
 def cleanup():
     global _session
