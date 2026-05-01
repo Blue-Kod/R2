@@ -210,17 +210,6 @@ def create_app() -> Flask:
             return jsonify({"status": "ok", "channel": channel, "angle": angle})
         return jsonify({"error": "Failed to set servo"}), 500
 
-    @app.route("/api/servo/positions", methods=["GET"])
-    def get_servo_positions():
-        """Get current positions of all servos."""
-        servo = _servo
-        if not servo:
-            return jsonify({"error": "Servo controller not initialized"}), 500
-        positions = {}
-        for channel in servo.current_angles:
-            positions[str(channel)] = servo.current_angles.get(channel, 90)
-        return jsonify(positions)
-
     @app.route("/api/servo/tracking", methods=["GET", "POST"])
     def servo_tracking():
         if request.method == "GET":
