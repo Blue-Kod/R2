@@ -309,7 +309,8 @@ class StereoCamera:
                 else:
                     d_float = dispL
                 points = cv2.reprojectImageTo3D(d_float, self.Q_low)
-                disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
+                with np.errstate(invalid='ignore'):
+                    disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
                 output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
                 
