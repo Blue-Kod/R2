@@ -1,6 +1,6 @@
 """
 AI Library for R2 Robot - Persistent WebSocket session with automatic reconnection.
-Sends video frames via realtime input; uses frame buffer for context restoration.
+Sends only last 2 frames on reconnect for quick context; no session_resumption.
 """
 
 import asyncio
@@ -48,7 +48,7 @@ _current_response = ""
 _session: Optional['AISession'] = None
 _session_lock = threading.Lock()
 _frame_buffer: deque[bytes] = deque(maxlen=FRAME_HISTORY_LENGTH)
-_frame_lock = threading.Lock()   # protects _frame_buffer from concurrent access
+_frame_lock = threading.Lock()
 
 def get_current_response():
     return _current_response
@@ -58,7 +58,7 @@ def enable_ai_audio(enabled: bool) -> None:
     _audio_enabled = bool(enabled)
     print(f"[AI] Audio {'enabled' if _audio_enabled else 'disabled'}")
 
-# --- High-level functions available to AI ---
+# --- High-level functions available to AI (unchanged) ---
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
     _chat_history.append(formatted_msg)
@@ -138,12 +138,11 @@ def build_config(chat_history):
 
 class AISession:
     def __init__(self):
-        self.send_queue = queue.Queue()          # thread-safe
+        self.send_queue = queue.Queue()
         self.loop = None
         self.thread = None
-        self.running = False                     # True after start() until stop()
+        self.running = False
         self._output_stream = None
-        self._session_token: Optional[str] = None
 
     async def _ensure_output_stream(self):
         if self._output_stream is None and _audio_enabled:
@@ -156,7 +155,7 @@ class AISession:
     async def _run_session(self):
         """Keep reconnecting until stop() is called."""
         while self.running:
-            # Warm up the proxy
+            # Warm up proxy
             for attempt in range(1, 6):
                 try:
                     resp = requests.get(BASE_URL, timeout=10)
@@ -170,22 +169,18 @@ class AISession:
             if not self.running:
                 break
 
-            # Build config and setup
             config = build_config(_chat_history)
             setup_msg = {"api_key": API_KEY, "model_id": MODEL_ID, "config": config}
-            if self._session_token:
-                setup_msg["session_resumption"] = {"handle": self._session_token}
 
             try:
                 async with websockets.connect(WS_URL, open_timeout=30) as ws:
                     await ws.send(json.dumps(setup_msg))
                     print("WebSocket session opened")
 
-                    # Re-send buffered video frames
-                    if _frame_buffer:
-                        await self._send_buffered_frames(ws)
+                    # Quick context: last 2 frames from buffer
+                    await self._send_quick_context(ws)
 
-                    # Start receiver and sender tasks
+                    # Parallel tasks for receiving and sending
                     receiver_task = asyncio.create_task(self._receiver(ws))
                     sender_task = asyncio.create_task(self._sender(ws))
                     await asyncio.gather(receiver_task, sender_task)
@@ -196,16 +191,18 @@ class AISession:
                 print(f"Unexpected error in session: {e}. Reconnecting in 2 seconds...")
                 await asyncio.sleep(2)
 
-    async def _send_buffered_frames(self, ws):
-        """Send a snapshot of the frame buffer to avoid mutation during iteration."""
+    async def _send_quick_context(self, ws):
+        """Send only the last 2 frames to quickly re-establish visual context."""
         with _frame_lock:
-            frames = list(_frame_buffer)
-        print(f"Re-sending {len(frames)} buffered frames...")
-        for jpeg_bytes in frames:
+            recent = list(_frame_buffer)[-2:] if len(_frame_buffer) > 2 else list(_frame_buffer)
+        if not recent:
+            return
+        print(f"Quick context: sending {len(recent)} recent frames...")
+        for jpeg_bytes in recent:
             b64 = base64.b64encode(jpeg_bytes).decode('utf-8')
             await ws.send(json.dumps({"image_b64": b64, "mime_type": "image/jpeg"}))
-            await asyncio.sleep(0.5)
-        print("Buffered frames sent.")
+            await asyncio.sleep(0.1)
+        print("Quick context sent.")
 
     async def _receiver(self, ws):
         global _current_response
@@ -219,9 +216,6 @@ class AISession:
             except Exception as e:
                 print(f"Receiver error: {e}")
                 break
-
-            if "sessionResumption" in data:
-                self._session_token = data["sessionResumption"]["handle"]
 
             if "text" in data:
                 clean = re.sub(r"\+", "", data["text"])
@@ -252,7 +246,6 @@ class AISession:
     async def _sender(self, ws):
         """Drain the send queue. Exits when the websocket is closed."""
         while self.running:
-            # exit if send fails
             try:
                 msg = self.send_queue.get_nowait()
                 try:
@@ -288,7 +281,6 @@ class AISession:
 
     def stop(self):
         self.running = False
-        # Wake up the loop to exit gracefully
         if self.loop:
             asyncio.run_coroutine_threadsafe(self._stop_coro(), self.loop)
 
