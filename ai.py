@@ -1,7 +1,6 @@
 """
-AI Library for R2 Robot - Enhanced Reconnection & Memory Logic.
-Features: session resumption, client content injection, local frame cache,
-thread-safe message queue (uses standard queue.Queue to avoid event loop issues).
+AI Library for R2 Robot - Persistent WebSocket session with reconnection,
+text & frame history, thread-safe message queue.
 """
 
 import asyncio
@@ -34,28 +33,24 @@ def get_real_key(obscured):
 
 API_KEY = get_real_key(OBSCURED_API_KEY)
 MODEL_ID = "gemini-3.1-flash-live-preview"
-MODEL_RATE = 24000
 HARDWARE_RATE = 48000
 BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
 WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
 VOICE = "Enceladus"
 MAX_HISTORY_CHARS = 8000
 MAX_RECONNECT_ATTEMPTS = 5
-RECONNECT_BASE_DELAY = 2.0  # seconds
-FRAME_HISTORY_LENGTH = 15    # Keep last 15 frames
+RECONNECT_BASE_DELAY = 2.0
+FRAME_HISTORY_LENGTH = 15
+KEEPALIVE_TIMEOUT_SECONDS = 300
 
 # Global state
 _audio_enabled = True
-_chat_history = []  # List of strings
+_chat_history = []
 _output_stream = None
 _current_response = ""
 _session: Optional['AISession'] = None
 _session_lock = threading.Lock()
 _frame_buffer: deque[bytes] = deque(maxlen=FRAME_HISTORY_LENGTH)
-
-# ==============================================================================
-# Helper Functions & Character Prompt
-# ==============================================================================
 
 def get_current_response():
     return _current_response
@@ -65,6 +60,7 @@ def enable_ai_audio(enabled: bool) -> None:
     _audio_enabled = bool(enabled)
     print(f"[AI] Audio {'enabled' if _audio_enabled else 'disabled'}")
 
+# --- High-level functions available to AI (as before) ---
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
     _chat_history.append(formatted_msg)
@@ -100,7 +96,25 @@ _AI_EXEC_GLOBALS = {
 
 CHARACTER_PROMPT = """
 Ты — робот R2. Стиль: краткий, немного официальный.
-... (твой существующий промпт) ...
+Говори на русском. Всегда используй '+' перед ударными гласными. Мужской род.
+Говор+и внятно, не тор+опся. Произнос+и слов+а полн+остью, избег+ай сокращ+ений. Твоя речь должна быть разборчивой, как у диктора.
+
+Ты видишь мир через камеру робота. Перед каждым ответом тебе показывают несколько кадров с основной камеры. Используй эту информацию, чтобы описывать окружение, людей, предметы. Если видишь человека, поздоровайся или спроси, чем помочь.
+
+ИНСТРУМЕНТЫ (Python):
+- log(msg) -> запись в лог. Пользователь её НЕ видит.
+- set_emote(emotion) -> установить эмоцию (happy, sad, neutral, и т.д.).
+- set_eyes(x, y) -> положение глаз (от -1.0 до 1.0).
+- get_cpu_temp() -> температура CPU.
+- get_system_stats() -> статистика системы.
+
+АЛГОРИТМ РЕКУРСИИ:
+1. Если нужно действие/расчет: скажи "Выполн+яю..." и напиши #EXECUTE ... #END.
+2. В блоке #EXECUTE пиши ТОЛЬКО код.
+3. Если ты получила [SYSTEM_LOGS], проанализируй их и дай ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.
+4. ТВОЙ ОТВЕТ БЕЗ БЛОКА #EXECUTE ЯВЛЯЕТСЯ СИГНАЛОМ ЗАВЕРШЕНИЯ ЗАДАЧИ.
+5. Пиши код только если тебе реально нужно получить данные или выявить команду.
+6. Не пиши ничего после блока кода. Закончился блок кода - ВСЁ. КОНЕЦ. Только после следующего сообщения можешь что-то писать.
 """
 
 CONFIG_BASE = {
@@ -134,7 +148,6 @@ def build_config(chat_history):
 class AISession:
     def __init__(self):
         self.ws = None
-        # Thread-safe queue for messages from other threads
         self.send_queue = queue.Queue()
         self.loop = None
         self.thread = None
@@ -164,21 +177,22 @@ class AISession:
         while self.running and reconnect_attempt < MAX_RECONNECT_ATTEMPTS:
             try:
                 await self._connect_and_process()
-                # If we get here without exception, session ended normally
                 break
             except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
                 reconnect_attempt += 1
                 print(f"Connection lost (attempt {reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS}): {e}")
                 delay = RECONNECT_BASE_DELAY * reconnect_attempt
-                time.sleep(delay)  # blocking sleep in this thread is fine
+                time.sleep(delay)
             except Exception as e:
                 print(f"Unexpected error in session: {e}")
                 break
-
         self.running = False
 
     async def _connect_and_process(self):
         config = build_config(_chat_history)
+        config["session_resumption_config"] = {
+            "maximum_timeout": str(KEEPALIVE_TIMEOUT_SECONDS) + "s"
+        }
         setup_msg = {"api_key": API_KEY, "model_id": MODEL_ID, "config": config}
         if self._session_token:
             setup_msg["session_resumption"] = {"handle": self._session_token}
@@ -188,52 +202,31 @@ class AISession:
             await ws.send(json.dumps(setup_msg))
             print("WebSocket session opened")
 
-            # Inject local history if we have frames
+            if _chat_history:
+                await self._send_text_history(ws)
             if _frame_buffer:
-                await self._send_history_context(ws)
+                await self._send_buffered_frames(ws)
 
-            # Start parallel tasks
             receiver_task = asyncio.create_task(self._receiver())
             sender_task = asyncio.create_task(self._sender())
+            await asyncio.gather(receiver_task, sender_task)
 
-            # Wait for either task to complete
-            done, pending = await asyncio.wait(
-                [receiver_task, sender_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            # Cancel pending tasks
-            for task in pending:
-                task.cancel()
-            # Re-raise exception if any
-            for task in done:
-                if task.exception():
-                    raise task.exception()
-
-    async def _send_history_context(self, ws):
-        """Inject client content (text history + recent frames)."""
-        global _frame_buffer, _chat_history
-
-        # Build turns from chat history
+    async def _send_text_history(self, ws):
         turns = []
         for msg in _chat_history:
             role = "user" if msg.startswith("Пользователь:") else "model"
             turns.append({"role": role, "parts": [{"text": msg}]})
+        msg = {"clientContent": {"turns": turns, "turn_complete": True}}
+        await ws.send(json.dumps(msg))
+        print("Injected text history into session.")
 
-        # Build image parts from frame buffer
-        image_parts = []
+    async def _send_buffered_frames(self, ws):
+        print(f"Re-sending {len(_frame_buffer)} buffered frames...")
         for jpeg_bytes in _frame_buffer:
             b64 = base64.b64encode(jpeg_bytes).decode('utf-8')
-            image_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
-
-        client_content_msg = {
-            "clientContent": {
-                "turns": turns,
-                "turn_complete": True,
-                "extra_parts": image_parts
-            }
-        }
-        await ws.send(json.dumps(client_content_msg))
-        print("Injected local history into session.")
+            await ws.send(json.dumps({"image_b64": b64, "mime_type": "image/jpeg"}))
+            await asyncio.sleep(0.5)
+        print("Buffered frames sent.")
 
     async def _receiver(self):
         global _current_response
@@ -248,10 +241,8 @@ class AISession:
                 print(f"Receiver error: {e}")
                 break
 
-            # Extract session token if provided
             if "sessionResumption" in data:
                 self._session_token = data["sessionResumption"]["handle"]
-                print("Session resumption token stored.")
 
             if "text" in data:
                 clean = re.sub(r"\+", "", data["text"])
@@ -261,29 +252,23 @@ class AISession:
             if "audio" in data and _audio_enabled:
                 try:
                     audio_b64 = data["audio"]
-                    # fix padding
-                    missing_padding = len(audio_b64) % 4
-                    if missing_padding:
-                        audio_b64 += '=' * (4 - missing_padding)
+                    missing = len(audio_b64) % 4
+                    if missing: audio_b64 += '=' * (4 - missing)
                     raw_bytes = base64.b64decode(audio_b64)
-                    if len(raw_bytes) % 2 != 0:
-                        raw_bytes = raw_bytes[:-1]
-                    audio_array = np.frombuffer(raw_bytes, dtype=np.int16)
-                    if audio_array.size > 0:
+                    if len(raw_bytes) % 2: raw_bytes = raw_bytes[:-1]
+                    arr = np.frombuffer(raw_bytes, dtype=np.int16)
+                    if arr.size > 0:
                         await self._ensure_output_stream()
                         if self._output_stream:
-                            # upsample to 48kHz
-                            mono_48k = np.repeat(audio_array, 2)
-                            self._output_stream.write(mono_48k)
+                            self._output_stream.write(np.repeat(arr, 2))
                 except Exception as e:
                     print(f"\nAudio error: {e}")
 
             if data.get("end_of_turn"):
-                print()  # newline after turn
+                print()
                 _current_response = ""
 
     async def _sender(self):
-        """Regularly check the thread-safe queue and send any messages."""
         while True:
             try:
                 msg = self.send_queue.get_nowait()
@@ -293,14 +278,11 @@ class AISession:
                     print(f"Send error: {e}")
             except queue.Empty:
                 pass
-            await asyncio.sleep(0.05)  # prevent busy loop
+            await asyncio.sleep(0.05)
 
     def start(self):
-        """Start the AISession in a background thread."""
-        if self.running:
-            return
+        if self.running: return
         self.running = True
-
         def run_loop():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -309,30 +291,22 @@ class AISession:
                 loop.run_until_complete(self._run_session())
             finally:
                 loop.close()
-
         self.thread = threading.Thread(target=run_loop, daemon=True)
         self.thread.start()
 
     def send_message(self, msg):
-        """Thread-safe message insertion. Can be called from any thread."""
         if self.running:
             self.send_queue.put(msg)
 
     def stop(self):
-        """Request session stop and clean up."""
         self.running = False
-        # Schedule connection close if still alive
         if self.loop and self.ws:
             try:
                 asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
-            except Exception:
-                pass
-        # Clear the queue to unblock sender
+            except: pass
         while not self.send_queue.empty():
-            try:
-                self.send_queue.get_nowait()
-            except queue.Empty:
-                break
+            try: self.send_queue.get_nowait()
+            except queue.Empty: break
         if self._output_stream:
             self._output_stream.stop()
             self._output_stream.close()
@@ -356,28 +330,20 @@ def command(text: str) -> None:
     session.send_message({"text": text})
 
 def send_frame() -> None:
-    """Capture a frame, cache it, and send to AI session."""
     from r2_app.high_level import get_raw_frame
-
     session = init_session()
     frame = get_raw_frame(left=True)
     if frame is None:
         print("[send_frame] No frame captured")
         return
-
     ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     if not ret:
         print("[send_frame] JPEG encoding failed")
         return
-
     jpeg_bytes = jpeg.tobytes()
     _frame_buffer.append(jpeg_bytes)
-
     b64 = base64.b64encode(jpeg_bytes).decode('utf-8')
-    session.send_message({
-        "image_b64": b64,
-        "mime_type": "image/jpeg"
-    })
+    session.send_message({"image_b64": b64, "mime_type": "image/jpeg"})
 
 def cleanup():
     global _session
