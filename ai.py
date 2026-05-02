@@ -1,8 +1,6 @@
 """
-AI Library for R2 Robot - Persistent WebSocket session with reconnection,
-text & frame history, thread-safe message queue.
-Uses initial_history_in_client_content for Gemini 3.1 Flash Live Preview
-instead of send_client_content (which is not supported after setup).
+AI Library for R2 Robot - Persistent WebSocket session with reconnection.
+Sends video frames via realtime input; uses frame buffer for context restoration.
 """
 
 import asyncio
@@ -132,28 +130,8 @@ CONFIG_BASE = {
 
 BANNED_PHRASES = ["i'm"]
 
-def build_system_prompt(chat_history):
-    if not chat_history:
-        return CHARACTER_PROMPT
-    history_text = "\n".join(chat_history)[-MAX_HISTORY_CHARS:]
-    return f"{CHARACTER_PROMPT}\n\nКОНТЕКСТ ДИАЛОГА ДО ПОСЛЕДНЕГО СБОЯ:\n{history_text}"
-
 def build_config(chat_history):
-    config = dict(CONFIG_BASE)
-    config["system_instruction"] = build_system_prompt(chat_history)
-
-    # Embed text history directly into session setup for Gemini 3.1
-    if chat_history:
-        turns = []
-        for msg in chat_history:
-            role = "user" if msg.startswith("Пользователь:") else "model"
-            turns.append({"role": role, "parts": [{"text": msg}]})
-        config["initial_history_in_client_content"] = {
-            "turns": turns[-20:],        # limit to last 20 turns
-            "turn_complete": True
-        }
-
-    return config
+    return dict(CONFIG_BASE)
 
 # ==============================================================================
 # Enhanced AISession (Thread-safe message queue)
@@ -194,7 +172,7 @@ class AISession:
         while self.running and reconnect_attempt < MAX_RECONNECT_ATTEMPTS:
             try:
                 await self._connect_and_process()
-                break  # natural session end
+                break
             except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
                 reconnect_attempt += 1
                 print(f"Connection lost (attempt {reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS}): {e}")
@@ -216,13 +194,15 @@ class AISession:
             await ws.send(json.dumps(setup_msg))
             print("WebSocket session opened")
 
-            # Re-send buffered video frames via realtime input
+            # Re-send buffered video frames
             if _frame_buffer:
                 await self._send_buffered_frames(ws)
 
             receiver_task = asyncio.create_task(self._receiver())
             sender_task = asyncio.create_task(self._sender())
             await asyncio.gather(receiver_task, sender_task)
+
+        self.ws = None
 
     async def _send_buffered_frames(self, ws):
         print(f"Re-sending {len(_frame_buffer)} buffered frames...")
@@ -275,22 +255,18 @@ class AISession:
                 _current_response = ""
 
     async def _sender(self):
-        """Continuously drain the send queue (max 1 FPS for video)."""
+        """Drain the send queue without choking on closed socket."""
         while self.running:
-            # Drain all available messages
-            while True:
+            try:
+                msg = self.send_queue.get_nowait()
+                if self.ws is None:
+                    continue
                 try:
-                    msg = self.send_queue.get_nowait()
-                    # Skip if connection is already closed
-                    if self.ws is None:
-                        continue
-                    try:
-                        await self.ws.send(json.dumps(msg))
-                    except Exception:
-                        # Connection already gone — discard
-                        pass
-                except queue.Empty:
-                    break
+                    await self.ws.send(json.dumps(msg))
+                except Exception:
+                    self.ws = None
+            except queue.Empty:
+                pass
             await asyncio.sleep(0.05)
 
     def start(self):
