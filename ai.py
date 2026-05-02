@@ -41,7 +41,6 @@ MAX_HISTORY_CHARS = 8000
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_BASE_DELAY = 2.0
 FRAME_HISTORY_LENGTH = 15
-KEEPALIVE_TIMEOUT_SECONDS = 300
 
 # Global state
 _audio_enabled = True
@@ -60,7 +59,6 @@ def enable_ai_audio(enabled: bool) -> None:
     _audio_enabled = bool(enabled)
     print(f"[AI] Audio {'enabled' if _audio_enabled else 'disabled'}")
 
-# --- High-level functions available to AI (as before) ---
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
     _chat_history.append(formatted_msg)
@@ -190,9 +188,6 @@ class AISession:
 
     async def _connect_and_process(self):
         config = build_config(_chat_history)
-        config["session_resumption_config"] = {
-            "maximum_timeout": str(KEEPALIVE_TIMEOUT_SECONDS) + "s"
-        }
         setup_msg = {"api_key": API_KEY, "model_id": MODEL_ID, "config": config}
         if self._session_token:
             setup_msg["session_resumption"] = {"handle": self._session_token}
