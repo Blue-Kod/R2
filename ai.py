@@ -1,6 +1,8 @@
 """
 AI Library for R2 Robot - Persistent WebSocket session with reconnection,
 text & frame history, thread-safe message queue.
+Uses initial_history_in_client_content for Gemini 3.1 Flash Live Preview
+instead of send_client_content (which is not supported after setup).
 """
 
 import asyncio
@@ -44,7 +46,7 @@ FRAME_HISTORY_LENGTH = 15
 
 # Global state
 _audio_enabled = True
-_chat_history = []
+_chat_history = []          # List of strings
 _output_stream = None
 _current_response = ""
 _session: Optional['AISession'] = None
@@ -59,6 +61,7 @@ def enable_ai_audio(enabled: bool) -> None:
     _audio_enabled = bool(enabled)
     print(f"[AI] Audio {'enabled' if _audio_enabled else 'disabled'}")
 
+# --- High-level functions available to AI ---
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
     _chat_history.append(formatted_msg)
@@ -130,13 +133,26 @@ CONFIG_BASE = {
 BANNED_PHRASES = ["i'm"]
 
 def build_system_prompt(chat_history):
-    if not chat_history: return CHARACTER_PROMPT
+    if not chat_history:
+        return CHARACTER_PROMPT
     history_text = "\n".join(chat_history)[-MAX_HISTORY_CHARS:]
     return f"{CHARACTER_PROMPT}\n\nКОНТЕКСТ ДИАЛОГА ДО ПОСЛЕДНЕГО СБОЯ:\n{history_text}"
 
 def build_config(chat_history):
     config = dict(CONFIG_BASE)
     config["system_instruction"] = build_system_prompt(chat_history)
+
+    # Embed text history directly into session setup for Gemini 3.1
+    if chat_history:
+        turns = []
+        for msg in chat_history:
+            role = "user" if msg.startswith("Пользователь:") else "model"
+            turns.append({"role": role, "parts": [{"text": msg}]})
+        config["initial_history_in_client_content"] = {
+            "turns": turns[-20:],        # limit to last 20 turns
+            "turn_complete": True
+        }
+
     return config
 
 # ==============================================================================
@@ -156,26 +172,29 @@ class AISession:
     async def _ensure_output_stream(self):
         if self._output_stream is None and _audio_enabled:
             self._output_stream = sd.OutputStream(
-                samplerate=HARDWARE_RATE, channels=1, dtype='int16', device=1, latency='low'
+                samplerate=HARDWARE_RATE, channels=1, dtype='int16',
+                device=1, latency='low'
             )
             self._output_stream.start()
 
     async def _run_session(self):
-        # Warm up proxy
+        # Warm up the proxy
         for attempt in range(1, 6):
             try:
                 resp = requests.get(BASE_URL, timeout=10)
                 if resp.status_code < 500:
                     print(f"Warmed up Render ({resp.status_code})")
                     break
-            except requests.RequestException: pass
-            if attempt < 5: await asyncio.sleep(2)
+            except requests.RequestException:
+                pass
+            if attempt < 5:
+                await asyncio.sleep(2)
 
         reconnect_attempt = 0
         while self.running and reconnect_attempt < MAX_RECONNECT_ATTEMPTS:
             try:
                 await self._connect_and_process()
-                break
+                break  # natural session end
             except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
                 reconnect_attempt += 1
                 print(f"Connection lost (attempt {reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS}): {e}")
@@ -197,23 +216,13 @@ class AISession:
             await ws.send(json.dumps(setup_msg))
             print("WebSocket session opened")
 
-            if _chat_history:
-                await self._send_text_history(ws)
+            # Re-send buffered video frames via realtime input
             if _frame_buffer:
                 await self._send_buffered_frames(ws)
 
             receiver_task = asyncio.create_task(self._receiver())
             sender_task = asyncio.create_task(self._sender())
             await asyncio.gather(receiver_task, sender_task)
-
-    async def _send_text_history(self, ws):
-        turns = []
-        for msg in _chat_history:
-            role = "user" if msg.startswith("Пользователь:") else "model"
-            turns.append({"role": role, "parts": [{"text": msg}]})
-        msg = {"clientContent": {"turns": turns, "turn_complete": True}}
-        await ws.send(json.dumps(msg))
-        print("Injected text history into session.")
 
     async def _send_buffered_frames(self, ws):
         print(f"Re-sending {len(_frame_buffer)} buffered frames...")
@@ -248,9 +257,11 @@ class AISession:
                 try:
                     audio_b64 = data["audio"]
                     missing = len(audio_b64) % 4
-                    if missing: audio_b64 += '=' * (4 - missing)
+                    if missing:
+                        audio_b64 += '=' * (4 - missing)
                     raw_bytes = base64.b64decode(audio_b64)
-                    if len(raw_bytes) % 2: raw_bytes = raw_bytes[:-1]
+                    if len(raw_bytes) % 2:
+                        raw_bytes = raw_bytes[:-1]
                     arr = np.frombuffer(raw_bytes, dtype=np.int16)
                     if arr.size > 0:
                         await self._ensure_output_stream()
@@ -264,20 +275,29 @@ class AISession:
                 _current_response = ""
 
     async def _sender(self):
-        while True:
-            try:
-                msg = self.send_queue.get_nowait()
+        """Continuously drain the send queue (max 1 FPS for video)."""
+        while self.running:
+            # Drain all available messages
+            while True:
                 try:
-                    await self.ws.send(json.dumps(msg))
-                except Exception as e:
-                    print(f"Send error: {e}")
-            except queue.Empty:
-                pass
+                    msg = self.send_queue.get_nowait()
+                    # Skip if connection is already closed
+                    if self.ws is None:
+                        continue
+                    try:
+                        await self.ws.send(json.dumps(msg))
+                    except Exception:
+                        # Connection already gone — discard
+                        pass
+                except queue.Empty:
+                    break
             await asyncio.sleep(0.05)
 
     def start(self):
-        if self.running: return
+        if self.running:
+            return
         self.running = True
+
         def run_loop():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -286,6 +306,7 @@ class AISession:
                 loop.run_until_complete(self._run_session())
             finally:
                 loop.close()
+
         self.thread = threading.Thread(target=run_loop, daemon=True)
         self.thread.start()
 
@@ -298,14 +319,18 @@ class AISession:
         if self.loop and self.ws:
             try:
                 asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
-            except: pass
+            except Exception:
+                pass
         while not self.send_queue.empty():
-            try: self.send_queue.get_nowait()
-            except queue.Empty: break
+            try:
+                self.send_queue.get_nowait()
+            except queue.Empty:
+                break
         if self._output_stream:
             self._output_stream.stop()
             self._output_stream.close()
             self._output_stream = None
+
 
 # ==============================================================================
 # Public API functions
