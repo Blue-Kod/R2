@@ -172,7 +172,8 @@ class AISession:
         while self.running and reconnect_attempt < MAX_RECONNECT_ATTEMPTS:
             try:
                 await self._connect_and_process()
-                break  # natural session end
+                # if no exception: session ended normally (maybe we wanted to stop)
+                break
             except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
                 reconnect_attempt += 1
                 print(f"Connection lost (attempt {reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS}): {e}")
@@ -200,7 +201,19 @@ class AISession:
 
             receiver_task = asyncio.create_task(self._receiver())
             sender_task = asyncio.create_task(self._sender())
-            await asyncio.gather(receiver_task, sender_task)
+            # Wait for any task to complete
+            done, pending = await asyncio.wait(
+                [receiver_task, sender_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            # If receiver ended with exception, re-raise it
+            if receiver_task in done:
+                exc = receiver_task.exception()
+                if exc:
+                    raise exc
+            # Cancel pending tasks
+            for task in pending:
+                task.cancel()
 
         # After exiting the context manager, socket is closed
         self.ws = None
@@ -221,12 +234,12 @@ class AISession:
                 data = json.loads(raw)
             except websockets.ConnectionClosed as e:
                 print(f"Receiver: Connection closed ({e})")
-                self.ws = None      # signal sender to quit
-                break
+                self.ws = None
+                raise  # <-- re-raise to trigger reconnect
             except Exception as e:
                 print(f"Receiver error: {e}")
                 self.ws = None
-                break
+                raise
 
             if "sessionResumption" in data:
                 self._session_token = data["sessionResumption"]["handle"]
