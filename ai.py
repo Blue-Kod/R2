@@ -1,5 +1,5 @@
 """
-AI Library for R2 Robot - Persistent WebSocket session with reconnection.
+AI Library for R2 Robot - Persistent WebSocket session with automatic reconnection.
 Sends video frames via realtime input; uses frame buffer for context restoration.
 """
 
@@ -38,13 +38,11 @@ BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
 WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
 VOICE = "Enceladus"
 MAX_HISTORY_CHARS = 8000
-MAX_RECONNECT_ATTEMPTS = 5
-RECONNECT_BASE_DELAY = 2.0
 FRAME_HISTORY_LENGTH = 15
 
 # Global state
 _audio_enabled = True
-_chat_history = []          # List of strings
+_chat_history = []
 _output_stream = None
 _current_response = ""
 _session: Optional['AISession'] = None
@@ -134,16 +132,15 @@ def build_config(chat_history):
     return dict(CONFIG_BASE)
 
 # ==============================================================================
-# Enhanced AISession (Thread-safe message queue, graceful sender exit)
+# AISession with automatic reconnection and persistent queue
 # ==============================================================================
 
 class AISession:
     def __init__(self):
-        self.ws = None
-        self.send_queue = queue.Queue()
+        self.send_queue = queue.Queue()          # thread-safe
         self.loop = None
         self.thread = None
-        self.running = False
+        self.running = False                     # True after start() until stop()
         self._output_stream = None
         self._session_token: Optional[str] = None
 
@@ -156,67 +153,47 @@ class AISession:
             self._output_stream.start()
 
     async def _run_session(self):
-        # Warm up the proxy
-        for attempt in range(1, 6):
-            try:
-                resp = requests.get(BASE_URL, timeout=10)
-                if resp.status_code < 500:
-                    print(f"Warmed up Render ({resp.status_code})")
-                    break
-            except requests.RequestException:
-                pass
-            if attempt < 5:
-                await asyncio.sleep(2)
-
-        reconnect_attempt = 0
-        while self.running and reconnect_attempt < MAX_RECONNECT_ATTEMPTS:
-            try:
-                await self._connect_and_process()
-                # if no exception: session ended normally (maybe we wanted to stop)
+        """Keep reconnecting until stop() is called."""
+        while self.running:
+            # Warm up the proxy
+            for attempt in range(1, 6):
+                try:
+                    resp = requests.get(BASE_URL, timeout=10)
+                    if resp.status_code < 500:
+                        print(f"Warmed up Render ({resp.status_code})")
+                        break
+                except requests.RequestException:
+                    pass
+                if attempt < 5 and self.running:
+                    await asyncio.sleep(2)
+            if not self.running:
                 break
+
+            # Build config and setup
+            config = build_config(_chat_history)
+            setup_msg = {"api_key": API_KEY, "model_id": MODEL_ID, "config": config}
+            if self._session_token:
+                setup_msg["session_resumption"] = {"handle": self._session_token}
+
+            try:
+                async with websockets.connect(WS_URL, open_timeout=30) as ws:
+                    await ws.send(json.dumps(setup_msg))
+                    print("WebSocket session opened")
+
+                    # Re-send buffered video frames
+                    if _frame_buffer:
+                        await self._send_buffered_frames(ws)
+
+                    # Start receiver and sender tasks
+                    receiver_task = asyncio.create_task(self._receiver(ws))
+                    sender_task = asyncio.create_task(self._sender(ws))
+                    await asyncio.gather(receiver_task, sender_task)
             except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
-                reconnect_attempt += 1
-                print(f"Connection lost (attempt {reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS}): {e}")
-                delay = RECONNECT_BASE_DELAY * reconnect_attempt
-                time.sleep(delay)
+                print(f"Connection lost: {e}. Reconnecting in 2 seconds...")
+                await asyncio.sleep(2)
             except Exception as e:
-                print(f"Unexpected error in session: {e}")
-                break
-        self.running = False
-
-    async def _connect_and_process(self):
-        config = build_config(_chat_history)
-        setup_msg = {"api_key": API_KEY, "model_id": MODEL_ID, "config": config}
-        if self._session_token:
-            setup_msg["session_resumption"] = {"handle": self._session_token}
-
-        async with websockets.connect(WS_URL, open_timeout=30) as ws:
-            self.ws = ws
-            await ws.send(json.dumps(setup_msg))
-            print("WebSocket session opened")
-
-            # Re-send buffered video frames
-            if _frame_buffer:
-                await self._send_buffered_frames(ws)
-
-            receiver_task = asyncio.create_task(self._receiver())
-            sender_task = asyncio.create_task(self._sender())
-            # Wait for any task to complete
-            done, pending = await asyncio.wait(
-                [receiver_task, sender_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            # If receiver ended with exception, re-raise it
-            if receiver_task in done:
-                exc = receiver_task.exception()
-                if exc:
-                    raise exc
-            # Cancel pending tasks
-            for task in pending:
-                task.cancel()
-
-        # After exiting the context manager, socket is closed
-        self.ws = None
+                print(f"Unexpected error in session: {e}. Reconnecting in 2 seconds...")
+                await asyncio.sleep(2)
 
     async def _send_buffered_frames(self, ws):
         print(f"Re-sending {len(_frame_buffer)} buffered frames...")
@@ -226,20 +203,18 @@ class AISession:
             await asyncio.sleep(0.5)
         print("Buffered frames sent.")
 
-    async def _receiver(self):
+    async def _receiver(self, ws):
         global _current_response
-        while True:
+        while self.running:
             try:
-                raw = await self.ws.recv()
+                raw = await ws.recv()
                 data = json.loads(raw)
             except websockets.ConnectionClosed as e:
                 print(f"Receiver: Connection closed ({e})")
-                self.ws = None
-                raise  # <-- re-raise to trigger reconnect
+                break
             except Exception as e:
                 print(f"Receiver error: {e}")
-                self.ws = None
-                raise
+                break
 
             if "sessionResumption" in data:
                 self._session_token = data["sessionResumption"]["handle"]
@@ -270,17 +245,14 @@ class AISession:
                 print()
                 _current_response = ""
 
-    async def _sender(self):
+    async def _sender(self, ws):
         """Drain the send queue. Exits when the websocket is closed."""
-        while self.running and self.ws is not None:
+        while self.running and ws.open:
             try:
                 msg = self.send_queue.get_nowait()
-                if self.ws is None:
-                    break
                 try:
-                    await self.ws.send(json.dumps(msg))
+                    await ws.send(json.dumps(msg))
                 except Exception:
-                    self.ws = None
                     break
             except queue.Empty:
                 await asyncio.sleep(0.05)
@@ -303,21 +275,23 @@ class AISession:
         self.thread.start()
 
     def send_message(self, msg):
+        """Thread-safe message insertion. Works even during reconnect."""
         if self.running:
             self.send_queue.put(msg)
+        else:
+            print("[AI] Session not running, message discarded.")
 
     def stop(self):
         self.running = False
-        if self.loop and self.ws:
-            try:
-                asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
-            except Exception:
-                pass
-        while not self.send_queue.empty():
-            try:
-                self.send_queue.get_nowait()
-            except queue.Empty:
-                break
+        # Wake up the loop to exit gracefully
+        if self.loop:
+            asyncio.run_coroutine_threadsafe(self._stop_coro(), self.loop)
+
+    async def _stop_coro(self):
+        # Cancel any pending tasks? The loop will exit because running=False.
+        pass
+
+    def cleanup_audio(self):
         if self._output_stream:
             self._output_stream.stop()
             self._output_stream.close()
