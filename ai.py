@@ -38,6 +38,7 @@ def get_real_key(obscured):
         return decoded[::-1]
     except Exception:
         return None
+API_KEY = get_real_key(OBSCURED_API_KEY)
 
 CHARACTER_PROMPT = """
 Ты — робот R2. Стиль: краткий, немного официальный.
