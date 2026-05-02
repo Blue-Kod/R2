@@ -48,6 +48,7 @@ _current_response = ""
 _session: Optional['AISession'] = None
 _session_lock = threading.Lock()
 _frame_buffer: deque[bytes] = deque(maxlen=FRAME_HISTORY_LENGTH)
+_frame_lock = threading.Lock()   # protects _frame_buffer from concurrent access
 
 def get_current_response():
     return _current_response
@@ -196,8 +197,11 @@ class AISession:
                 await asyncio.sleep(2)
 
     async def _send_buffered_frames(self, ws):
-        print(f"Re-sending {len(_frame_buffer)} buffered frames...")
-        for jpeg_bytes in _frame_buffer:
+        """Send a snapshot of the frame buffer to avoid mutation during iteration."""
+        with _frame_lock:
+            frames = list(_frame_buffer)
+        print(f"Re-sending {len(frames)} buffered frames...")
+        for jpeg_bytes in frames:
             b64 = base64.b64encode(jpeg_bytes).decode('utf-8')
             await ws.send(json.dumps({"image_b64": b64, "mime_type": "image/jpeg"}))
             await asyncio.sleep(0.5)
@@ -247,7 +251,8 @@ class AISession:
 
     async def _sender(self, ws):
         """Drain the send queue. Exits when the websocket is closed."""
-        while self.running and ws.open:
+        while self.running:
+            # exit if send fails
             try:
                 msg = self.send_queue.get_nowait()
                 try:
@@ -288,7 +293,6 @@ class AISession:
             asyncio.run_coroutine_threadsafe(self._stop_coro(), self.loop)
 
     async def _stop_coro(self):
-        # Cancel any pending tasks? The loop will exit because running=False.
         pass
 
     def cleanup_audio(self):
@@ -327,7 +331,8 @@ def send_frame() -> None:
         print("[send_frame] JPEG encoding failed")
         return
     jpeg_bytes = jpeg.tobytes()
-    _frame_buffer.append(jpeg_bytes)
+    with _frame_lock:
+        _frame_buffer.append(jpeg_bytes)
     b64 = base64.b64encode(jpeg_bytes).decode('utf-8')
     session.send_message({"image_b64": b64, "mime_type": "image/jpeg"})
 
