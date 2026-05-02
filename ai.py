@@ -1,27 +1,35 @@
 """
-AI Library for R2 Robot – Persistent WebSocket with setupComplete-aware reconnection.
-Ensures that no data is sent before the server signals readiness.
+AI Library for R2 Robot – Thin client using stateful proxy.
+Command() sends text, send_frame() sends camera frame.
+Answers are received asynchronously, audio is played, code executed.
 """
 
 import asyncio
 import base64
 import json
-import queue
 import re
 import threading
 import time
-from collections import deque
-from typing import Optional
-
 import cv2
 import numpy as np
-import requests
 import sounddevice as sd
 import websockets
 
-# ==============================================================================
-# Configuration
-# ==============================================================================
+# Конфигурация
+PROXY_WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
+HARDWARE_RATE = 48000
+VOICE = "Enceladus"
+
+_audio_enabled = True
+_current_response = ""
+_output_stream = None
+
+# Объекты для фонового приёма ответов
+_ws = None
+_loop = None          # asyncio event loop, работающий в отдельном потоке
+_receiver_thread = None
+_running = False
+
 OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
 
 def get_real_key(obscured):
@@ -31,37 +39,51 @@ def get_real_key(obscured):
     except Exception:
         return None
 
-API_KEY = get_real_key(OBSCURED_API_KEY)
-MODEL_ID = "gemini-3.1-flash-live-preview"
-HARDWARE_RATE = 48000
-BASE_URL = "https://proxy-gemini-rlj1.onrender.com"
-WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
-VOICE = "Enceladus"
-MAX_HISTORY_CHARS = 8000
-FRAME_HISTORY_LENGTH = 15
+CHARACTER_PROMPT = """
+Ты — робот R2. Стиль: краткий, немного официальный.
+Говори на русском. Всегда используй '+' перед ударными гласными. Мужской род.
+Говор+и внятно, не тор+опся. Произнос+и слов+а полн+остью, избег+ай сокращ+ений. Твоя речь должна быть разборчивой, как у диктора.
 
-# Global state
-_audio_enabled = True
-_chat_history = []
-_output_stream = None
-_current_response = ""
-_session: Optional['AISession'] = None
-_session_lock = threading.Lock()
-_frame_buffer: deque[bytes] = deque(maxlen=FRAME_HISTORY_LENGTH)
-_frame_lock = threading.Lock()
+Ты видишь мир через камеру робота. Перед каждым ответом тебе показывают несколько кадров с основной камеры. Используй эту информацию, чтобы описывать окружение, людей, предметы. Если видишь человека, поздоровайся или спроси, чем помочь.
 
-def get_current_response():
-    return _current_response
+ИНСТРУМЕНТЫ (Python):
+- log(msg) -> запись в лог. Пользователь её НЕ видит.
+- set_emote(emotion) -> установить эмоцию (happy, sad, neutral, и т.д.).
+- set_eyes(x, y) -> положение глаз (от -1.0 до 1.0).
+- get_cpu_temp() -> температура CPU.
+- get_system_stats() -> статистика системы.
 
-def enable_ai_audio(enabled: bool) -> None:
-    global _audio_enabled
-    _audio_enabled = bool(enabled)
-    print(f"[AI] Audio {'enabled' if _audio_enabled else 'disabled'}")
+АЛГОРИТМ РЕКУРСИИ:
+1. Если нужно действие/расчет: скажи "Выполн+яю..." и напиши #EXECUTE ... #END.
+2. В блоке #EXECUTE пиши ТОЛЬКО код.
+3. Если ты получила [SYSTEM_LOGS], проанализируй их и дай ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.
+4. ТВОЙ ОТВЕТ БЕЗ БЛОКА #EXECUTE ЯВЛЯЕТСЯ СИГНАЛОМ ЗАВЕРШЕНИЯ ЗАДАЧИ.
+5. Пиши код только если тебе реально нужно получить данные или выявить команду.
+6. Не пиши ничего после блока кода. Закончился блок кода - ВСЁ. КОНЕЦ. Только после следующего сообщения можешь что-то писать.
+"""
 
-# --- High‑level functions (unchanged) ---
+# -----------------------------------------------------------------------------
+# Конфиг сессии
+# -----------------------------------------------------------------------------
+
+CONFIG = {
+    "response_modalities": ["AUDIO"],
+    "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE}}},
+    "safety_settings": [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ],
+    "system_instruction": CHARACTER_PROMPT
+}
+
+# -----------------------------------------------------------------------------
+# Функции, доступные модели (для #EXECUTE)
+# -----------------------------------------------------------------------------
+
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
-    _chat_history.append(formatted_msg)
     print(formatted_msg)
 
 def set_emote(emotion: str) -> bool:
@@ -87,274 +109,138 @@ def get_system_stats() -> dict:
     return stats
 
 _AI_EXEC_GLOBALS = {
-    "log": log, "print": log,
-    "set_emote": set_emote, "set_eyes": set_eyes,
-    "get_cpu_temp": get_cpu_temp, "get_system_stats": get_system_stats,
+    "log": log,
+    "print": log,
+    "set_emote": set_emote,
+    "set_eyes": set_eyes,
+    "get_cpu_temp": get_cpu_temp,
+    "get_system_stats": get_system_stats,
 }
 
-CHARACTER_PROMPT = """
-Ты — робот R2. Стиль: краткий, немного официальный.
-Говори на русском. Всегда используй '+' перед ударными гласными. Мужской род.
-Говор+и внятно, не тор+опся. Произнос+и слов+а полн+остью, избег+ай сокращ+ений. Твоя речь должна быть разборчивой, как у диктора.
+# ----------------------------------------------------------------------
+# Внутренний приёмник ответов (работает в фоновом asyncio‑потоке)
+# ----------------------------------------------------------------------
+async def _receiver_loop():
+    global _current_response
+    while _running:
+        try:
+            raw = await _ws.recv()
+            data = json.loads(raw)
+        except Exception:
+            print("Proxy connection lost, reconnecting...")
+            await _connect_to_proxy()
+            continue
 
-Ты видишь мир через камеру робота. Перед каждым ответом тебе показывают несколько кадров с основной камеры. Используй эту информацию, чтобы описывать окружение, людей, предметы. Если видишь человека, поздоровайся или спроси, чем помочь.
+        if "text" in data:
+            _current_response = data["text"]
+            print(_current_response)
 
-ИНСТРУМЕНТЫ (Python):
-- log(msg) -> запись в лог. Пользователь её НЕ видит.
-- set_emote(emotion) -> установить эмоцию (happy, sad, neutral, и т.д.).
-- set_eyes(x, y) -> положение глаз (от -1.0 до 1.0).
-- get_cpu_temp() -> температура CPU.
-- get_system_stats() -> статистика системы.
+            # Проверка на #EXECUTE
+            code_match = re.search(r"#EXECUTE\n(.*?)\n#END", _current_response, re.DOTALL)
+            if code_match:
+                code = code_match.group(1).strip()
+                print(f"Executing: {code}")
+                try:
+                    exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
+                except Exception as e:
+                    print(f"Execution error: {e}")
+                # Отправляем результат как новое сообщение пользователя
+                await _ws.send(json.dumps({"text": "Code executed.", "turn_complete": True}))
 
-АЛГОРИТМ РЕКУРСИИ:
-1. Если нужно действие/расчет: скажи "Выполн+яю..." и напиши #EXECUTE ... #END.
-2. В блоке #EXECUTE пиши ТОЛЬКО код.
-3. Если ты получила [SYSTEM_LOGS], проанализируй их и дай ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.
-4. ТВОЙ ОТВЕТ БЕЗ БЛОКА #EXECUTE ЯВЛЯЕТСЯ СИГНАЛОМ ЗАВЕРШЕНИЯ ЗАДАЧИ.
-5. Пиши код только если тебе реально нужно получить данные или выявить команду.
-6. Не пиши ничего после блока кода. Закончился блок кода - ВСЁ. КОНЕЦ. Только после следующего сообщения можешь что-то писать.
-"""
+        if "audio" in data and _audio_enabled:
+            _play_audio(data["audio"])
 
-CONFIG_BASE = {
-    "response_modalities": ["AUDIO"],
-    "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE}}},
-    "safety_settings": [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ],
-    "system_instruction": CHARACTER_PROMPT
-}
+        if data.get("end_of_turn"):
+            _current_response = ""
 
-def build_config(chat_history):
-    return dict(CONFIG_BASE)
-
-# ==============================================================================
-# AISession with setupComplete‑aware sending
-# ==============================================================================
-
-class AISession:
-    def __init__(self):
-        self.send_queue = queue.Queue()   # thread‑safe
-        self.loop = None
-        self.thread = None
-        self.running = False
-        self._output_stream = None
-        self._ready_event = asyncio.Event()  # set when setupComplete is received
-
-    async def _ensure_output_stream(self):
-        if self._output_stream is None and _audio_enabled:
-            self._output_stream = sd.OutputStream(
+def _play_audio(audio_b64: str):
+    global _output_stream
+    try:
+        missing = len(audio_b64) % 4
+        if missing:
+            audio_b64 += '=' * (4 - missing)
+        raw_bytes = base64.b64decode(audio_b64)
+        if len(raw_bytes) % 2:
+            raw_bytes = raw_bytes[:-1]
+        arr = np.frombuffer(raw_bytes, dtype=np.int16)
+        if arr.size == 0:
+            return
+        if _output_stream is None:
+            _output_stream = sd.OutputStream(
                 samplerate=HARDWARE_RATE, channels=1, dtype='int16',
                 device=1, latency='low'
             )
-            self._output_stream.start()
+            _output_stream.start()
+        _output_stream.write(np.repeat(arr, 2))
+    except Exception as e:
+        print(f"Audio error: {e}")
 
-    async def _run_session(self):
-        while self.running:
-            for attempt in range(1, 6):
-                try:
-                    resp = requests.get(BASE_URL, timeout=10)
-                    if resp.status_code < 500:
-                        print(f"Warmed up Render ({resp.status_code})")
-                        break
-                except requests.RequestException:
-                    pass
-                if attempt < 5 and self.running:
-                    await asyncio.sleep(2)
-            if not self.running:
-                break
-
-            self._ready_event.clear()  # not ready until setupComplete
-            config = build_config(_chat_history)
-            setup_msg = {"api_key": API_KEY, "model_id": MODEL_ID, "config": config}
-
-            try:
-                async with websockets.connect(WS_URL, open_timeout=30) as ws:
-                    await ws.send(json.dumps(setup_msg))
-                    print("WebSocket session opened")
-
-                    # Wait until server confirms setup is complete
-                    try:
-                        await asyncio.wait_for(self._wait_for_setup_complete(ws), timeout=10)
-                    except asyncio.TimeoutError:
-                        print("Setup did not complete in time, reconnecting...")
-                        await asyncio.sleep(2)
-                        continue
-
-                    # Send recent frames as quick context
-                    await self._send_quick_context(ws)
-
-                    # Now start normal receiver / sender
-                    receiver_task = asyncio.create_task(self._receiver(ws))
-                    sender_task = asyncio.create_task(self._sender(ws))
-                    await asyncio.gather(receiver_task, sender_task)
-
-            except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
-                print(f"Connection lost: {e}. Reconnecting in 2 seconds...")
-                await asyncio.sleep(2)
-            except Exception as e:
-                print(f"Unexpected error in session: {e}. Reconnecting in 2 seconds...")
-                await asyncio.sleep(2)
-
-    async def _wait_for_setup_complete(self, ws):
-        """Block until we receive setupComplete or connection closes."""
-        while True:
-            raw = await ws.recv()
-            data = json.loads(raw)
-            if "setupComplete" in data:
-                print("Setup complete – ready to send data.")
-                self._ready_event.set()
-                return
-            # If other messages come first (unlikely), just ignore them for now.
-
-    async def _send_quick_context(self, ws):
-        """Send last 2 frames from buffer so the model has visual context."""
-        with _frame_lock:
-            recent = list(_frame_buffer)[-2:] if len(_frame_buffer) > 2 else list(_frame_buffer)
-        if not recent:
+async def _connect_to_proxy():
+    global _ws
+    retries = 5
+    while retries:
+        try:
+            _ws = await websockets.connect(PROXY_WS_URL)
+            # Сразу отправляем setup
+            setup_msg = {
+                "api_key": API_KEY,
+                "model_id": "gemini-3.1-flash-live-preview",
+                "config": CONFIG
+            }
+            await _ws.send(json.dumps(setup_msg))
+            print("Connected to proxy")
             return
-        print(f"Quick context: sending {len(recent)} recent frames...")
-        for jpeg_bytes in recent:
-            b64 = base64.b64encode(jpeg_bytes).decode('utf-8')
-            await ws.send(json.dumps({"image_b64": b64, "mime_type": "image/jpeg"}))
-            await asyncio.sleep(0.1)
-        print("Quick context sent.")
+        except Exception as e:
+            print(f"Connection failed ({retries} retries left): {e}")
+            retries -= 1
+            await asyncio.sleep(2)
+    raise RuntimeError("Cannot connect to proxy")
 
-    async def _receiver(self, ws):
-        global _current_response
-        while self.running:
-            try:
-                raw = await ws.recv()
-                data = json.loads(raw)
-            except websockets.ConnectionClosed as e:
-                print(f"Receiver: Connection closed ({e})")
-                break
-            except Exception as e:
-                print(f"Receiver error: {e}")
-                break
+def _run_event_loop():
+    global _loop, _running
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    _loop = loop
+    loop.run_until_complete(_connect_to_proxy())
+    loop.run_until_complete(_receiver_loop())
 
-            if "text" in data:
-                clean = re.sub(r"\+", "", data["text"])
-                _current_response += clean
-                print(clean, end="", flush=True)
+# ----------------------------------------------------------------------
+# Публичные функции (вызываются из main.py)
+# ----------------------------------------------------------------------
+def init():
+    global _running, _receiver_thread
+    if _running:
+        return
+    _running = True
+    _receiver_thread = threading.Thread(target=_run_event_loop, daemon=True)
+    _receiver_thread.start()
 
-            if "audio" in data and _audio_enabled:
-                try:
-                    audio_b64 = data["audio"]
-                    missing = len(audio_b64) % 4
-                    if missing:
-                        audio_b64 += '=' * (4 - missing)
-                    raw_bytes = base64.b64decode(audio_b64)
-                    if len(raw_bytes) % 2:
-                        raw_bytes = raw_bytes[:-1]
-                    arr = np.frombuffer(raw_bytes, dtype=np.int16)
-                    if arr.size > 0:
-                        await self._ensure_output_stream()
-                        if self._output_stream:
-                            self._output_stream.write(np.repeat(arr, 2))
-                except Exception as e:
-                    print(f"\nAudio error: {e}")
+def command(text: str):
+    """Отправить текстовую команду. Возвращает управление мгновенно."""
+    if not _loop or not _ws:
+        print("Not connected")
+        return
+    msg = {"text": text, "turn_complete": True}
+    asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
 
-            if data.get("end_of_turn"):
-                print()
-                _current_response = ""
-
-    async def _sender(self, ws):
-        """Drain the send queue only AFTER ready_event is set."""
-        # Wait until we are allowed to send
-        await self._ready_event.wait()
-        while self.running:
-            try:
-                msg = self.send_queue.get_nowait()
-                try:
-                    await ws.send(json.dumps(msg))
-                except Exception:
-                    break
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-
-    def start(self):
-        if self.running:
-            return
-        self.running = True
-
-        def run_loop():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self.loop = loop
-            try:
-                loop.run_until_complete(self._run_session())
-            finally:
-                loop.close()
-
-        self.thread = threading.Thread(target=run_loop, daemon=True)
-        self.thread.start()
-
-    def send_message(self, msg):
-        """Thread‑safe. Messages are queued even before ready."""
-        if self.running:
-            self.send_queue.put(msg)
-        else:
-            print("[AI] Session not running, message discarded.")
-
-    def stop(self):
-        self.running = False
-        if self.loop:
-            asyncio.run_coroutine_threadsafe(self._stop_coro(), self.loop)
-
-    async def _stop_coro(self):
-        pass
-
-    def cleanup_audio(self):
-        if self._output_stream:
-            self._output_stream.stop()
-            self._output_stream.close()
-            self._output_stream = None
-
-
-# ==============================================================================
-# Public API
-# ==============================================================================
-
-def init_session():
-    global _session
-    with _session_lock:
-        if _session is None or not _session.running:
-            _session = AISession()
-            _session.start()
-        return _session
-
-def command(text: str) -> None:
-    session = init_session()
-    _chat_history.append(f"Пользователь: {text}")
-    session.send_message({"text": text})
-
-def send_frame() -> None:
+def send_frame():
+    """Отправить кадр с камеры."""
+    if not _loop or not _ws:
+        return
     from r2_app.high_level import get_raw_frame
-    session = init_session()
     frame = get_raw_frame(left=True)
     if frame is None:
-        print("[send_frame] No frame captured")
         return
     ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     if not ret:
-        print("[send_frame] JPEG encoding failed")
         return
-    jpeg_bytes = jpeg.tobytes()
-    with _frame_lock:
-        _frame_buffer.append(jpeg_bytes)
-    b64 = base64.b64encode(jpeg_bytes).decode('utf-8')
-    session.send_message({"image_b64": b64, "mime_type": "image/jpeg"})
+    b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+    msg = {"image_b64": b64, "mime_type": "image/jpeg"}
+    asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
 
 def cleanup():
-    global _session
-    if _session:
-        _session.stop()
-        _session = None
-    global _output_stream
+    global _running
+    _running = False
     if _output_stream:
         _output_stream.stop()
         _output_stream.close()
-        _output_stream = None

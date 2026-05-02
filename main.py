@@ -4,6 +4,8 @@
 import argparse
 import os
 import time
+
+import ai
 from ai import command, send_frame
 from r2_app.high_level import *
 
@@ -24,7 +26,8 @@ if __name__ == "__main__":
         print(f"R2 v{APP_VERSION}")
     else:
         start_background()
-        command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.'")
+        ai.init()
+        ai.command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.'")
         while True:
             time.sleep(1)
             send_frame()
