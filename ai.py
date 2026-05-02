@@ -134,7 +134,7 @@ def build_config(chat_history):
     return dict(CONFIG_BASE)
 
 # ==============================================================================
-# Enhanced AISession (Thread-safe message queue)
+# Enhanced AISession (Thread-safe message queue, graceful sender exit)
 # ==============================================================================
 
 class AISession:
@@ -172,7 +172,7 @@ class AISession:
         while self.running and reconnect_attempt < MAX_RECONNECT_ATTEMPTS:
             try:
                 await self._connect_and_process()
-                break
+                break  # natural session end
             except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
                 reconnect_attempt += 1
                 print(f"Connection lost (attempt {reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS}): {e}")
@@ -202,6 +202,7 @@ class AISession:
             sender_task = asyncio.create_task(self._sender())
             await asyncio.gather(receiver_task, sender_task)
 
+        # After exiting the context manager, socket is closed
         self.ws = None
 
     async def _send_buffered_frames(self, ws):
@@ -220,9 +221,11 @@ class AISession:
                 data = json.loads(raw)
             except websockets.ConnectionClosed as e:
                 print(f"Receiver: Connection closed ({e})")
+                self.ws = None      # signal sender to quit
                 break
             except Exception as e:
                 print(f"Receiver error: {e}")
+                self.ws = None
                 break
 
             if "sessionResumption" in data:
@@ -255,19 +258,19 @@ class AISession:
                 _current_response = ""
 
     async def _sender(self):
-        """Drain the send queue without choking on closed socket."""
-        while self.running:
+        """Drain the send queue. Exits when the websocket is closed."""
+        while self.running and self.ws is not None:
             try:
                 msg = self.send_queue.get_nowait()
                 if self.ws is None:
-                    continue
+                    break
                 try:
                     await self.ws.send(json.dumps(msg))
                 except Exception:
                     self.ws = None
+                    break
             except queue.Empty:
-                pass
-            await asyncio.sleep(0.05)
+                await asyncio.sleep(0.05)
 
     def start(self):
         if self.running:
