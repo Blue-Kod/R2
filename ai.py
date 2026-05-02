@@ -1,6 +1,6 @@
 """
-AI Library for R2 Robot - Persistent WebSocket session with automatic reconnection.
-Sends only last 2 frames on reconnect for quick context; no session_resumption.
+AI Library for R2 Robot – Persistent WebSocket with setupComplete-aware reconnection.
+Ensures that no data is sent before the server signals readiness.
 """
 
 import asyncio
@@ -58,7 +58,7 @@ def enable_ai_audio(enabled: bool) -> None:
     _audio_enabled = bool(enabled)
     print(f"[AI] Audio {'enabled' if _audio_enabled else 'disabled'}")
 
-# --- High-level functions available to AI (unchanged) ---
+# --- High‑level functions (unchanged) ---
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
     _chat_history.append(formatted_msg)
@@ -127,22 +127,21 @@ CONFIG_BASE = {
     "system_instruction": CHARACTER_PROMPT
 }
 
-BANNED_PHRASES = ["i'm"]
-
 def build_config(chat_history):
     return dict(CONFIG_BASE)
 
 # ==============================================================================
-# AISession with automatic reconnection and persistent queue
+# AISession with setupComplete‑aware sending
 # ==============================================================================
 
 class AISession:
     def __init__(self):
-        self.send_queue = queue.Queue()
+        self.send_queue = queue.Queue()   # thread‑safe
         self.loop = None
         self.thread = None
         self.running = False
         self._output_stream = None
+        self._ready_event = asyncio.Event()  # set when setupComplete is received
 
     async def _ensure_output_stream(self):
         if self._output_stream is None and _audio_enabled:
@@ -153,9 +152,7 @@ class AISession:
             self._output_stream.start()
 
     async def _run_session(self):
-        """Keep reconnecting until stop() is called."""
         while self.running:
-            # Warm up proxy
             for attempt in range(1, 6):
                 try:
                     resp = requests.get(BASE_URL, timeout=10)
@@ -169,6 +166,7 @@ class AISession:
             if not self.running:
                 break
 
+            self._ready_event.clear()  # not ready until setupComplete
             config = build_config(_chat_history)
             setup_msg = {"api_key": API_KEY, "model_id": MODEL_ID, "config": config}
 
@@ -177,13 +175,22 @@ class AISession:
                     await ws.send(json.dumps(setup_msg))
                     print("WebSocket session opened")
 
-                    # Quick context: last 2 frames from buffer
+                    # Wait until server confirms setup is complete
+                    try:
+                        await asyncio.wait_for(self._wait_for_setup_complete(ws), timeout=10)
+                    except asyncio.TimeoutError:
+                        print("Setup did not complete in time, reconnecting...")
+                        await asyncio.sleep(2)
+                        continue
+
+                    # Send recent frames as quick context
                     await self._send_quick_context(ws)
 
-                    # Parallel tasks for receiving and sending
+                    # Now start normal receiver / sender
                     receiver_task = asyncio.create_task(self._receiver(ws))
                     sender_task = asyncio.create_task(self._sender(ws))
                     await asyncio.gather(receiver_task, sender_task)
+
             except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as e:
                 print(f"Connection lost: {e}. Reconnecting in 2 seconds...")
                 await asyncio.sleep(2)
@@ -191,8 +198,19 @@ class AISession:
                 print(f"Unexpected error in session: {e}. Reconnecting in 2 seconds...")
                 await asyncio.sleep(2)
 
+    async def _wait_for_setup_complete(self, ws):
+        """Block until we receive setupComplete or connection closes."""
+        while True:
+            raw = await ws.recv()
+            data = json.loads(raw)
+            if "setupComplete" in data:
+                print("Setup complete – ready to send data.")
+                self._ready_event.set()
+                return
+            # If other messages come first (unlikely), just ignore them for now.
+
     async def _send_quick_context(self, ws):
-        """Send only the last 2 frames to quickly re-establish visual context."""
+        """Send last 2 frames from buffer so the model has visual context."""
         with _frame_lock:
             recent = list(_frame_buffer)[-2:] if len(_frame_buffer) > 2 else list(_frame_buffer)
         if not recent:
@@ -244,7 +262,9 @@ class AISession:
                 _current_response = ""
 
     async def _sender(self, ws):
-        """Drain the send queue. Exits when the websocket is closed."""
+        """Drain the send queue only AFTER ready_event is set."""
+        # Wait until we are allowed to send
+        await self._ready_event.wait()
         while self.running:
             try:
                 msg = self.send_queue.get_nowait()
@@ -273,7 +293,7 @@ class AISession:
         self.thread.start()
 
     def send_message(self, msg):
-        """Thread-safe message insertion. Works even during reconnect."""
+        """Thread‑safe. Messages are queued even before ready."""
         if self.running:
             self.send_queue.put(msg)
         else:
@@ -295,7 +315,7 @@ class AISession:
 
 
 # ==============================================================================
-# Public API functions
+# Public API
 # ==============================================================================
 
 def init_session():
