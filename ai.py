@@ -6,6 +6,7 @@ Answers are received asynchronously, audio is played, code executed.
 
 import asyncio
 import base64
+import io
 import json
 import re
 import threading
@@ -57,7 +58,7 @@ CHARACTER_PROMPT = """
 АЛГОРИТМ РЕКУРСИИ:
 1. Если нужно действие/расчет: скажи "Выполн+яю..." и напиши #EXECUTE ... #END.
 2. В блоке #EXECUTE пиши ТОЛЬКО код.
-3. Если ты получила [SYSTEM_LOGS], проанализируй их и дай ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.
+3. После выполнения кода ты получишь сообщение "[SYSTEM_LOGS]" с результатами. Проанализируй их и дай ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.
 4. ТВОЙ ОТВЕТ БЕЗ БЛОКА #EXECUTE ЯВЛЯЕТСЯ СИГНАЛОМ ЗАВЕРШЕНИЯ ЗАДАЧИ.
 5. Пиши код только если тебе реально нужно получить данные или выявить команду.
 6. Не пиши ничего после блока кода. Закончился блок кода - ВСЁ. КОНЕЦ. Только после следующего сообщения можешь что-то писать.
@@ -136,16 +137,33 @@ async def _receiver_loop():
             if code_match:
                 code = code_match.group(1).strip()
                 print(f"Executing: {code}")
+                # Перехватываем stdout
+                captured_output = io.StringIO()
                 try:
+                    # Подменяем sys.stdout на наш StringIO, но оставляем оригинал для realtime логов
+                    import sys
+                    original_stdout = sys.stdout
+                    sys.stdout = captured_output
                     exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
                 except Exception as e:
                     print(f"Execution error: {e}")
-                # Отправляем результат как новое сообщение пользователя
-                msg = {"text": "Code executed.", "turn_complete": True}
+                finally:
+                    sys.stdout = original_stdout
+
+                output = captured_output.getvalue()
+                captured_output.close()
+
+                # Формируем сообщение с логами для модели
+                if output.strip():
+                    system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
+                else:
+                    system_log_text = "[SYSTEM_LOGS]\n(no output)\n[END_LOGS]"
+
+                msg = {"text": system_log_text, "turn_complete": True}
                 try:
                     await _ws.send(json.dumps(msg))
                 except Exception as e:
-                    print(f"Failed to send code result: {e}")
+                    print(f"Failed to send logs: {e}")
 
         if "audio" in data and _audio_enabled:
             _play_audio(data["audio"])
@@ -168,7 +186,7 @@ def _play_audio(audio_b64: str):
         if _output_stream is None:
             _output_stream = sd.OutputStream(
                 samplerate=HARDWARE_RATE, channels=1, dtype='int16',
-                device=1, latency='low'
+                latency='low'
             )
             _output_stream.start()
         _output_stream.write(np.repeat(arr, 2))
@@ -184,7 +202,6 @@ async def _connect_to_proxy():
                 ping_interval=20,
                 ping_timeout=20
             )
-            # Сразу отправляем setup
             setup_msg = {
                 "api_key": API_KEY,
                 "model_id": "gemini-3.1-flash-live-preview",
