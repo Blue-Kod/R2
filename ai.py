@@ -11,6 +11,7 @@ import json
 import re
 import sys
 import threading
+import traceback
 import time
 import cv2
 import numpy as np
@@ -31,6 +32,8 @@ _ws = None
 _loop = None          # asyncio event loop в отдельном потоке
 _receiver_thread = None
 _running = False
+
+_executing = False    # флаг для предотвращения рекурсивных EXECUTE
 
 OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
 
@@ -81,17 +84,19 @@ CONFIG = {
 # Функции, доступные модели (для #EXECUTE)
 # -----------------------------------------------------------------------------
 def log(message: str) -> None:
+    """Логирование (вывод в терминал и в перехваченный stdout)"""
     formatted_msg = f"[LOG]: {message}"
-    print(formatted_msg)
+    # Используем оригинальный print (встроенный) для гарантии
+    __builtins__["print"](formatted_msg)
 
 def set_emote(emotion: str) -> bool:
     from r2_app.high_level import emote
-    print(f"[AI-EXEC] Setting emote: {emotion}")
+    __builtins__["print"](f"[AI-EXEC] Setting emote: {emotion}")
     return emote(emotion)
 
 def set_eyes(x: float, y: float) -> None:
     from r2_app.high_level import set_eyes_position
-    print(f"[AI-EXEC] Setting eyes: x={x}, y={y}")
+    __builtins__["print"](f"[AI-EXEC] Setting eyes: x={x}, y={y}")
     set_eyes_position(x, y)
 
 def get_cpu_temp() -> str:
@@ -108,7 +113,6 @@ def get_system_stats() -> dict:
 
 _AI_EXEC_GLOBALS = {
     "log": log,
-    "print": log,
     "set_emote": set_emote,
     "set_eyes": set_eyes,
     "get_cpu_temp": get_cpu_temp,
@@ -119,7 +123,7 @@ _AI_EXEC_GLOBALS = {
 # Внутренний приёмник ответов (работает в фоновом asyncio‑потоке)
 # -----------------------------------------------------------------------------
 async def _receiver_loop():
-    global _current_response
+    global _current_response, _executing
     while _running:
         try:
             raw = await _ws.recv()
@@ -133,50 +137,60 @@ async def _receiver_loop():
             _current_response = data["text"]
             print(f"\n🤖 Модель: {_current_response}")
 
-            # Проверка на #EXECUTE
+            # Защита от вложенного EXECUTE
+            if _executing:
+                print("⚠️ Игнорирую вложенный #EXECUTE (уже выполняется)")
+                continue
+
             code_match = re.search(r"#EXECUTE\n(.*?)\n#END", _current_response, re.DOTALL)
             if code_match:
-                code = code_match.group(1).strip()
-                print(f"\n⚡ Выполняю код:\n{code}\n")
-
-                # Перехват stdout
-                captured_output = io.StringIO()
-                exec_error = None
-                original_stdout = sys.stdout
-                sys.stdout = captured_output
+                _executing = True
                 try:
-                    exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
-                except Exception as e:
-                    exec_error = e
-                finally:
-                    sys.stdout = original_stdout
+                    code = code_match.group(1).strip()
+                    print(f"\n⚡ Выполняю код:\n{code}\n")
 
-                output = captured_output.getvalue()
-                captured_output.close()
+                    captured_output = io.StringIO()
+                    exec_error = None
+                    original_stdout = sys.stdout
+                    # Перенаправляем stdout в StringIO
+                    sys.stdout = captured_output
 
-                # Выводим захваченный вывод в консоль для контроля
-                if output.strip():
-                    print(f"📋 Логи выполнения:\n{output.strip()}")
-                else:
-                    print("📋 Логи выполнения: (пусто)")
-
-                if exec_error:
-                    print(f"❌ Ошибка выполнения: {exec_error}")
-                    system_log_text = f"[SYSTEM_LOGS]\nОшибка: {exec_error}\n[END_LOGS]"
-                else:
-                    system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
-
-                # Отправляем модели
-                if _ws is not None:
-                    msg = {"text": system_log_text, "turn_complete": True}
                     try:
-                        print(f"📤 Отправляю модели логи...")
+                        exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
+                    except Exception as e:
+                        exec_error = e
+                        # Полный traceback для отладки
+                        tb = traceback.format_exc()
+                        captured_output.write(f"\n--- TRACEBACK ---\n{tb}\n")
+                    finally:
+                        sys.stdout = original_stdout
+
+                    output = captured_output.getvalue()
+                    captured_output.close()
+
+                    # Вывод результата в консоль
+                    if output.strip():
+                        print(f"📋 Логи выполнения:\n{output.strip()}")
+                    else:
+                        print("📋 Логи выполнения: (пусто)")
+
+                    if exec_error:
+                        error_info = f"Ошибка: {str(exec_error)}\n{tb if 'tb' in dir() else ''}"
+                        print(f"❌ Ошибка выполнения (см. traceback выше)")
+                        system_log_text = f"[SYSTEM_LOGS]\n{error_info}\n[END_LOGS]"
+                    else:
+                        system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
+
+                    if _ws is not None:
+                        msg = {"text": system_log_text, "turn_complete": True}
+                        print("📤 Отправляю модели логи...")
                         await _ws.send(json.dumps(msg))
-                        print(f"✅ Логи отправлены успешно")
-                    except Exception as send_err:
-                        print(f"❌ Не удалось отправить логи: {send_err}")
-                else:
-                    print("❌ WebSocket не подключён, не могу отправить логи")
+                        print("✅ Логи отправлены успешно")
+                    else:
+                        print("❌ WebSocket не подключён")
+
+                finally:
+                    _executing = False
 
         if "audio" in data and _audio_enabled:
             _play_audio(data["audio"])
@@ -200,8 +214,7 @@ def _play_audio(audio_b64: str):
         if _output_stream is None:
             _output_stream = sd.OutputStream(
                 samplerate=HARDWARE_RATE, channels=1, dtype='int16',
-                latency='low', device=1
-
+                latency='low'
             )
             _output_stream.start()
         _output_stream.write(np.repeat(arr, 2))

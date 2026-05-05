@@ -20,30 +20,29 @@ DEFAULT_OFFSETS = {
     6: 0.0,    # Правый локоть
     7: 22.0,    # Левый локоть
 }
-# ----------------------------------------------------------------------
 
+# ----------------------------------------------------------------------
+# Инверсия для правых сервоприводов
+# Если канал в этом множестве, угол пересчитывается как max_angle - angle.
+# Для стандартной конфигурации (0..270) это даёт зеркальное отражение.
+# ----------------------------------------------------------------------
+INVERTED_CHANNELS = {1, 4, 6}   # правое плечо, поворот правого плеча, правый локоть
+# ----------------------------------------------------------------------
 
 class ServoController:
     def __init__(self, bus=0, address=0x40, freq=50, channel_configs=None):
-        """
-        Инициализация контроллера PCA9685.
-        :param bus: номер I2C шины
-        :param address: адрес устройства
-        :param freq: частота ШИМ (Гц)
-        :param channel_configs: словарь {channel: (min_angle, max_angle, min_pulse, max_pulse)}
-        """
         self.bus = bus
         self.address = address
         self.freq = freq
         self.pwm = None
         self.initialized = False
 
-        # Текущие углы (чистые, без offset)
+        # Текущие углы (чистые, без offset и инверсии – логические)
         self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 45, 5: 45, 6: 135, 7: 135}
         self.lock = threading.Lock()
 
-        # Offset для каждого канала (из DEFAULT_OFFSETS)
         self.offsets = {}
+        self.inverted_channels = set(INVERTED_CHANNELS)   # копия множества
 
         # Конфигурация каналов по умолчанию (8 каналов)
         if channel_configs is None:
@@ -60,11 +59,11 @@ class ServoController:
         else:
             self.channel_configs = channel_configs
 
-        # Заполняем offsets из DEFAULT_OFFSETS для всех существующих каналов
+        # Заполняем offsets из DEFAULT_OFFSETS
         for ch in self.channel_configs:
             self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
 
-        # Попытка подключения к PCA9685 (без отдельного _init_pca)
+        # Попытка подключения к PCA9685
         try:
             from PCA9685_smbus2 import PCA9685
             self.pwm = PCA9685.PCA9685(interface=self.bus, address=self.address)
@@ -76,13 +75,9 @@ class ServoController:
             self.initialized = False
 
     # ------------------------------------------------------------------
-    # Offset management (для ручного управления во время работы)
+    # Offset management
     # ------------------------------------------------------------------
     def set_offset(self, channel: int, offset: float) -> bool:
-        """
-        Установить оффсет для канала (в градусах).
-        offset будет прибавляться к целевому углу при любой команде.
-        """
         if channel not in self.channel_configs:
             print(f"Канал {channel} не существует")
             return False
@@ -95,11 +90,28 @@ class ServoController:
             return self.offsets.get(channel, 0.0)
 
     def reset_offsets_to_default(self):
-        """Сбросить все оффсеты к значениям из DEFAULT_OFFSETS."""
         with self.lock:
             for ch in self.channel_configs:
                 self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
         print("Offsets reset to defaults")
+
+    # ------------------------------------------------------------------
+    # Инверсия каналов
+    # ------------------------------------------------------------------
+    def set_inverted(self, channel: int, inverted: bool) -> bool:
+        """Включить/выключить инверсию для канала."""
+        if channel not in self.channel_configs:
+            return False
+        with self.lock:
+            if inverted:
+                self.inverted_channels.add(channel)
+            else:
+                self.inverted_channels.discard(channel)
+        return True
+
+    def get_inverted(self, channel: int) -> bool:
+        with self.lock:
+            return channel in self.inverted_channels
 
     # ------------------------------------------------------------------
     # Преобразование угла в импульс
@@ -119,15 +131,14 @@ class ServoController:
     # Управление сервоприводом
     # ------------------------------------------------------------------
     def set_servo(self, channel, angle, smooth=True, step_delay=0.01, step_angle=2):
-        """
-        Установить угол сервопривода на заданном канале.
-        angle — желаемый угол без учёта offset (offset будет добавлен автоматически).
-        Если smooth=True, движение происходит плавно.
-        Возвращает True при успехе.
-        """
         if not self.initialized or self.pwm is None:
             print(f"PCA9685 не инициализирована, канал {channel} не установлен")
             return False
+
+        # Применяем инверсию (если канал инвертирован)
+        if channel in self.inverted_channels:
+            min_angle, max_angle, _, _ = self.channel_configs[channel]
+            angle = max_angle - (angle - min_angle)   # зеркалируем
 
         with self.lock:
             current = self.current_angles.get(channel, None)
