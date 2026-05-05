@@ -26,10 +26,9 @@ _output_stream = None
 
 # Объекты для фонового приёма ответов
 _ws = None
-_loop = None          # asyncio event loop, работающий в отдельном потоке
+_loop = None          # asyncio event loop в отдельном потоке
 _receiver_thread = None
 _running = False
-_connected = False    # флаг успешного подключения
 
 OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
 
@@ -76,7 +75,9 @@ CONFIG = {
     "system_instruction": CHARACTER_PROMPT
 }
 
+# -----------------------------------------------------------------------------
 # Функции, доступные модели (для #EXECUTE)
+# -----------------------------------------------------------------------------
 def log(message: str) -> None:
     formatted_msg = f"[LOG]: {message}"
     print(formatted_msg)
@@ -112,16 +113,17 @@ _AI_EXEC_GLOBALS = {
     "get_system_stats": get_system_stats,
 }
 
-# Внутренний приёмник ответов
+# -----------------------------------------------------------------------------
+# Внутренний приёмник ответов (работает в фоновом asyncio‑потоке)
+# -----------------------------------------------------------------------------
 async def _receiver_loop():
-    global _current_response, _connected
+    global _current_response
     while _running:
         try:
             raw = await _ws.recv()
             data = json.loads(raw)
         except Exception:
             print("Proxy connection lost, reconnecting...")
-            _connected = False
             await _connect_to_proxy()
             continue
 
@@ -129,6 +131,7 @@ async def _receiver_loop():
             _current_response = data["text"]
             print(_current_response)
 
+            # Проверка на #EXECUTE
             code_match = re.search(r"#EXECUTE\n(.*?)\n#END", _current_response, re.DOTALL)
             if code_match:
                 code = code_match.group(1).strip()
@@ -137,6 +140,7 @@ async def _receiver_loop():
                     exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
                 except Exception as e:
                     print(f"Execution error: {e}")
+                # Отправляем результат как новое сообщение пользователя
                 msg = {"text": "Code executed.", "turn_complete": True}
                 try:
                     await _ws.send(json.dumps(msg))
@@ -172,30 +176,26 @@ def _play_audio(audio_b64: str):
         print(f"Audio error: {e}")
 
 async def _connect_to_proxy():
-    global _ws, _connected
-    retries = 5
-    while retries:
+    global _ws
+    while _running:
         try:
-            # Добавлены пинги для удержания соединения
             _ws = await websockets.connect(
                 PROXY_WS_URL,
                 ping_interval=20,
                 ping_timeout=20
             )
+            # Сразу отправляем setup
             setup_msg = {
                 "api_key": API_KEY,
                 "model_id": "gemini-3.1-flash-live-preview",
                 "config": CONFIG
             }
             await _ws.send(json.dumps(setup_msg))
-            _connected = True
             print("Connected to proxy")
             return
         except Exception as e:
-            print(f"Connection failed ({retries} retries left): {e}")
-            retries -= 1
-            await asyncio.sleep(2)
-    raise RuntimeError("Cannot connect to proxy")
+            print(f"Connection to proxy failed: {e}. Retrying in 5s...")
+            await asyncio.sleep(5)
 
 def _run_event_loop():
     global _loop, _running
@@ -205,7 +205,9 @@ def _run_event_loop():
     loop.run_until_complete(_connect_to_proxy())
     loop.run_until_complete(_receiver_loop())
 
-# Публичные функции
+# -----------------------------------------------------------------------------
+# Публичные функции (вызываются из main.py)
+# -----------------------------------------------------------------------------
 def init():
     global _running, _receiver_thread
     if _running:
@@ -223,7 +225,7 @@ def command(text: str):
     asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
 
 def send_frame():
-    """Отправить кадр с камеры (с явным turn_complete=False)."""
+    """Отправить кадр с камеры."""
     if not _loop or not _ws:
         return
     from r2_app.high_level import get_raw_frame
