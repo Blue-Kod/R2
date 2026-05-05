@@ -28,6 +28,7 @@ _output_stream = None
 _ws = None
 _loop = None
 _loop_thread = None
+_loop_lock = threading.Lock()
 _send_queue = asyncio.Queue()
 _running = False
 _executing = False
@@ -117,28 +118,34 @@ _AI_EXEC_GLOBALS = {
 }
 
 # -----------------------------------------------------------------------------
-# Менеджер событийного цикла (запускается лениво при первом command/send_frame)
+# Запуск асинхронного цикла (однократно, потокобезопасно)
 # -----------------------------------------------------------------------------
 def _ensure_event_loop():
     global _loop, _loop_thread, _running
-    if _loop is not None and _loop.is_running():
-        return
-    _running = True
-    loop = asyncio.new_event_loop()
-    _loop = loop
-    def run_loop():
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_connection_manager())
-    _loop_thread = threading.Thread(target=run_loop, daemon=True)
-    _loop_thread.start()
+    with _loop_lock:
+        if _loop is not None and _loop.is_running():
+            return
+        _running = True
+        loop = asyncio.new_event_loop()
+        _loop = loop
+        def run_loop():
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_connection_manager())
+        _loop_thread = threading.Thread(target=run_loop, daemon=True)
+        _loop_thread.start()
 
 async def _connection_manager():
-    """Основной цикл: поддержание WebSocket и обработка очереди отправки."""
+    """Поддерживает WebSocket, обрабатывает очередь отправки."""
     global _ws
     while _running:
-        # Если нет активного сокета – подключаемся
-        if _ws is None or not _ws.open:
-            try:
+        try:
+            if _ws is None or getattr(_ws, 'state', None) != websockets.protocol.State.OPEN:
+                try:
+                    await _ws.close()
+                except Exception:
+                    pass
+                _ws = None
+                # Подключаемся
                 _ws = await websockets.connect(
                     PROXY_WS_URL, ping_interval=20, ping_timeout=20
                 )
@@ -149,33 +156,38 @@ async def _connection_manager():
                 }
                 await _ws.send(json.dumps(setup_msg))
                 print("✅ Подключено к прокси")
-                # Запускаем приёмник ответов
                 asyncio.create_task(_receiver())
-            except Exception as e:
-                print(f"⏳ Подключение не удалось: {e}. Повтор через 5 с...")
-                await asyncio.sleep(5)
-                continue
+        except Exception as e:
+            print(f"⏳ Подключение не удалось: {e}. Повтор через 5 с...")
+            await asyncio.sleep(5)
+            continue
 
-        # Отправка сообщений из очереди
+        # Отправка из очереди
         try:
             msg = await asyncio.wait_for(_send_queue.get(), timeout=0.5)
-            await _ws.send(json.dumps(msg))
+            if _ws is not None and getattr(_ws, 'state', None) == websockets.protocol.State.OPEN:
+                await _ws.send(json.dumps(msg))
+            else:
+                # Если соединение разорвано, вернём сообщение в очередь
+                await _send_queue.put(msg)
+                raise Exception("WebSocket closed")
         except asyncio.TimeoutError:
             pass
         except Exception as e:
             print(f"Ошибка отправки: {e}")
-            # Закрываем сокет, чтобы переподключиться
-            if _ws:
+            try:
                 await _ws.close()
-                _ws = None
+            except Exception:
+                pass
+            _ws = None
 
     if _ws:
         await _ws.close()
 
 async def _receiver():
     """Приём ответов от прокси и обработка #EXECUTE."""
-    global _current_response, _executing
-    while _ws is not None and _ws.open:
+    global _current_response, _executing, _ws
+    while _ws is not None and getattr(_ws, 'state', None) == websockets.protocol.State.OPEN:
         try:
             raw = await _ws.recv()
             data = json.loads(raw)
@@ -248,9 +260,11 @@ async def _receiver():
             print("🔚 Конец ответа модели\n")
 
     # При выходе из приёмника закрываем сокет
-    if _ws:
+    try:
         await _ws.close()
-        _ws = None
+    except Exception:
+        pass
+    _ws = None
 
 def _play_audio(audio_b64: str):
     global _output_stream
