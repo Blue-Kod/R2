@@ -4,6 +4,25 @@
 import time
 import threading
 
+# ----------------------------------------------------------------------
+# Пользовательская калибровка — РЕДАКТИРУЙТЕ ЗДЕСЬ
+# Offset (в градусах) прибавляется к команде для каждого канала.
+# Положительное значение — физический угол больше команды,
+# отрицательное — меньше.
+# ----------------------------------------------------------------------
+DEFAULT_OFFSETS = {
+    0: 0.0,    # Шея
+    1: 0.0,    # Правое плечо
+    2: 10.0,    # Левое плечо
+    3: 0.0,    # Наклон головы
+    4: 0.0,    # Поворот правого плеча
+    5: -9.0,    # Поворот левого плеча
+    6: 0.0,    # Правый локоть
+    7: 22.0,    # Левый локоть
+}
+# ----------------------------------------------------------------------
+
+
 class ServoController:
     def __init__(self, bus=0, address=0x40, freq=50, channel_configs=None):
         """
@@ -19,9 +38,12 @@ class ServoController:
         self.pwm = None
         self.initialized = False
 
-        # Текущие углы для плавного движения
+        # Текущие углы (чистые, без offset)
         self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 45, 5: 45, 6: 135, 7: 135}
         self.lock = threading.Lock()
+
+        # Offset для каждого канала (инициализируется из DEFAULT_OFFSETS)
+        self.offsets = {}  # будет заполнено ниже
 
         # Конфигурация каналов по умолчанию (8 каналов)
         if channel_configs is None:
@@ -38,20 +60,41 @@ class ServoController:
         else:
             self.channel_configs = channel_configs
 
+        # Заполняем offsets из DEFAULT_OFFSETS для всех существующих каналов
+        for ch in self.channel_configs:
+            self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
+
         self._init_pca()
 
-    def _init_pca(self):
-        """Попытка подключения к PCA9685."""
-        try:
-            from PCA9685_smbus2 import PCA9685
-            self.pwm = PCA9685.PCA9685(interface=self.bus, address=self.address)
-            self.pwm.set_pwm_freq(self.freq)
-            self.initialized = True
-            print(f"PCA9685 инициализирована на шине {self.bus}, адрес {hex(self.address)}")
-        except Exception as e:
-            print(f"Не удалось инициализировать PCA9685: {e}")
-            self.initialized = False
+    # ------------------------------------------------------------------
+    # Offset management (для ручного управления во время работы)
+    # ------------------------------------------------------------------
+    def set_offset(self, channel: int, offset: float) -> bool:
+        """
+        Установить оффсет для канала (в градусах).
+        offset будет прибавляться к целевому углу при любой команде.
+        """
+        if channel not in self.channel_configs:
+            print(f"Канал {channel} не существует")
+            return False
+        with self.lock:
+            self.offsets[channel] = offset
+        return True
 
+    def get_offset(self, channel: int) -> float:
+        with self.lock:
+            return self.offsets.get(channel, 0.0)
+
+    def reset_offsets_to_default(self):
+        """Сбросить все оффсеты к значениям из DEFAULT_OFFSETS."""
+        with self.lock:
+            for ch in self.channel_configs:
+                self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
+        print("Offsets reset to defaults")
+
+    # ------------------------------------------------------------------
+    # Преобразование угла в импульс
+    # ------------------------------------------------------------------
     def angle_to_pulse(self, angle, channel):
         if channel not in self.channel_configs:
             raise ValueError(f"Канал {channel} не сконфигурирован")
@@ -63,9 +106,13 @@ class ServoController:
         pulse = min_pulse + (max_pulse - min_pulse) * (angle - min_angle) / (max_angle - min_angle)
         return int(pulse)
 
+    # ------------------------------------------------------------------
+    # Управление сервоприводом
+    # ------------------------------------------------------------------
     def set_servo(self, channel, angle, smooth=True, step_delay=0.01, step_angle=2):
         """
         Установить угол сервопривода на заданном канале.
+        angle — желаемый угол без учёта offset (offset будет добавлен автоматически).
         Если smooth=True, движение происходит плавно.
         Возвращает True при успехе.
         """
@@ -77,35 +124,37 @@ class ServoController:
             current = self.current_angles.get(channel, None)
             if current is None:
                 current = angle
-            target = angle
+            target_command = angle
+            offset = self.offsets.get(channel, 0)
 
-        if not smooth or current == target:
-            return self._set_servo_immediate(channel, target)
+        if not smooth or current == target_command:
+            return self._set_servo_immediate(channel, target_command + offset, target_command)
 
-        # Плавное движение
-        step = step_angle if target > current else -step_angle
-        for cur in range(int(current), int(target), step):
-            self._set_servo_immediate(channel, cur)
+        step = step_angle if target_command > current else -step_angle
+        for cmd in range(int(current), int(target_command), step):
+            self._set_servo_immediate(channel, cmd + offset, cmd)
             time.sleep(step_delay)
-        # Финальная установка
-        self._set_servo_immediate(channel, target)
+        self._set_servo_immediate(channel, target_command + offset, target_command)
         return True
 
-    def _set_servo_immediate(self, channel, angle):
-        """Мгновенная установка угла (без плавности)."""
+    def _set_servo_immediate(self, channel, physical_angle, command_angle=None):
         try:
-            pulse = self.angle_to_pulse(angle, channel)
+            pulse = self.angle_to_pulse(physical_angle, channel)
             self.pwm.set_pwm(channel, 0, pulse)
             with self.lock:
-                self.current_angles[channel] = angle
+                if command_angle is not None:
+                    self.current_angles[channel] = command_angle
             return True
         except Exception as e:
             print(f"Ошибка установки сервопривода {channel}: {e}")
             return False
 
+    # ------------------------------------------------------------------
+    # Тест и калибровка
+    # ------------------------------------------------------------------
     def test_cycle(self, channels=None, delay=1):
         if channels is None:
-            channels = [0, 1, 2, 3, 4, 5, 6, 7]   # теперь все 8 каналов
+            channels = [0, 1, 2, 3, 4, 5, 6, 7]
         if not self.initialized:
             return
         for ch in channels:

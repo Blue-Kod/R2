@@ -648,6 +648,20 @@ def emote(emotion_name: str):
 def set_eyes_position(x, y):
     return set_eyes_position(x, y)
 
+def get_servo_offsets():
+    """Возвращает словарь {channel: offset} текущих оффсетов."""
+    servo = _servo
+    if servo is None:
+        return {}
+    with servo.lock:
+        return dict(servo.offsets)
+
+def set_servo_offset(channel: int, offset: float):
+    """Устанавливает оффсет сервоканала."""
+    servo = _servo
+    if servo is None:
+        return False
+    return servo.set_offset(channel, offset)
 
 def start():
     start_background()
