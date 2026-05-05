@@ -8,10 +8,14 @@ import threading
 import time
 from collections import deque
 
+
 class StereoCamera:
     def __init__(self, config_path, source=0):
         with open(config_path, "r") as f:
             cfg = json.load(f)
+
+        self.source = source  # сохраняем для переподключения
+        self.config_path = config_path  # сохраняем конфиг
 
         self.img_size = tuple(cfg['imSize'])
         self.depth_scale = 0.35
@@ -45,7 +49,7 @@ class StereoCamera:
         self.wls_enabled = True
 
         self.depth_enabled = True
-        self.tracking_mode = "person"   # "person" (тело), "face", "motion"
+        self.tracking_mode = "person"  # "person" (тело), "face", "motion"
         self.face_tracking_enabled = True
         self.tracking_scale_x = 50.0
         self.tracking_scale_y = 30.0
@@ -60,7 +64,7 @@ class StereoCamera:
             self.mp_pose = mp.solutions.pose
             self.pose = self.mp_pose.Pose(
                 static_image_mode=False,
-                model_complexity=1,      # 0,1,2 (1 - хороший баланс)
+                model_complexity=1,  # 0,1,2 (1 - хороший баланс)
                 smooth_landmarks=True,
                 min_detection_confidence=0.5,
                 min_tracking_confidence=0.5
@@ -78,8 +82,8 @@ class StereoCamera:
             self.use_mediapipe = False
 
         # Параметры сглаживания (EMA)
-        self.smooth_alpha = 0.3          # коэффициент фильтрации
-        self.smoothed_center = None      # (cx, cy) сглаженные
+        self.smooth_alpha = 0.3  # коэффициент фильтрации
+        self.smoothed_center = None  # (cx, cy) сглаженные
 
         # Для motion detection
         self.prev_gray = None
@@ -88,18 +92,24 @@ class StereoCamera:
 
         # Счётчик кадров для детекции (не на каждом кадре)
         self.detection_skip = 0
-        self.detection_interval = 3      # детекция раз в 3 кадра
+        self.detection_interval = 3  # детекция раз в 3 кадра
+
+        # ------- параметры переподключения -------
+        self._consecutive_failures = 0
+        self._max_consecutive_failures = 30  # около 1 секунды при 30 fps
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = 5
+        self._reconnect_delay = 2.0  # секунд паузы между попытками
+        self._last_success_time = time.time()
+        self._reconnect_lock = threading.Lock()
+        # -----------------------------------------
 
         self._init_matchers()
 
-        self.cap = cv2.VideoCapture(source)
-        if not self.cap.isOpened():
+        self.cap = None
+        self._open_capture()  # первое открытие
+        if not self.cap or not self.cap.isOpened():
             raise IOError(f"Не удалось открыть камеру {source}")
-
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
 
         self.frame = None
         self.points_3d = None
@@ -110,11 +120,23 @@ class StereoCamera:
         threading.Thread(target=self._capture_loop, daemon=True).start()
         threading.Thread(target=self._processing_loop, daemon=True).start()
 
+    def _open_capture(self):
+        """Создаёт новый объект VideoCapture с сохранёнными параметрами."""
+        cap = cv2.VideoCapture(self.source)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            return cap
+        else:
+            return None
+
     def _init_matchers(self):
         max_d = self.num_disp * 16
         self.matcher_l = cv2.StereoSGBM_create(
             minDisparity=0, numDisparities=max_d, blockSize=self.block_size,
-            P1=8 * 3 * self.block_size ** 2, P2 = 32 * 3 * self.block_size ** 2,
+            P1=8 * 3 * self.block_size ** 2, P2=32 * 3 * self.block_size ** 2,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
         if self.wls_enabled:
@@ -133,13 +155,61 @@ class StereoCamera:
 
     def _capture_loop(self):
         while self.running:
+            # Попытка захватить кадр
+            if self.cap is None or not self.cap.isOpened():
+                # Если устройство не открыто, пробуем переподключиться
+                self._attempt_reconnect()
+                time.sleep(0.1)
+                continue
+
             ret, frame = self.cap.read()
             if not ret:
+                # Неудачный захват
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self._max_consecutive_failures:
+                    print("[CAM] Слишком много ошибок захвата, запускаю переподключение...")
+                    self._attempt_reconnect()
+                    self._consecutive_failures = 0
                 time.sleep(0.01)
                 continue
+
+            # Успешный кадр
+            self._consecutive_failures = 0
+            self._last_success_time = time.time()
+            self._reconnect_attempts = 0  # сброс счётчика попыток после успеха
+
             frame = cv2.rotate(frame, cv2.ROTATE_180)
             with self.lock:
                 self.raw_frame = frame
+
+    def _attempt_reconnect(self):
+        """Пробует пересоздать VideoCapture с задержками."""
+        with self._reconnect_lock:
+            if self._reconnect_attempts >= self._max_reconnect_attempts:
+                # Превышено число попыток – больше не пытаемся, ждём ручного вмешательства
+                return
+
+            self._reconnect_attempts += 1
+            print(f"[CAM] Попытка переподключения {self._reconnect_attempts}/{self._max_reconnect_attempts}...")
+
+        # Закрываем старое устройство, если открыто
+        old_cap = self.cap
+        if old_cap is not None:
+            try:
+                old_cap.release()
+            except:
+                pass
+
+        time.sleep(self._reconnect_delay)
+
+        new_cap = self._open_capture()
+        if new_cap is not None and new_cap.isOpened():
+            self.cap = new_cap
+            print("[CAM] Переподключение успешно.")
+            self._consecutive_failures = 0
+        else:
+            print("[CAM] Переподключение не удалось.")
+            self.cap = None
 
     def _detect_person(self, image_bgr):
         """Детектирует человека (верхняя часть тела) и возвращает центр (x, y)."""
@@ -168,15 +238,15 @@ class StereoCamera:
                 det = results.detections[0]
                 bboxC = det.location_data.relative_bounding_box
                 h, w, _ = image_bgr.shape
-                cx = int((bboxC.xmin + bboxC.width/2) * w)
-                cy = int((bboxC.ymin + bboxC.height/2) * h)
+                cx = int((bboxC.xmin + bboxC.width / 2) * w)
+                cy = int((bboxC.ymin + bboxC.height / 2) * h)
                 return (cx, cy)
         else:
             gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-            faces = self.face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100,100))
+            faces = self.face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100, 100))
             if len(faces) > 0:
-                (x, y, w, h) = max(faces, key=lambda f: f[2]*f[3])
-                return (x + w//2, y + h//2)
+                (x, y, w, h) = max(faces, key=lambda f: f[2] * f[3])
+                return (x + w // 2, y + h // 2)
         return None
 
     def _detect_motion(self, gray):
@@ -190,7 +260,7 @@ class StereoCamera:
         thresh_val = max(20, int(mean_diff * 1.5))
         _, thresh = cv2.threshold(diff, thresh_val, 255, cv2.THRESH_BINARY)
         # Морфология для удаления шума
-        kernel = np.ones((5,5), np.uint8)
+        kernel = np.ones((5, 5), np.uint8)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -198,7 +268,7 @@ class StereoCamera:
             # Берём самый большой контур по площади
             c = max(contours, key=cv2.contourArea)
             area = cv2.contourArea(c)
-            if area > 800:   # минимальная площадь движения
+            if area > 800:  # минимальная площадь движения
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
@@ -248,7 +318,6 @@ class StereoCamera:
             tracking_center = None
             if self.face_tracking_enabled:
                 self.detection_skip += 1
-                # Выполняем детекцию раз в N кадров
                 if self.detection_skip >= self.detection_interval:
                     self.detection_skip = 0
                     if self.tracking_mode == "person" and self.use_mediapipe:
@@ -258,25 +327,22 @@ class StereoCamera:
                     elif self.tracking_mode == "motion":
                         gray = cv2.cvtColor(main_view, cv2.COLOR_BGR2GRAY)
                         tracking_center = self._detect_motion(gray)
-                    # Применяем экспоненциальное сглаживание
+
                     if tracking_center is not None:
                         if self.smoothed_center is None:
                             self.smoothed_center = tracking_center
                         else:
                             self.smoothed_center = (
-                                int(self.smoothed_center[0] * (1 - self.smooth_alpha) + tracking_center[0] * self.smooth_alpha),
-                                int(self.smoothed_center[1] * (1 - self.smooth_alpha) + tracking_center[1] * self.smooth_alpha)
+                                int(self.smoothed_center[0] * (1 - self.smooth_alpha) + tracking_center[
+                                    0] * self.smooth_alpha),
+                                int(self.smoothed_center[1] * (1 - self.smooth_alpha) + tracking_center[
+                                    1] * self.smooth_alpha)
                             )
-                    else:
-                        # Если цель потеряна, не обнуляем сразу сглаженный центр – он будет затухать
-                        pass
                 else:
-                    # Между детекциями используем последний сглаженный центр
                     tracking_center = self.smoothed_center
 
             if tracking_center is not None:
                 cx, cy = tracking_center
-                # Нормализация от -1 до 1
                 norm_x = (cx / self.img_size[0]) * 2 - 1
                 norm_y = (cy / self.img_size[1]) * 2 - 1
                 dx = -norm_x * self.tracking_scale_x + self.tracking_offset_x
@@ -287,13 +353,8 @@ class StereoCamera:
                     self.face_dx = dx
                     self.face_dy = dy
             else:
-                # Цель не обнаружена – через некоторое время обнулим смещения
                 with self.lock:
-                    # Если долго нет цели, можно занулить, но сервотрекинг сам обработает таймаут
-                    if self.smoothed_center is not None:
-                        # Постепенное затухание: через 1 секунду без детекции обнуляем
-                        # Здесь просто не обновляем, пусть остаётся последнее значение
-                        pass
+                    pass
 
             # ----- Вычисление глубины -----
             if self.depth_enabled:
@@ -313,13 +374,12 @@ class StereoCamera:
                     disp_vis = np.clip((d_float / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
                 output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
-                
-                # Downsample main_view to low_size for color fusion with point cloud
+
                 low_main = cv2.resize(main_view, self.low_size, interpolation=cv2.INTER_AREA)
-                
+
                 with self.lock:
                     self.points_3d = points
-                    self.points_color = low_main  # Store color data at same resolution as points_3d
+                    self.points_color = low_main
             else:
                 output = main_view
                 with self.lock:
@@ -355,28 +415,26 @@ class StereoCamera:
             return self.face_dx, self.face_dy
 
     def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
-        """Возвращает список точек {x,y,z,r,g,b} в сантиметрах, прореженный с шагом step."""
         with self.lock:
             if self.points_3d is None:
                 return []
-            pts = self.points_3d  # shape: (h, w, 3), Z в мм
-            colors = self.points_color  # shape: (h, w, 3), BGR format
+            pts = self.points_3d
+            colors = self.points_color
             h, w = pts.shape[:2]
             points = []
             for y in range(0, h, step):
                 for x in range(0, w, step):
                     X, Y, Z = pts[y, x]
-                    if Z <= 0 or Z > max_distance_cm * 10:  # макс. дальность в мм
+                    if Z <= 0 or Z > max_distance_cm * 10:
                         continue
-                    
-                    # Get color if available (convert BGR to RGB)
-                    r, g, b = 200, 200, 200  # default gray
+
+                    r, g, b = 200, 200, 200
                     if colors is not None and y < colors.shape[0] and x < colors.shape[1]:
                         bgr = colors[y, x]
-                        r = int(bgr[2])  # BGR -> RGB
+                        r = int(bgr[2])
                         g = int(bgr[1])
                         b = int(bgr[0])
-                    
+
                     points.append({
                         'x': float(X / 10),
                         'y': float(Y / 10),
@@ -425,10 +483,6 @@ class StereoCamera:
                 self._init_matchers()
 
     def get_rectified_frame(self, left=True):
-        """
-        Возвращает чистый ректифицированный кадр (без depth overlay).
-        Потокобезопасно, используется, например, для отправки в AI.
-        """
         with self.lock:
             if left and self.rectL is not None:
                 return self.rectL.copy()
