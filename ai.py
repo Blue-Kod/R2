@@ -59,7 +59,7 @@ CHARACTER_PROMPT = """
 АЛГОРИТМ РЕКУРСИИ:
 1. Если нужно действие/расчет: скажи "Выполн+яю..." и напиши #EXECUTE ... #END.
 2. В блоке #EXECUTE пиши ТОЛЬКО код.
-3. После выполнения кода ты получишь сообщение "[SYSTEM_LOGS]" с результатами. Проанализируй их и дай ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.
+3. После выполнения кода ты получишь сообщение "Выполнен код. Результат: ..." – проанализируй результат и дай ответ пользователю обычным текстом.
 4. ТВОЙ ОТВЕТ БЕЗ БЛОКА #EXECUTE ЯВЛЯЕТСЯ СИГНАЛОМ ЗАВЕРШЕНИЯ ЗАДАЧИ.
 5. Пиши код только если тебе реально нужно получить данные или выявить команду.
 6. Не пиши ничего после блока кода. Закончился блок кода - ВСЁ. КОНЕЦ. Только после следующего сообщения можешь что-то писать.
@@ -81,7 +81,6 @@ CONFIG = {
 # Функции, доступные модели (для #EXECUTE)
 # -----------------------------------------------------------------------------
 def log(message: str) -> None:
-    """Логирование напрямую в системный stdout (без рекурсии)"""
     sys.stdout.write(f"[LOG]: {message}\n")
     sys.stdout.flush()
 
@@ -135,12 +134,10 @@ async def _receiver_loop():
             _current_response = data["text"]
             print(f"\n🤖 Модель: {_current_response}")
 
-            # Защита от вложенных EXECUTE
             if _executing:
                 print("⚠️ Игнорирую вложенный #EXECUTE")
                 continue
 
-            # ГИБКОЕ регулярное выражение: #EXECUTE ... код ... #END
             code_match = re.search(r"#EXECUTE\s+(.*?)\s+#END", _current_response, re.DOTALL)
             if code_match:
                 _executing = True
@@ -152,7 +149,6 @@ async def _receiver_loop():
                     exec_error = None
                     original_stdout = sys.stdout
 
-                    # Tee‑поток: дублирует и в консоль, и в перехват
                     class Tee:
                         def __init__(self, *files):
                             self.files = files
@@ -179,25 +175,15 @@ async def _receiver_loop():
                     output = captured_output.getvalue()
                     captured_output.close()
 
-                    if output.strip():
-                        print(f"📋 Логи выполнения:\n{output.strip()}")
-                    else:
-                        print("📋 Логи выполнения: (пусто)")
-
                     if exec_error:
-                        error_text = f"Ошибка выполнения: {exec_error}\n\nПолный traceback:\n{tb}"
+                        error_text = f"Ошибка выполнения кода: {exec_error}\n{tb}"
                         print(f"❌ {error_text}")
-                        system_log_text = f"[SYSTEM_LOGS]\n{error_text}\n[END_LOGS]"
+                        command(error_text)
                     else:
-                        system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
+                        result_text = f"Выполнен код. Результат:\n{output.strip()}"
+                        print(f"✅ {result_text}")
+                        command(result_text)
 
-                    if _ws is not None:
-                        msg = {"text": system_log_text, "turn_complete": True}
-                        print("📤 Отправляю модели логи...")
-                        await _ws.send(json.dumps(msg))
-                        print("✅ Логи отправлены успешно")
-                    else:
-                        print("❌ WebSocket не подключён")
                 finally:
                     _executing = False
 
@@ -209,7 +195,6 @@ async def _receiver_loop():
             print("🔚 Конец ответа модели\n")
 
 def _play_audio(audio_b64: str):
-    """Воспроизведение аудио (жёстко device=1)"""
     global _output_stream
     try:
         missing = len(audio_b64) % 4
@@ -261,7 +246,7 @@ def _run_event_loop():
     loop.run_until_complete(_receiver_loop())
 
 # -----------------------------------------------------------------------------
-# Публичные API (вызываются из main.py)
+# Публичные API
 # -----------------------------------------------------------------------------
 def init():
     global _running, _receiver_thread
@@ -272,6 +257,7 @@ def init():
     _receiver_thread.start()
 
 def command(text: str):
+    """Отправить текстовую команду (как пользователь)."""
     if not _loop or not _ws:
         print("⚠️ Не подключено – нет соединения с прокси")
         return
