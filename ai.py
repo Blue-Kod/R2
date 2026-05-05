@@ -137,6 +137,7 @@ async def _receiver_loop():
                 print("⚠️ Игнорирую вложенный #EXECUTE")
                 continue
 
+            # ГИБКИЙ поиск #EXECUTE ... #END (в любом месте, с пробелами)
             code_match = re.search(r"#EXECUTE\s+(.*?)\s+#END", _current_response, re.DOTALL)
             if code_match:
                 _executing = True
