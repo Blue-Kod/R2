@@ -12,11 +12,9 @@ import cv2
 import numpy as np
 import psutil
 
-# Import the actual libs
 from camera import StereoCamera
 from servo import ServoController
 
-# Import the new pywebview-based display
 try:
     from eyes_display import EyeDisplay, optimize_for_arm
     _HAS_DISPLAY = True
@@ -35,12 +33,9 @@ _camera_lock = threading.Lock()
 _servo_lock = threading.Lock()
 _display_lock = threading.Lock()
 
-# Stdout log buffer for web UI
 _logs_buffer = deque(maxlen=500)
 
-# Stdout capture class
 class StdoutCapture:
-    """Capture ALL stdout output (including Flask logs) for web UI."""
     def __init__(self):
         self._original_stdout = sys.stdout
         self._lock = threading.Lock()
@@ -48,10 +43,8 @@ class StdoutCapture:
     def write(self, message):
         if isinstance(message, bytes):
             message = message.decode('utf-8', errors='replace')
-        # Write to original stdout
         self._original_stdout.write(message)
         self._original_stdout.flush()
-        # Store in buffer (only non-empty lines)
         if message.strip():
             with self._lock:
                 for line in message.strip().split('\n'):
@@ -64,38 +57,36 @@ class StdoutCapture:
 _stdout_capture = StdoutCapture()
 _stderr_capture = StdoutCapture()
 
-# Hardware state
 servo_tracking_enabled = False
 _tracking_thread = None
 _hardware_initialized = False
 _shutdown_requested = False
 
-# Shell state
 _shell_proc = None
 _shell_buffer = deque(maxlen=2000)
 _shell_running = False
 _shell_lock = threading.Lock()
 _shell_thread = None
 
-# Emote state
 _current_emote = "normal"
 _eyes_x = 0.0
 _eyes_y = 0.0
 _emote_lock = threading.Lock()
 _supported_emotes = [os.path.splitext(f)[0] for f in os.listdir("emotions") if f.endswith(".png")]
 
-# Gemini stat
-
-# Thread tracking for cleanup
 _all_threads = []
+
+# --- Автоматическое восстановление камеры ---
+_camera_reinit_thread = None
+_camera_reinit_interval = 30.0   # секунд между попытками
+_camera_source = 0               # будет обновлён при инициализации
+_camera_config_path = None
 
 
 def log(message: str) -> None:
-    """Simple logger - outputs to stdout (captured by StdoutCapture)."""
     print(message)
 
 
-# --- Camera & Servo Libs ---
 class MockStereoCamera:
     """Windows/dev fallback camera to keep web UI and APIs alive."""
 
@@ -161,24 +152,35 @@ class MockStereoCamera:
 
 
 def _init_hardware():
-    """Initialize camera and servo libs directly."""
-    global _camera, _servo
+    global _camera, _servo, _camera_source, _camera_config_path
 
     if platform.system() == "Windows":
         _camera = MockStereoCamera()
         log("Simulation mode enabled: mock camera and mock servo are active")
     else:
-        # Try real hardware
         try:
             from r2_app.config import AppConfig
             config = AppConfig()
+            _camera_source = config.camera_source
+            _camera_config_path = str(config.camera_config_path)
             if config.camera_config_path.exists():
                 _camera = StereoCamera(str(config.camera_config_path), source=config.camera_source)
                 log("Camera initialized")
+            else:
+                raise FileNotFoundError("Camera config not found")
         except Exception as exc:
             log(f"Camera init error: {exc}")
             _camera = MockStereoCamera()
             log("Falling back to simulation mode")
+            # Сохраняем параметры на будущее
+            try:
+                from r2_app.config import AppConfig
+                config = AppConfig()
+                _camera_source = config.camera_source
+                _camera_config_path = str(config.camera_config_path)
+            except:
+                _camera_source = 0
+                _camera_config_path = "cam_params.json"
 
         try:
             _servo = ServoController(bus=0, address=0x40, freq=50)
@@ -193,8 +195,61 @@ def _init_hardware():
             log("Falling back to mock servo")
 
 
-def _tracking_loop() -> None:
-    """Servo tracking loop running in separate thread."""
+def _camera_reinit_loop():
+    """Фоновая нить: если камера мок, периодически пробует заменить на реальную."""
+    global _camera, _camera_source, _camera_config_path
+    while not _shutdown_requested:
+        time.sleep(_camera_reinit_interval)
+        if not isinstance(_camera, MockStereoCamera):
+            # Уже реальная камера — выходим из цикла
+            break
+        log("[CAM] Attempting to switch to real camera...")
+        try:
+            from camera import StereoCamera as RealCamera
+            if not _camera_config_path or not os.path.exists(_camera_config_path):
+                log("[CAM] No config file for real camera")
+                continue
+            new_cam = RealCamera(_camera_config_path, source=_camera_source)
+            # Если успешно, подменяем
+            with _camera_lock:
+                old_cam = _camera
+                _camera = new_cam
+            if old_cam and hasattr(old_cam, 'stop'):
+                old_cam.stop()
+            log("[CAM] Successfully switched to real camera")
+            break
+        except Exception as e:
+            log(f"[CAM] Real camera still unavailable: {e}")
+
+
+def reinit_camera():
+    """Ручной запуск попытки восстановления камеры (можно вызвать из API)."""
+    global _camera
+    if isinstance(_camera, MockStereoCamera):
+        log("[CAM] Manual reinit triggered")
+        # Выполняем попытку немедленно в этом же потоке
+        try:
+            from camera import StereoCamera as RealCamera
+            if not _camera_config_path or not os.path.exists(_camera_config_path):
+                log("[CAM] No config file")
+                return False
+            new_cam = RealCamera(_camera_config_path, source=_camera_source)
+            with _camera_lock:
+                old_cam = _camera
+                _camera = new_cam
+            if old_cam and hasattr(old_cam, 'stop'):
+                old_cam.stop()
+            log("[CAM] Manual reinit successful")
+            return True
+        except Exception as e:
+            log(f"[CAM] Manual reinit failed: {e}")
+            return False
+    else:
+        log("[CAM] Already using real camera")
+        return True
+
+
+def _tracking_loop():
     global _camera, _servo, servo_tracking_enabled, _shutdown_requested
 
     default_neck = 90
@@ -247,9 +302,7 @@ def _tracking_loop() -> None:
         time.sleep(0.05)
 
 
-# --- Shell Lib ---
-def _shell_reader() -> None:
-    """Read shell output in separate thread."""
+def _shell_reader():
     global _shell_running
     try:
         while _shell_running:
@@ -280,8 +333,7 @@ def _decode_output(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def shell_start() -> None:
-    """Start shell in separate thread."""
+def shell_start():
     global _shell_proc, _shell_running, _shell_thread
 
     if _shell_running:
@@ -315,7 +367,6 @@ def shell_start() -> None:
 
 
 def shell_write(command: str) -> bool:
-    """Write command to shell."""
     if not _shell_running or _shell_proc is None:
         return False
     try:
@@ -334,7 +385,6 @@ def shell_write(command: str) -> bool:
 
 
 def shell_output() -> str:
-    """Get shell output."""
     with _shell_lock:
         return "".join(_shell_buffer)
 
@@ -344,9 +394,8 @@ def shell_onetime(command: str) -> str:
     shell_write(command)
     return shell_output().replace(old_output, "")
 
-# --- Emote Lib ---
+
 def set_emote(emotion_name: str) -> bool:
-    """Set emote and push to display if available."""
     global _current_emote
 
     name = str(emotion_name or "").strip().lower()
@@ -372,7 +421,6 @@ def get_emote() -> str:
 
 
 def set_eyes_position(x: float, y: float) -> None:
-    """Set eyes position and push to display if available."""
     global _eyes_x, _eyes_y
     x = max(-1.0, min(1.0, float(x)))
     y = max(-1.0, min(1.0, float(y)))
@@ -398,7 +446,6 @@ def supported_emotes():
     return sorted(_supported_emotes)
 
 
-# --- System Lib ---
 def cpu_temp() -> str:
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r", encoding="utf-8") as file:
@@ -420,7 +467,6 @@ def ip_address() -> str:
 
 
 def get_logs(n: int = 500) -> list:
-    """Get recent log messages for web UI."""
     with _lock:
         return list(_logs_buffer)[-n:]
 
@@ -432,9 +478,8 @@ def health_snapshot() -> dict:
         "temp": cpu_temp(),
     }
 
-# --- Display Worker ---
+
 def _display_worker():
-    """Run the pywebview eye display in a separate thread."""
     global _display, _eye_api
 
     if not _HAS_DISPLAY:
@@ -449,39 +494,36 @@ def _display_worker():
 
     _eye_api = _display.api
 
-    # Start display (blocks this thread until window is closed)
     _display.start()
 
 
-# --- Background Threads Starter ---
 def start_background():
-    """Initialize hardware and start all background threads."""
-    global _hardware_initialized, _tracking_thread, _all_threads
+    global _hardware_initialized, _tracking_thread, _all_threads, _camera_reinit_thread
 
     if _hardware_initialized:
         return
 
-    # Redirect stdout and stderr to capture ALL logs (including Flask)
     sys.stdout = _stdout_capture
     sys.stderr = _stderr_capture
 
     log("R2 v2.0 - Starting...")
 
-
-    # Init hardware in current thread
     _init_hardware()
 
-    # Start tracking thread
+    # Запускаем фоновую проверку камеры (если сейчас мок)
+    if isinstance(_camera, MockStereoCamera):
+        _camera_reinit_thread = threading.Thread(target=_camera_reinit_loop, daemon=True, name="r2-camera-reinit")
+        _camera_reinit_thread.start()
+        _all_threads.append(_camera_reinit_thread)
+
     _tracking_thread = threading.Thread(target=_tracking_loop, daemon=True, name="r2-tracking-thread")
     _tracking_thread.start()
     _all_threads.append(_tracking_thread)
 
-    # Start shell
     shell_start()
     if _shell_thread:
         _all_threads.append(_shell_thread)
 
-    # Start web server in separate thread
     from r2_app.web import create_app
     from r2_app.config import AppConfig
     config = AppConfig()
@@ -494,7 +536,6 @@ def start_background():
     web_thread.start()
     _all_threads.append(web_thread)
 
-    # Start pywebview display in separate thread
     if _HAS_DISPLAY:
         display_thread = threading.Thread(target=_display_worker, daemon=True, name="r2-display-thread")
         display_thread.start()
@@ -504,49 +545,40 @@ def start_background():
 
 
 def cleanup():
-    """Clean shutdown of all threads and resources."""
     global _shutdown_requested, _hardware_initialized
 
     if not _hardware_initialized:
         return
 
     log("Starting clean shutdown...")
-
-    # Signal threads to stop
     _shutdown_requested = True
     _shell_running = False
 
-    # Wait for tracking thread to finish
     if _tracking_thread and _tracking_thread.is_alive():
-        log("Waiting for tracking thread to stop...")
         _tracking_thread.join(timeout=2.0)
-
-    # Wait for shell thread to finish
     if _shell_thread and _shell_thread.is_alive():
-        log("Waiting for shell thread to stop...")
         _shell_thread.join(timeout=2.0)
+    if _camera_reinit_thread and _camera_reinit_thread.is_alive():
+        _camera_reinit_thread.join(timeout=1.0)
 
-    # Close shell process if running
     if _shell_proc:
         try:
             _shell_proc.terminate()
             _shell_proc.wait(timeout=2.0)
-        except Exception:
+        except:
             pass
 
-    # Wait for all threads to finish
     for t in _all_threads:
         if t.is_alive() and t != threading.current_thread():
             try:
                 t.join(timeout=1.0)
-            except Exception:
+            except:
                 pass
 
     log("Cleanup complete.")
     _hardware_initialized = False
 
 
-# --- High-level API functions ---
 def get_stereo_camera():
     return _camera
 
@@ -562,15 +594,13 @@ def get_camera(left: bool):
     camera.update_params(show_left=old_show_left)
     return frame
 
+
 def get_raw_frame(left=True):
-    """
-    Возвращает чистый ректифицированный кадр (BGR) с левой или правой камеры.
-    Не использовать для веб‑стрима, он не содержит визуализации глубины.
-    """
     camera = get_stereo_camera()
     if camera is not None:
         return camera.get_rectified_frame(left)
     return None
+
 
 def angle(servo: int, angle_value: int):
     if _servo is None:
@@ -620,7 +650,6 @@ def set_eyes_position(x, y):
 
 
 def start():
-    """Blocking runner."""
     start_background()
     while True:
         time.sleep(0.01)
