@@ -245,7 +245,7 @@ def _run_event_loop():
     loop.run_until_complete(_receiver_loop())
 
 # -----------------------------------------------------------------------------
-# Публичные функции (старый интерфейс + init ОБЯЗАТЕЛЕН)
+# Публичные функции (старый интерфейс, init обязателен)
 # -----------------------------------------------------------------------------
 def init():
     global _running, _receiver_thread
@@ -256,7 +256,7 @@ def init():
     _receiver_thread.start()
 
 def command(text: str):
-    """Отправить текстовую команду (как в старом ai.py)."""
+    """Отправить текстовую команду."""
     if not _loop or not _ws:
         print("⚠️ Не подключено – нет соединения с прокси")
         return
@@ -264,7 +264,7 @@ def command(text: str):
     asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
 
 def send_frame():
-    """Отправить кадр с камеры (как в старом ai.py)."""
+    """Отправить кадр с камеры."""
     if not _loop or not _ws:
         return
     from r2_app.high_level import get_raw_frame
