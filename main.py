@@ -25,9 +25,9 @@ if __name__ == "__main__":
     if args.version:
         print(f"R2 v{APP_VERSION}")
     else:
-        import ai
         start_background()
-        ai.command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.' и дай статус системы если есть ошибки.")
+        ai.init()
+        ai.command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.'")
         while True:
             time.sleep(1)
-            ai.send_frame()
+            send_frame()
