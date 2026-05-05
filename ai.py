@@ -9,6 +9,7 @@ import base64
 import io
 import json
 import re
+import sys
 import threading
 import time
 import cv2
@@ -130,46 +131,59 @@ async def _receiver_loop():
 
         if "text" in data:
             _current_response = data["text"]
-            print(_current_response)
+            print(f"\n🤖 Модель: {_current_response}")
 
             # Проверка на #EXECUTE
             code_match = re.search(r"#EXECUTE\n(.*?)\n#END", _current_response, re.DOTALL)
             if code_match:
                 code = code_match.group(1).strip()
-                print(f"Executing: {code}")
-                # Перехватываем stdout
+                print(f"\n⚡ Выполняю код:\n{code}\n")
+
+                # Перехват stdout
                 captured_output = io.StringIO()
+                exec_error = None
+                original_stdout = sys.stdout
+                sys.stdout = captured_output
                 try:
-                    # Подменяем sys.stdout на наш StringIO, но оставляем оригинал для realtime логов
-                    import sys
-                    original_stdout = sys.stdout
-                    sys.stdout = captured_output
                     exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
                 except Exception as e:
-                    print(f"Execution error: {e}")
+                    exec_error = e
                 finally:
                     sys.stdout = original_stdout
 
                 output = captured_output.getvalue()
                 captured_output.close()
 
-                # Формируем сообщение с логами для модели
+                # Выводим захваченный вывод в консоль для контроля
                 if output.strip():
-                    system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
+                    print(f"📋 Логи выполнения:\n{output.strip()}")
                 else:
-                    system_log_text = "[SYSTEM_LOGS]\n(no output)\n[END_LOGS]"
+                    print("📋 Логи выполнения: (пусто)")
 
-                msg = {"text": system_log_text, "turn_complete": True}
-                try:
-                    await _ws.send(json.dumps(msg))
-                except Exception as e:
-                    print(f"Failed to send logs: {e}")
+                if exec_error:
+                    print(f"❌ Ошибка выполнения: {exec_error}")
+                    system_log_text = f"[SYSTEM_LOGS]\nОшибка: {exec_error}\n[END_LOGS]"
+                else:
+                    system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
+
+                # Отправляем модели
+                if _ws is not None:
+                    msg = {"text": system_log_text, "turn_complete": True}
+                    try:
+                        print(f"📤 Отправляю модели логи...")
+                        await _ws.send(json.dumps(msg))
+                        print(f"✅ Логи отправлены успешно")
+                    except Exception as send_err:
+                        print(f"❌ Не удалось отправить логи: {send_err}")
+                else:
+                    print("❌ WebSocket не подключён, не могу отправить логи")
 
         if "audio" in data and _audio_enabled:
             _play_audio(data["audio"])
 
         if data.get("end_of_turn"):
             _current_response = ""
+            print("🔚 Конец ответа модели\n")
 
 def _play_audio(audio_b64: str):
     global _output_stream
@@ -187,6 +201,7 @@ def _play_audio(audio_b64: str):
             _output_stream = sd.OutputStream(
                 samplerate=HARDWARE_RATE, channels=1, dtype='int16',
                 latency='low', device=1
+
             )
             _output_stream.start()
         _output_stream.write(np.repeat(arr, 2))
@@ -208,10 +223,10 @@ async def _connect_to_proxy():
                 "config": CONFIG
             }
             await _ws.send(json.dumps(setup_msg))
-            print("Connected to proxy")
+            print("✅ Подключено к прокси")
             return
         except Exception as e:
-            print(f"Connection to proxy failed: {e}. Retrying in 5s...")
+            print(f"⏳ Подключение к прокси не удалось: {e}. Повтор через 5 с...")
             await asyncio.sleep(5)
 
 def _run_event_loop():
@@ -236,7 +251,7 @@ def init():
 def command(text: str):
     """Отправить текстовую команду. Возвращает управление мгновенно."""
     if not _loop or not _ws:
-        print("Not connected")
+        print("⚠️ Не подключено – нет соединения с прокси")
         return
     msg = {"text": text, "turn_complete": True}
     asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
