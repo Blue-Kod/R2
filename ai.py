@@ -12,7 +12,6 @@ import re
 import sys
 import threading
 import traceback
-import time
 import cv2
 import numpy as np
 import sounddevice as sd
@@ -28,7 +27,8 @@ _output_stream = None
 
 _ws = None
 _loop = None
-_receiver_thread = None
+_loop_thread = None
+_send_queue = asyncio.Queue()
 _running = False
 _executing = False
 
@@ -117,18 +117,71 @@ _AI_EXEC_GLOBALS = {
 }
 
 # -----------------------------------------------------------------------------
-# Внутренний приёмник ответов
+# Менеджер событийного цикла (запускается лениво при первом command/send_frame)
 # -----------------------------------------------------------------------------
-async def _receiver_loop():
-    global _current_response, _executing
+def _ensure_event_loop():
+    global _loop, _loop_thread, _running
+    if _loop is not None and _loop.is_running():
+        return
+    _running = True
+    loop = asyncio.new_event_loop()
+    _loop = loop
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_connection_manager())
+    _loop_thread = threading.Thread(target=run_loop, daemon=True)
+    _loop_thread.start()
+
+async def _connection_manager():
+    """Основной цикл: поддержание WebSocket и обработка очереди отправки."""
+    global _ws
     while _running:
+        # Если нет активного сокета – подключаемся
+        if _ws is None or not _ws.open:
+            try:
+                _ws = await websockets.connect(
+                    PROXY_WS_URL, ping_interval=20, ping_timeout=20
+                )
+                setup_msg = {
+                    "api_key": API_KEY,
+                    "model_id": "gemini-3.1-flash-live-preview",
+                    "config": CONFIG
+                }
+                await _ws.send(json.dumps(setup_msg))
+                print("✅ Подключено к прокси")
+                # Запускаем приёмник ответов
+                asyncio.create_task(_receiver())
+            except Exception as e:
+                print(f"⏳ Подключение не удалось: {e}. Повтор через 5 с...")
+                await asyncio.sleep(5)
+                continue
+
+        # Отправка сообщений из очереди
+        try:
+            msg = await asyncio.wait_for(_send_queue.get(), timeout=0.5)
+            await _ws.send(json.dumps(msg))
+        except asyncio.TimeoutError:
+            pass
+        except Exception as e:
+            print(f"Ошибка отправки: {e}")
+            # Закрываем сокет, чтобы переподключиться
+            if _ws:
+                await _ws.close()
+                _ws = None
+
+    if _ws:
+        await _ws.close()
+
+async def _receiver():
+    """Приём ответов от прокси и обработка #EXECUTE."""
+    global _current_response, _executing
+    while _ws is not None and _ws.open:
         try:
             raw = await _ws.recv()
             data = json.loads(raw)
         except Exception:
-            print("Proxy connection lost, reconnecting...")
-            await _connect_to_proxy()
-            continue
+            print("Соединение с прокси потеряно, переподключаемся...")
+            break
 
         if "text" in data:
             _current_response = data["text"]
@@ -194,6 +247,11 @@ async def _receiver_loop():
             _current_response = ""
             print("🔚 Конец ответа модели\n")
 
+    # При выходе из приёмника закрываем сокет
+    if _ws:
+        await _ws.close()
+        _ws = None
+
 def _play_audio(audio_b64: str):
     global _output_stream
     try:
@@ -216,67 +274,32 @@ def _play_audio(audio_b64: str):
     except Exception as e:
         print(f"Audio error: {e}")
 
-async def _connect_to_proxy():
-    global _ws
-    while _running:
-        try:
-            _ws = await websockets.connect(
-                PROXY_WS_URL,
-                ping_interval=20,
-                ping_timeout=20
-            )
-            setup_msg = {
-                "api_key": API_KEY,
-                "model_id": "gemini-3.1-flash-live-preview",
-                "config": CONFIG
-            }
-            await _ws.send(json.dumps(setup_msg))
-            print("✅ Подключено к прокси")
-            return
-        except Exception as e:
-            print(f"⏳ Подключение к прокси не удалось: {e}. Повтор через 5 с...")
-            await asyncio.sleep(5)
-
-def _run_event_loop():
-    global _loop, _running
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    _loop = loop
-    loop.run_until_complete(_connect_to_proxy())
-    loop.run_until_complete(_receiver_loop())
-
 # -----------------------------------------------------------------------------
 # Публичные API
 # -----------------------------------------------------------------------------
-def init():
-    global _running, _receiver_thread
-    if _running:
-        return
-    _running = True
-    _receiver_thread = threading.Thread(target=_run_event_loop, daemon=True)
-    _receiver_thread.start()
-
 def command(text: str):
-    """Отправить текстовую команду (как пользователь)."""
-    if not _loop or not _ws:
-        print("⚠️ Не подключено – нет соединения с прокси")
-        return
-    msg = {"text": text, "turn_complete": True}
-    asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
+    """Отправить текстовую команду (лениво инициализирует соединение)."""
+    _ensure_event_loop()
+    if _loop is not None and _loop.is_running():
+        msg = {"text": text, "turn_complete": True}
+        asyncio.run_coroutine_threadsafe(_send_queue.put(msg), _loop)
+    else:
+        print("⚠️ Event loop не готов")
 
 def send_frame():
-    if not _loop or not _ws:
-        return
-    from r2_app.high_level import get_raw_frame
-    frame = get_raw_frame(left=True)
-    if frame is None:
-        return
-    ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-    if not ret:
-        return
-    b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
-    msg = {"image_b64": b64, "mime_type": "image/jpeg"}
-    asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
+    """Отправить кадр с камеры (лениво инициализирует соединение)."""
+    _ensure_event_loop()
+    if _loop is not None and _loop.is_running():
+        from r2_app.high_level import get_raw_frame
+        frame = get_raw_frame(left=True)
+        if frame is None:
+            return
+        ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if not ret:
+            return
+        b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+        msg = {"image_b64": b64, "mime_type": "image/jpeg"}
+        asyncio.run_coroutine_threadsafe(_send_queue.put(msg), _loop)
 
 def get_current_response():
     return _current_response
