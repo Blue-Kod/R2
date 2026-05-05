@@ -911,7 +911,7 @@
             logsPane.classList.add('hidden');
         });
 
-        for (let ch = 0; ch <= 5; ch++) {
+        for (let ch = 0; ch <= 15; ch++) {
             const slider = document.getElementById(`servo${ch}`);
             if (slider) {
                 slider.addEventListener('input', () => updateServoValue(ch, slider.value));
