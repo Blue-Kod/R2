@@ -18,7 +18,6 @@ import numpy as np
 import sounddevice as sd
 import websockets
 
-# Конфигурация
 PROXY_WS_URL = "wss://proxy-gemini-rlj1.onrender.com/ws/live"
 HARDWARE_RATE = 48000
 VOICE = "Enceladus"
@@ -27,13 +26,11 @@ _audio_enabled = True
 _current_response = ""
 _output_stream = None
 
-# Объекты для фонового приёма ответов
 _ws = None
-_loop = None          # asyncio event loop в отдельном потоке
+_loop = None
 _receiver_thread = None
 _running = False
-
-_executing = False    # флаг для предотвращения рекурсивных EXECUTE
+_executing = False
 
 OBSCURED_API_KEY = "c1RZQWNjZG8xT3ZHMV9IdldFVTMzakNfU3dhQ19PVWtEeVNheklB"
 
@@ -81,22 +78,22 @@ CONFIG = {
 }
 
 # -----------------------------------------------------------------------------
-# Функции, доступные модели (для #EXECUTE)
+# Функции, доступные модели
 # -----------------------------------------------------------------------------
 def log(message: str) -> None:
-    """Логирование (вывод в терминал и в перехваченный stdout)"""
-    formatted_msg = f"[LOG]: {message}"
-    # Используем оригинальный print (встроенный) для гарантии
-    __builtins__["print"](formatted_msg)
+    sys.stdout.write(f"[LOG]: {message}\n")
+    sys.stdout.flush()
 
 def set_emote(emotion: str) -> bool:
     from r2_app.high_level import emote
-    __builtins__["print"](f"[AI-EXEC] Setting emote: {emotion}")
+    sys.stdout.write(f"[AI-EXEC] Setting emote: {emotion}\n")
+    sys.stdout.flush()
     return emote(emotion)
 
 def set_eyes(x: float, y: float) -> None:
     from r2_app.high_level import set_eyes_position
-    __builtins__["print"](f"[AI-EXEC] Setting eyes: x={x}, y={y}")
+    sys.stdout.write(f"[AI-EXEC] Setting eyes: x={x}, y={y}\n")
+    sys.stdout.flush()
     set_eyes_position(x, y)
 
 def get_cpu_temp() -> str:
@@ -120,7 +117,7 @@ _AI_EXEC_GLOBALS = {
 }
 
 # -----------------------------------------------------------------------------
-# Внутренний приёмник ответов (работает в фоновом asyncio‑потоке)
+# Приёмник ответов
 # -----------------------------------------------------------------------------
 async def _receiver_loop():
     global _current_response, _executing
@@ -137,12 +134,12 @@ async def _receiver_loop():
             _current_response = data["text"]
             print(f"\n🤖 Модель: {_current_response}")
 
-            # Защита от вложенного EXECUTE
             if _executing:
                 print("⚠️ Игнорирую вложенный #EXECUTE (уже выполняется)")
                 continue
 
-            code_match = re.search(r"#EXECUTE\n(.*?)\n#END", _current_response, re.DOTALL)
+            # ГИБКОЕ регулярное выражение: #EXECUTE ... код ... #END
+            code_match = re.search(r"#EXECUTE\s+(.*?)\s+#END", _current_response, re.DOTALL)
             if code_match:
                 _executing = True
                 try:
@@ -152,32 +149,42 @@ async def _receiver_loop():
                     captured_output = io.StringIO()
                     exec_error = None
                     original_stdout = sys.stdout
-                    # Перенаправляем stdout в StringIO
-                    sys.stdout = captured_output
+
+                    class Tee:
+                        def __init__(self, *files):
+                            self.files = files
+                        def write(self, obj):
+                            for f in self.files:
+                                f.write(obj)
+                                f.flush()
+                        def flush(self):
+                            for f in self.files:
+                                f.flush()
+
+                    tee = Tee(original_stdout, captured_output)
+                    sys.stdout = tee
 
                     try:
                         exec(code, {"__builtins__": __builtins__}, _AI_EXEC_GLOBALS)
                     except Exception as e:
                         exec_error = e
-                        # Полный traceback для отладки
                         tb = traceback.format_exc()
-                        captured_output.write(f"\n--- TRACEBACK ---\n{tb}\n")
+                        captured_output.write(tb)
                     finally:
                         sys.stdout = original_stdout
 
                     output = captured_output.getvalue()
                     captured_output.close()
 
-                    # Вывод результата в консоль
                     if output.strip():
                         print(f"📋 Логи выполнения:\n{output.strip()}")
                     else:
                         print("📋 Логи выполнения: (пусто)")
 
                     if exec_error:
-                        error_info = f"Ошибка: {str(exec_error)}\n{tb if 'tb' in dir() else ''}"
-                        print(f"❌ Ошибка выполнения (см. traceback выше)")
-                        system_log_text = f"[SYSTEM_LOGS]\n{error_info}\n[END_LOGS]"
+                        error_text = f"Ошибка выполнения: {exec_error}\n\nПолный traceback:\n{tb}"
+                        print(f"❌ Ошибка выполнения:\n{error_text}")
+                        system_log_text = f"[SYSTEM_LOGS]\n{error_text}\n[END_LOGS]"
                     else:
                         system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
 
@@ -188,7 +195,6 @@ async def _receiver_loop():
                         print("✅ Логи отправлены успешно")
                     else:
                         print("❌ WebSocket не подключён")
-
                 finally:
                     _executing = False
 
@@ -214,7 +220,7 @@ def _play_audio(audio_b64: str):
         if _output_stream is None:
             _output_stream = sd.OutputStream(
                 samplerate=HARDWARE_RATE, channels=1, dtype='int16',
-                latency='low', device=1
+                latency='low'   # устройство по умолчанию
             )
             _output_stream.start()
         _output_stream.write(np.repeat(arr, 2))
@@ -251,7 +257,7 @@ def _run_event_loop():
     loop.run_until_complete(_receiver_loop())
 
 # -----------------------------------------------------------------------------
-# Публичные функции (вызываются из main.py)
+# Публичные API
 # -----------------------------------------------------------------------------
 def init():
     global _running, _receiver_thread
@@ -262,7 +268,6 @@ def init():
     _receiver_thread.start()
 
 def command(text: str):
-    """Отправить текстовую команду. Возвращает управление мгновенно."""
     if not _loop or not _ws:
         print("⚠️ Не подключено – нет соединения с прокси")
         return
@@ -270,7 +275,6 @@ def command(text: str):
     asyncio.run_coroutine_threadsafe(_ws.send(json.dumps(msg)), _loop)
 
 def send_frame():
-    """Отправить кадр с камеры."""
     if not _loop or not _ws:
         return
     from r2_app.high_level import get_raw_frame
