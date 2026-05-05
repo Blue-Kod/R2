@@ -78,9 +78,10 @@ CONFIG = {
 }
 
 # -----------------------------------------------------------------------------
-# Функции, доступные модели
+# Функции, доступные модели (для #EXECUTE)
 # -----------------------------------------------------------------------------
 def log(message: str) -> None:
+    """Логирование напрямую в системный stdout (без рекурсии)"""
     sys.stdout.write(f"[LOG]: {message}\n")
     sys.stdout.flush()
 
@@ -117,7 +118,7 @@ _AI_EXEC_GLOBALS = {
 }
 
 # -----------------------------------------------------------------------------
-# Приёмник ответов
+# Внутренний приёмник ответов
 # -----------------------------------------------------------------------------
 async def _receiver_loop():
     global _current_response, _executing
@@ -134,8 +135,9 @@ async def _receiver_loop():
             _current_response = data["text"]
             print(f"\n🤖 Модель: {_current_response}")
 
+            # Защита от вложенных EXECUTE
             if _executing:
-                print("⚠️ Игнорирую вложенный #EXECUTE (уже выполняется)")
+                print("⚠️ Игнорирую вложенный #EXECUTE")
                 continue
 
             # ГИБКОЕ регулярное выражение: #EXECUTE ... код ... #END
@@ -150,6 +152,7 @@ async def _receiver_loop():
                     exec_error = None
                     original_stdout = sys.stdout
 
+                    # Tee‑поток: дублирует и в консоль, и в перехват
                     class Tee:
                         def __init__(self, *files):
                             self.files = files
@@ -183,7 +186,7 @@ async def _receiver_loop():
 
                     if exec_error:
                         error_text = f"Ошибка выполнения: {exec_error}\n\nПолный traceback:\n{tb}"
-                        print(f"❌ Ошибка выполнения:\n{error_text}")
+                        print(f"❌ {error_text}")
                         system_log_text = f"[SYSTEM_LOGS]\n{error_text}\n[END_LOGS]"
                     else:
                         system_log_text = f"[SYSTEM_LOGS]\n{output.strip()}\n[END_LOGS]"
@@ -206,6 +209,7 @@ async def _receiver_loop():
             print("🔚 Конец ответа модели\n")
 
 def _play_audio(audio_b64: str):
+    """Воспроизведение аудио (жёстко device=1)"""
     global _output_stream
     try:
         missing = len(audio_b64) % 4
@@ -220,7 +224,7 @@ def _play_audio(audio_b64: str):
         if _output_stream is None:
             _output_stream = sd.OutputStream(
                 samplerate=HARDWARE_RATE, channels=1, dtype='int16',
-                latency='low', device=1
+                device=1, latency='low'
             )
             _output_stream.start()
         _output_stream.write(np.repeat(arr, 2))
@@ -257,7 +261,7 @@ def _run_event_loop():
     loop.run_until_complete(_receiver_loop())
 
 # -----------------------------------------------------------------------------
-# Публичные API
+# Публичные API (вызываются из main.py)
 # -----------------------------------------------------------------------------
 def init():
     global _running, _receiver_thread
