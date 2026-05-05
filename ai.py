@@ -186,7 +186,7 @@ def _play_audio(audio_b64: str):
         if _output_stream is None:
             _output_stream = sd.OutputStream(
                 samplerate=HARDWARE_RATE, channels=1, dtype='int16',
-                latency='low'
+                latency='low', device=1
             )
             _output_stream.start()
         _output_stream.write(np.repeat(arr, 2))
