@@ -42,8 +42,8 @@ class ServoController:
         self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 45, 5: 45, 6: 135, 7: 135}
         self.lock = threading.Lock()
 
-        # Offset для каждого канала (инициализируется из DEFAULT_OFFSETS)
-        self.offsets = {}  # будет заполнено ниже
+        # Offset для каждого канала (из DEFAULT_OFFSETS)
+        self.offsets = {}
 
         # Конфигурация каналов по умолчанию (8 каналов)
         if channel_configs is None:
@@ -64,7 +64,16 @@ class ServoController:
         for ch in self.channel_configs:
             self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
 
-        self._init_pca()
+        # Попытка подключения к PCA9685 (без отдельного _init_pca)
+        try:
+            from PCA9685_smbus2 import PCA9685
+            self.pwm = PCA9685.PCA9685(interface=self.bus, address=self.address)
+            self.pwm.set_pwm_freq(self.freq)
+            self.initialized = True
+            print(f"PCA9685 инициализирована на шине {self.bus}, адрес {hex(self.address)}")
+        except Exception as e:
+            print(f"Не удалось инициализировать PCA9685: {e}")
+            self.initialized = False
 
     # ------------------------------------------------------------------
     # Offset management (для ручного управления во время работы)
