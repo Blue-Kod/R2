@@ -25,6 +25,7 @@ from r2_app.high_level import (
     servo_tracking_enabled,
     set_servo_tracking,
     get_logs,
+    build_depth_mesh,
 )
 
 
@@ -188,13 +189,37 @@ def create_app() -> Flask:
         dx, dy = camera.get_eye_offsets()
         return jsonify({"dx": dx, "dy": dy})
 
-    @app.route("/api/pointcloud")
-    def api_pointcloud():
+    # Новые endpoints
+    @app.route("/api/coords3d", methods=["POST"])
+    def coords3d():
+        data = request.get_json(silent=True) or {}
+        x, y = data.get("x"), data.get("y")
+        if x is None or y is None:
+            return jsonify({"error": "Missing coordinates"}), 400
         camera = _camera
-        if not camera or not camera.depth_enabled:
-            return jsonify([])
-        step = request.args.get("step", default=2, type=int)
-        return jsonify(camera.get_point_cloud_sample(step=step))
+        if not camera:
+            return jsonify({"x": None, "y": None, "z": None})
+        with camera.lock:
+            if camera.points_3d is None:
+                return jsonify({"x": None, "y": None, "z": None})
+            scale_x = camera.low_size[0] / camera.img_size[0]
+            scale_y = camera.low_size[1] / camera.img_size[1]
+            lx = int(x * scale_x)
+            ly = int(y * scale_y)
+            if lx < 0 or lx >= camera.low_size[0] or ly < 0 or ly >= camera.low_size[1]:
+                return jsonify({"x": None, "y": None, "z": None})
+            px, py, pz = camera.points_3d[ly, lx]
+            if pz <= 0:
+                return jsonify({"x": None, "y": None, "z": None})
+            return jsonify({"x": float(px / 10.0), "y": float(py / 10.0), "z": float(pz / 10.0)})
+
+    @app.route("/api/mesh")
+    def api_mesh():
+        step = request.args.get("step", default=4, type=int)
+        if step < 1:
+            step = 1
+        mesh_data = build_depth_mesh(step=step)
+        return jsonify(mesh_data)
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     def set_servo(channel, angle):

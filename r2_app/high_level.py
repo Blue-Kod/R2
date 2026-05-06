@@ -582,6 +582,12 @@ def set_servo_offset(channel: int, offset: float):
         return False
     return servo.set_offset(channel, offset)
 
+def build_depth_mesh(step=2):
+    camera = get_stereo_camera()
+    if camera is None:
+        return {'width': 0, 'height': 0, 'points': []}
+    return camera.get_depth_mesh(step=step)
+
 def start():
     start_background()
     while True:

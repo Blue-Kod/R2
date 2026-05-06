@@ -1,4 +1,3 @@
-# camera.py (стабильная карта глубины с временным сглаживанием)
 import cv2
 import numpy as np
 import json
@@ -33,20 +32,20 @@ class StereoCamera:
         self.Q_low[:2, :3] *= self.depth_scale
 
         # Параметры диспаратности (улучшенные для стабильности)
-        self.num_disp = 8                # 8*16 = 128 уровней диспаратности
-        self.block_size = 7              # Размер блока
-        self.alpha_depth = 0.3           # Прозрачность карты глубины на основном виде
+        self.num_disp = 8
+        self.block_size = 7
+        self.alpha_depth = 0.3
         self.show_left = True
         self.depth_enabled = True
 
-        # Параметры WLS фильтра
+        # WLS фильтр
         self.wls_enabled = True
-        self.wls_lambda = 10000          # Увеличена гладкость
-        self.wls_sigma = 1.5             # Сохранение краёв
+        self.wls_lambda = 10000
+        self.wls_sigma = 1.5
 
-        # Параметры временной стабилизации
-        self.ema_alpha = 0.3             # Коэффициент сглаживания (0.1..0.5)
-        self.prev_disp = None            # Буфер предыдущей диспаратности
+        # Временное сглаживание
+        self.ema_alpha = 0.3
+        self.prev_disp = None
         self.prev_disp_lock = threading.Lock()
 
         self._init_matchers()
@@ -56,6 +55,7 @@ class StereoCamera:
         self.rectR = None
         self.frame = None
         self.points_3d = None
+        self.points_color = None   # <-- цвет для 3D
         self.fps = 0.0
         self.face_dx = 0.0
         self.face_dy = 0.0
@@ -74,8 +74,6 @@ class StereoCamera:
 
     def _init_matchers(self):
         max_d = self.num_disp * 16
-
-        # Левый матчер (основной) с улучшенными параметрами стабильности
         self.matcher_l = cv2.StereoSGBM_create(
             minDisparity=0,
             numDisparities=max_d,
@@ -83,13 +81,11 @@ class StereoCamera:
             P1=8 * 3 * self.block_size ** 2,
             P2=32 * 3 * self.block_size ** 2,
             disp12MaxDiff=1,
-            uniquenessRatio=15,          # Жёстче фильтрует неоднозначности
-            speckleWindowSize=200,       # Сильнее подавляет мелкие пятна
+            uniquenessRatio=15,
+            speckleWindowSize=200,
             speckleRange=32,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
-
-        # Правый матчер и WLS-фильтр (если доступен)
         self.wls_available = False
         self.matcher_r = None
         self.wls_filter = None
@@ -101,8 +97,7 @@ class StereoCamera:
             self.wls_available = True
             print("[CAM] WLS filter initialized")
         except Exception as e:
-            print(f"[CAM] WLS not available: {e} (install opencv-contrib-python)")
-            self.wls_available = False
+            print(f"[CAM] WLS not available: {e}")
 
     def _capture_loop(self):
         while self.running:
@@ -139,7 +134,6 @@ class StereoCamera:
                 self.rawL = None
                 self.rawR = None
 
-            # Ректификация
             rectL = cv2.remap(imgL, self.mapL1, self.mapL2, cv2.INTER_LINEAR)
             rectR = cv2.remap(imgR, self.mapR1, self.mapR2, cv2.INTER_LINEAR)
             with self.lock:
@@ -149,13 +143,11 @@ class StereoCamera:
             main_view = rectL if self.show_left else rectR
 
             if self.depth_enabled:
-                # Уменьшаем разрешение для быстродействия
                 lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
                 lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
                 grayL = cv2.cvtColor(lowL, cv2.COLOR_BGR2GRAY)
                 grayR = cv2.cvtColor(lowR, cv2.COLOR_BGR2GRAY)
 
-                # Вычисление диспаратности
                 dispL = self.matcher_l.compute(grayL, grayR).astype(np.float32) / 16.0
 
                 if self.wls_enabled and self.wls_available:
@@ -166,10 +158,8 @@ class StereoCamera:
                 else:
                     current_disp = dispL
 
-                # Временное сглаживание (EMA) для подавления дрожания
                 with self.prev_disp_lock:
                     if self.prev_disp is not None and self.prev_disp.shape == current_disp.shape:
-                        # Маска: сглаживаем только пиксели, где у обоих кадров валидная диспаратность
                         valid = (self.prev_disp > 0) & (current_disp > 0)
                         smoothed = np.where(valid,
                                            self.ema_alpha * current_disp + (1 - self.ema_alpha) * self.prev_disp,
@@ -178,10 +168,11 @@ class StereoCamera:
                         smoothed = current_disp
                     self.prev_disp = smoothed.copy()
 
-                # 3D точки из сглаженной диспаратности
                 points = cv2.reprojectImageTo3D(smoothed, self.Q_low)
 
-                # Визуализация диспаратности
+                # Сохраняем цветную версию левого кадра уменьшенного размера
+                low_main = cv2.resize(main_view, self.low_size, interpolation=cv2.INTER_AREA)
+
                 with np.errstate(invalid='ignore'):
                     disp_vis = np.clip(smoothed / (self.num_disp * 16) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
@@ -189,10 +180,12 @@ class StereoCamera:
 
                 with self.lock:
                     self.points_3d = points
+                    self.points_color = low_main
             else:
                 output = main_view
                 with self.lock:
                     self.points_3d = None
+                    self.points_color = None
 
             with self.lock:
                 self.frame = output
@@ -234,21 +227,60 @@ class StereoCamera:
             if self.points_3d is None:
                 return []
             pts = self.points_3d
+            colors = self.points_color
             h, w = pts.shape[:2]
             points = []
             for y in range(0, h, step):
                 for x in range(0, w, step):
                     X, Y, Z = pts[y, x]
-                    # Дополнительная фильтрация дальних выбросов
                     if Z <= 0 or Z > max_distance_cm * 10:
                         continue
+                    r, g, b = 200, 200, 200
+                    if colors is not None and y < colors.shape[0] and x < colors.shape[1]:
+                        bgr = colors[y, x]
+                        r, g, b = int(bgr[2]), int(bgr[1]), int(bgr[0])
                     points.append({
                         'x': float(X / 10),
                         'y': float(Y / 10),
                         'z': float(Z / 10),
-                        'r': 200, 'g': 200, 'b': 200
+                        'r': r, 'g': g, 'b': b
                     })
             return points
+
+    def get_depth_mesh(self, step=2, max_distance_cm=1500):
+        """
+        Возвращает структуру для построения 3D-полигональной сетки
+        {
+          'width':  число столбцов (size_x),
+          'height': число строк   (size_y),
+          'points': [ {x, y, z, r, g, b, valid}, ... ]  (row-major: строка за строкой)
+        }
+        """
+        with self.lock:
+            if self.points_3d is None:
+                return {'width': 0, 'height': 0, 'points': []}
+            pts = self.points_3d
+            colors = self.points_color
+            h, w = pts.shape[:2]
+            grid_w = w // step
+            grid_h = h // step
+            points = []
+            for y in range(0, h, step):
+                for x in range(0, w, step):
+                    X, Y, Z = pts[y, x]
+                    valid = (Z > 0) and (Z <= max_distance_cm * 10)
+                    r, g, b = 200, 200, 200
+                    if valid and colors is not None and y < colors.shape[0] and x < colors.shape[1]:
+                        bgr = colors[y, x]
+                        r, g, b = int(bgr[2]), int(bgr[1]), int(bgr[0])
+                    points.append({
+                        'x': float(X / 10),
+                        'y': float(Y / 10),
+                        'z': float(Z / 10) if valid else 0.0,
+                        'r': r, 'g': g, 'b': b,
+                        'valid': valid
+                    })
+            return {'width': grid_w, 'height': grid_h, 'points': points}
 
     def update_params(self, alpha_depth=None, show_left=None, num_disp=None,
                       depth_enabled=None, face_tracking_enabled=None,
@@ -264,7 +296,6 @@ class StereoCamera:
             if num_disp is not None and num_disp != self.num_disp:
                 self.num_disp = num_disp
                 self._init_matchers()
-                # Сброс буфера сглаживания при смене параметров
                 with self.prev_disp_lock:
                     self.prev_disp = None
             if depth_enabled is not None:
