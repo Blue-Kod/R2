@@ -1,3 +1,4 @@
+# high_level.py
 import os
 import platform
 import socket
@@ -29,7 +30,6 @@ _servo = None
 _display = None
 _eye_api = None
 _lock = threading.Lock()
-_camera_lock = threading.Lock()
 _servo_lock = threading.Lock()
 _display_lock = threading.Lock()
 
@@ -76,16 +76,8 @@ _supported_emotes = [os.path.splitext(f)[0] for f in os.listdir("emotions") if f
 
 _all_threads = []
 
-# --- Автоматическое восстановление камеры ---
-_camera_reinit_thread = None
-_camera_reinit_interval = 30.0   # секунд между попытками
-_camera_source = 0               # будет обновлён при инициализации
-_camera_config_path = None
-
-
 def log(message: str) -> None:
     print(message)
-
 
 class MockStereoCamera:
     """Windows/dev fallback camera to keep web UI and APIs alive."""
@@ -152,7 +144,7 @@ class MockStereoCamera:
 
 
 def _init_hardware():
-    global _camera, _servo, _camera_source, _camera_config_path
+    global _camera, _servo
 
     if platform.system() == "Windows":
         _camera = MockStereoCamera()
@@ -161,8 +153,6 @@ def _init_hardware():
         try:
             from r2_app.config import AppConfig
             config = AppConfig()
-            _camera_source = config.camera_source
-            _camera_config_path = str(config.camera_config_path)
             if config.camera_config_path.exists():
                 _camera = StereoCamera(str(config.camera_config_path), source=config.camera_source)
                 log("Camera initialized")
@@ -172,15 +162,6 @@ def _init_hardware():
             log(f"Camera init error: {exc}")
             _camera = MockStereoCamera()
             log("Falling back to simulation mode")
-            # Сохраняем параметры на будущее
-            try:
-                from r2_app.config import AppConfig
-                config = AppConfig()
-                _camera_source = config.camera_source
-                _camera_config_path = str(config.camera_config_path)
-            except:
-                _camera_source = 0
-                _camera_config_path = "cam_params.json"
 
         try:
             _servo = ServoController(bus=0, address=0x40, freq=50)
@@ -193,60 +174,6 @@ def _init_hardware():
         except Exception as exc:
             log(f"Servo init error: {exc}")
             log("Falling back to mock servo")
-
-
-def _camera_reinit_loop():
-    """Фоновая нить: если камера мок, периодически пробует заменить на реальную."""
-    global _camera, _camera_source, _camera_config_path
-    while not _shutdown_requested:
-        time.sleep(_camera_reinit_interval)
-        if not isinstance(_camera, MockStereoCamera):
-            # Уже реальная камера — выходим из цикла
-            break
-        log("[CAM] Attempting to switch to real camera...")
-        try:
-            from camera import StereoCamera as RealCamera
-            if not _camera_config_path or not os.path.exists(_camera_config_path):
-                log("[CAM] No config file for real camera")
-                continue
-            new_cam = RealCamera(_camera_config_path, source=_camera_source)
-            # Если успешно, подменяем
-            with _camera_lock:
-                old_cam = _camera
-                _camera = new_cam
-            if old_cam and hasattr(old_cam, 'stop'):
-                old_cam.stop()
-            log("[CAM] Successfully switched to real camera")
-            break
-        except Exception as e:
-            log(f"[CAM] Real camera still unavailable: {e}")
-
-
-def reinit_camera():
-    """Ручной запуск попытки восстановления камеры (можно вызвать из API)."""
-    global _camera
-    if isinstance(_camera, MockStereoCamera):
-        log("[CAM] Manual reinit triggered")
-        # Выполняем попытку немедленно в этом же потоке
-        try:
-            from camera import StereoCamera as RealCamera
-            if not _camera_config_path or not os.path.exists(_camera_config_path):
-                log("[CAM] No config file")
-                return False
-            new_cam = RealCamera(_camera_config_path, source=_camera_source)
-            with _camera_lock:
-                old_cam = _camera
-                _camera = new_cam
-            if old_cam and hasattr(old_cam, 'stop'):
-                old_cam.stop()
-            log("[CAM] Manual reinit successful")
-            return True
-        except Exception as e:
-            log(f"[CAM] Manual reinit failed: {e}")
-            return False
-    else:
-        log("[CAM] Already using real camera")
-        return True
 
 
 def _tracking_loop():
@@ -264,8 +191,8 @@ def _tracking_loop():
     while not _shutdown_requested:
         if servo_tracking_enabled and _camera and _servo:
             dx, dy = _camera.get_eye_offsets()
-            scale_x = _camera.tracking_scale_x or 1.0
-            scale_y = _camera.tracking_scale_y or 1.0
+            scale_x = getattr(_camera, 'tracking_scale_x', 50.0) or 1.0
+            scale_y = getattr(_camera, 'tracking_scale_y', 30.0) or 1.0
 
             target_present = (dx != 0.0 or dy != 0.0)
             if target_present:
@@ -498,7 +425,7 @@ def _display_worker():
 
 
 def start_background():
-    global _hardware_initialized, _tracking_thread, _all_threads, _camera_reinit_thread
+    global _hardware_initialized, _tracking_thread, _all_threads
 
     if _hardware_initialized:
         return
@@ -509,12 +436,6 @@ def start_background():
     log("R2 v2.0 - Starting...")
 
     _init_hardware()
-
-    # Запускаем фоновую проверку камеры (если сейчас мок)
-    if isinstance(_camera, MockStereoCamera):
-        _camera_reinit_thread = threading.Thread(target=_camera_reinit_loop, daemon=True, name="r2-camera-reinit")
-        _camera_reinit_thread.start()
-        _all_threads.append(_camera_reinit_thread)
 
     _tracking_thread = threading.Thread(target=_tracking_loop, daemon=True, name="r2-tracking-thread")
     _tracking_thread.start()
@@ -558,8 +479,6 @@ def cleanup():
         _tracking_thread.join(timeout=2.0)
     if _shell_thread and _shell_thread.is_alive():
         _shell_thread.join(timeout=2.0)
-    if _camera_reinit_thread and _camera_reinit_thread.is_alive():
-        _camera_reinit_thread.join(timeout=1.0)
 
     if _shell_proc:
         try:
