@@ -185,7 +185,7 @@
             box-shadow: 0 1px 2px rgba(0,0,0,0.2);
         }
 
-        #video-container, #mesh-container {
+        #video-container {
             width: var(--cam-w);
             height: var(--cam-h);
             flex-shrink: 0;
@@ -203,13 +203,6 @@
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
-        }
-
-        #mesh-canvas {
-            width: 100% !important;
-            height: 100% !important;
-            display: block;
-            outline: none;
         }
 
         .depth-tooltip {
@@ -323,7 +316,7 @@
             }
             body { overflow: auto; }
             .layout { height: auto; }
-            #video-container, #mesh-container { width: 100%; }
+            #video-container { width: 100%; }
         }
 
         .update-btn {
@@ -378,16 +371,11 @@
         <main class="panel">
             <div class="tabs" id="viewTabs">
                 <button id="tabVideo" class="active">Камера</button>
-                <button id="tabMesh">3D Модель</button>
             </div>
 
             <div id="video-container">
                 <img id="video-feed" src="/video_feed" alt="Video Stream" crossorigin="anonymous">
                 <div id="depth-tooltip" class="depth-tooltip hidden"></div>
-            </div>
-            <div id="mesh-container" class="hidden">
-                <canvas id="mesh-canvas"></canvas>
-                <div id="mesh-tooltip" class="depth-tooltip hidden"></div>
             </div>
 
             <div class="tabs" id="controlsTabs" style="margin-top: 12px;">
@@ -470,21 +458,14 @@
     </div>
 </div>
 
-<script src="https://cdn.babylonjs.com/babylon.js"></script>
 <script>
 // ===================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====================
-let engine, scene3D, camera3D, meshModel = null, meshActive = false;
-let lastMeshFetch = 0;
 
 // DOM элементы
 const videoContainer = document.getElementById('video-container');
-const meshContainer = document.getElementById('mesh-container');
 const tabVideo = document.getElementById('tabVideo');
-const tabMesh = document.getElementById('tabMesh');
 const depthTooltip = document.getElementById('depth-tooltip');
-const meshTooltip = document.getElementById('mesh-tooltip');
 const videoFeed = document.getElementById('video-feed');
-const meshCanvas = document.getElementById('mesh-canvas');
 
 // AI панель
 const aiAudioEnabledChk = document.getElementById('aiAudioEnabled');
@@ -519,117 +500,6 @@ const tabPython = document.getElementById('tabPython');
 const terminalPane = document.getElementById('terminal-pane');
 const logsPane = document.getElementById('logs-pane');
 const pythonPane = document.getElementById('python-pane');
-
-// ===================== ИНИЦИАЛИЗАЦИЯ 3D СЦЕНЫ (BABYLON.JS) =====================
-function initBabylon() {
-    canvas3D = meshCanvas;
-    engine = new BABYLON.Engine(canvas3D, true);
-    scene3D = new BABYLON.Scene(engine);
-    scene3D.clearColor = new BABYLON.Color4(0.07, 0.07, 0.07, 1.0);
-
-    camera3D = new BABYLON.ArcRotateCamera("Camera", -Math.PI/4, Math.PI/3, 2, BABYLON.Vector3.Zero(), scene3D);
-    camera3D.attachControl(canvas3D, true);
-    camera3D.lowerRadiusLimit = 0.3;
-    camera3D.upperRadiusLimit = 5;
-
-    new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0.5, 1, 0.5), scene3D);
-    const dirLight = new BABYLON.DirectionalLight("dir", new BABYLON.Vector3(0.5, 1, 0.5), scene3D);
-    dirLight.intensity = 0.7;
-
-    const grid = BABYLON.MeshBuilder.CreateGround("grid", { width: 4, height: 4, subdivisions: 20 }, scene3D);
-    grid.isPickable = false;
-    const gridMat = new BABYLON.StandardMaterial("gridMat", scene3D);
-    gridMat.wireframe = true;
-    gridMat.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-    grid.material = gridMat;
-
-    BABYLON.MeshBuilder.CreateLines("axisX", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0.5,0,0)] }, scene3D).color = BABYLON.Color3.Red();
-    BABYLON.MeshBuilder.CreateLines("axisY", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0,0.5,0)] }, scene3D).color = BABYLON.Color3.Green();
-    BABYLON.MeshBuilder.CreateLines("axisZ", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0,0,0.5)] }, scene3D).color = BABYLON.Color3.Blue();
-
-    meshCanvas.addEventListener('mousemove', (evt) => {
-        if (!meshActive || !meshModel) return;
-        const pickResult = scene3D.pick(scene3D.pointerX, scene3D.pointerY);
-        if (pickResult.hit && pickResult.pickedMesh === meshModel) {
-            const p = pickResult.pickedPoint;
-            meshTooltip.style.left = (evt.clientX - meshContainer.getBoundingClientRect().left + 12) + 'px';
-            meshTooltip.style.top = (evt.clientY - meshContainer.getBoundingClientRect().top + 12) + 'px';
-            meshTooltip.textContent = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)} Z:${p.z.toFixed(2)}`;
-            meshTooltip.classList.remove('hidden');
-        } else {
-            meshTooltip.classList.add('hidden');
-        }
-    });
-    meshCanvas.addEventListener('mouseleave', () => meshTooltip.classList.add('hidden'));
-
-    engine.runRenderLoop(() => scene3D.render());
-    window.addEventListener('resize', () => engine.resize());
-}
-
-function buildMeshFromData(data) {
-    if (!data.points || data.points.length === 0) return;
-    const w = data.width, h = data.height, points = data.points;
-    const positions = [], colors = [], indices = [];
-    const vertMap = new Array(h * w).fill(-1);
-    let vc = 0;
-
-    for (let i = 0; i < points.length; i++) {
-        const pt = points[i];
-        if (pt.valid) {
-            positions.push(pt.x / 100, pt.y / 100, pt.z / 100);
-            colors.push(pt.r / 255, pt.g / 255, pt.b / 255);
-            vertMap[i] = vc++;
-        }
-    }
-
-    for (let y = 0; y < h-1; y++) {
-        for (let x = 0; x < w-1; x++) {
-            const i00 = vertMap[y*w+x], i01 = vertMap[y*w+x+1], i10 = vertMap[(y+1)*w+x], i11 = vertMap[(y+1)*w+x+1];
-            if (i00!=-1 && i01!=-1 && i10!=-1) indices.push(i00, i01, i10);
-            if (i01!=-1 && i11!=-1 && i10!=-1) indices.push(i01, i11, i10);
-        }
-    }
-
-    if (meshModel) meshModel.dispose();
-    const vertexData = new BABYLON.VertexData();
-    vertexData.positions = positions;
-    vertexData.indices = indices;
-    vertexData.colors = colors;
-    meshModel = new BABYLON.Mesh("depthMesh", scene3D);
-    vertexData.applyToMesh(meshModel);
-    const mat = new BABYLON.StandardMaterial("mat", scene3D);
-    mat.disableLighting = true;
-    mat.emissiveColor = BABYLON.Color3.White();
-    mat.backFaceCulling = false;
-    meshModel.material = mat;
-}
-
-async function updateMesh() {
-    if (!meshActive || !scene3D) return;
-    try {
-        const resp = await fetch('/api/mesh');
-        if (!resp.ok) return;
-        const data = await resp.json();
-        buildMeshFromData(data);
-    } catch(e) { console.warn("Mesh error:", e); }
-}
-
-let meshInterval = null;
-function startMeshView() {
-    if (!scene3D) initBabylon();
-    videoContainer.classList.add('hidden');
-    meshContainer.classList.remove('hidden');
-    meshActive = true;
-    updateMesh();
-    meshInterval = setInterval(updateMesh, 1000);
-}
-
-function stopMeshView() {
-    meshActive = false;
-    if (meshInterval) clearInterval(meshInterval);
-    meshContainer.classList.add('hidden');
-    videoContainer.classList.remove('hidden');
-}
 
 // ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ UI =====================
 function setActiveTab(activeBtn, allBtns) {
@@ -818,8 +688,7 @@ async function fetchSystemStats() {
 
 // ===================== ОБРАБОТЧИКИ СОБЫТИЙ =====================
 function attachEvents() {
-    tabVideo.onclick = () => { setActiveTab(tabVideo, [tabVideo, tabMesh]); stopMeshView(); };
-    tabMesh.onclick = () => { setActiveTab(tabMesh, [tabVideo, tabMesh]); startMeshView(); };
+    tabVideo.onclick = () => { setActiveTab(tabVideo, [tabVideo]); };
 
     const tabAIControls = document.getElementById('tabAIControls');
     const tabCameraControls = document.getElementById('tabCameraControls');
@@ -929,7 +798,6 @@ async function init() {
     startPollingAI();
     setInterval(fetchSystemStats, 2200);
     setInterval(fetchTerminalOutput, 400);
-    stopMeshView();
 }
 init();
 </script>

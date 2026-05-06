@@ -113,9 +113,6 @@ class MockStereoCamera:
         cv2.circle(frame, (cx, cy), 40, (0, 200, 255), -1)
         return frame
 
-    def get_depth_mesh(self, max_distance_cm=1500):
-        return {'width': 0, 'height': 0, 'points': []}
-
     def get_rectified_frame(self, left=True):
         return self._make_frame()
 
@@ -584,12 +581,6 @@ def set_servo_offset(channel: int, offset: float):
     if servo is None:
         return False
     return servo.set_offset(channel, offset)
-
-def build_depth_mesh():
-    camera = get_stereo_camera()
-    if camera is None:
-        return {'width': 0, 'height': 0, 'points': []}
-    return camera.get_depth_mesh()
 
 def start():
     start_background()

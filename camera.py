@@ -5,8 +5,6 @@ import threading
 import time
 
 class StereoCamera:
-    MESH_STEP = 2  # фиксированный шаг для 3D-модели
-
     def __init__(self, config_path, source=0):
         with open(config_path, 'r') as f:
             cfg = json.load(f)
@@ -243,37 +241,6 @@ class StereoCamera:
                         'r': r, 'g': g, 'b': b
                     })
             return points
-
-    def get_depth_mesh(self, max_distance_cm=1500):
-        """
-        Возвращает полигональную сетку с фиксированным шагом.
-        """
-        step = self.MESH_STEP
-        with self.lock:
-            if self.points_3d is None:
-                return {'width': 0, 'height': 0, 'points': []}
-            pts = self.points_3d
-            colors = self.points_color
-            h, w = pts.shape[:2]
-            grid_w = w // step
-            grid_h = h // step
-            points = []
-            for y in range(0, h, step):
-                for x in range(0, w, step):
-                    X, Y, Z = pts[y, x]
-                    valid = (Z > 0) and (Z <= max_distance_cm * 10)
-                    r, g, b = 200, 200, 200
-                    if valid and colors is not None and y < colors.shape[0] and x < colors.shape[1]:
-                        bgr = colors[y, x]
-                        r, g, b = int(bgr[2]), int(bgr[1]), int(bgr[0])
-                    points.append({
-                        'x': float(X / 10),
-                        'y': float(Y / 10),
-                        'z': float(Z / 10) if valid else 0.0,
-                        'r': r, 'g': g, 'b': b,
-                        'valid': valid
-                    })
-            return {'width': grid_w, 'height': grid_h, 'points': points}
 
     def update_params(self, alpha_depth=None, show_left=None, num_disp=None,
                       depth_enabled=None, face_tracking_enabled=None,

@@ -26,7 +26,6 @@ from r2_app.high_level import (
     set_servo_tracking,
     get_logs,
     build_point_cloud,
-    build_depth_mesh,
 )
 
 
@@ -213,11 +212,6 @@ def create_app() -> Flask:
             if pz <= 0:
                 return jsonify({"x": None, "y": None, "z": None})
             return jsonify({"x": float(px / 10.0), "y": float(py / 10.0), "z": float(pz / 10.0)})
-
-    @app.route("/api/mesh")
-    def api_mesh():
-        mesh_data = build_depth_mesh()
-        return jsonify(mesh_data)
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     def set_servo(channel, angle):
