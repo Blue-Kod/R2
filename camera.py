@@ -5,6 +5,8 @@ import threading
 import time
 
 class StereoCamera:
+    MESH_STEP = 2  # фиксированный шаг для 3D-модели
+
     def __init__(self, config_path, source=0):
         with open(config_path, 'r') as f:
             cfg = json.load(f)
@@ -31,19 +33,16 @@ class StereoCamera:
         self.Q_low = self.Q.copy()
         self.Q_low[:2, :3] *= self.depth_scale
 
-        # Параметры диспаратности (улучшенные для стабильности)
         self.num_disp = 8
         self.block_size = 7
         self.alpha_depth = 0.3
         self.show_left = True
         self.depth_enabled = True
 
-        # WLS фильтр
         self.wls_enabled = True
         self.wls_lambda = 10000
         self.wls_sigma = 1.5
 
-        # Временное сглаживание
         self.ema_alpha = 0.3
         self.prev_disp = None
         self.prev_disp_lock = threading.Lock()
@@ -55,7 +54,7 @@ class StereoCamera:
         self.rectR = None
         self.frame = None
         self.points_3d = None
-        self.points_color = None   # <-- цвет для 3D
+        self.points_color = None
         self.fps = 0.0
         self.face_dx = 0.0
         self.face_dy = 0.0
@@ -169,8 +168,6 @@ class StereoCamera:
                     self.prev_disp = smoothed.copy()
 
                 points = cv2.reprojectImageTo3D(smoothed, self.Q_low)
-
-                # Сохраняем цветную версию левого кадра уменьшенного размера
                 low_main = cv2.resize(main_view, self.low_size, interpolation=cv2.INTER_AREA)
 
                 with np.errstate(invalid='ignore'):
@@ -247,15 +244,11 @@ class StereoCamera:
                     })
             return points
 
-    def get_depth_mesh(self, step=2, max_distance_cm=1500):
+    def get_depth_mesh(self, max_distance_cm=1500):
         """
-        Возвращает структуру для построения 3D-полигональной сетки
-        {
-          'width':  число столбцов (size_x),
-          'height': число строк   (size_y),
-          'points': [ {x, y, z, r, g, b, valid}, ... ]  (row-major: строка за строкой)
-        }
+        Возвращает полигональную сетку с фиксированным шагом.
         """
+        step = self.MESH_STEP
         with self.lock:
             if self.points_3d is None:
                 return {'width': 0, 'height': 0, 'points': []}

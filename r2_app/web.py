@@ -25,6 +25,7 @@ from r2_app.high_level import (
     servo_tracking_enabled,
     set_servo_tracking,
     get_logs,
+    build_point_cloud,
     build_depth_mesh,
 )
 
@@ -153,16 +154,16 @@ def create_app() -> Flask:
             with camera.lock:
                 return jsonify(
                     {
-                        "depth_enabled": camera.depth_enabled,
-                        "face_tracking_enabled": camera.face_tracking_enabled,
-                        "tracking_mode": camera.tracking_mode,
-                        "tracking_scale_x": camera.tracking_scale_x,
-                        "tracking_scale_y": camera.tracking_scale_y,
-                        "tracking_offset_x": camera.tracking_offset_x,
-                        "tracking_offset_y": camera.tracking_offset_y,
-                        "alpha_depth": camera.alpha_depth,
-                        "show_left": camera.show_left,
-                        "num_disp": camera.num_disp,
+                        "depth_enabled": getattr(camera, 'depth_enabled', False),
+                        "face_tracking_enabled": getattr(camera, 'face_tracking_enabled', False),
+                        "tracking_mode": getattr(camera, 'tracking_mode', 'face'),
+                        "tracking_scale_x": getattr(camera, 'tracking_scale_x', 50.0),
+                        "tracking_scale_y": getattr(camera, 'tracking_scale_y', 30.0),
+                        "tracking_offset_x": getattr(camera, 'tracking_offset_x', 0.0),
+                        "tracking_offset_y": getattr(camera, 'tracking_offset_y', 0.0),
+                        "alpha_depth": getattr(camera, 'alpha_depth', 0.3),
+                        "show_left": getattr(camera, 'show_left', True),
+                        "num_disp": getattr(camera, 'num_disp', 7),
                     }
                 )
 
@@ -215,10 +216,7 @@ def create_app() -> Flask:
 
     @app.route("/api/mesh")
     def api_mesh():
-        step = request.args.get("step", default=4, type=int)
-        if step < 1:
-            step = 1
-        mesh_data = build_depth_mesh(step=step)
+        mesh_data = build_depth_mesh()
         return jsonify(mesh_data)
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])

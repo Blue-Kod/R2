@@ -209,6 +209,7 @@
             width: 100% !important;
             height: 100% !important;
             display: block;
+            outline: none;
         }
 
         .depth-tooltip {
@@ -389,14 +390,6 @@
                 <div id="mesh-tooltip" class="depth-tooltip hidden"></div>
             </div>
 
-            <div style="margin-top: 8px; display: flex; align-items: center; gap: 10px;">
-                <label style="display: flex; align-items: center; gap: 6px;">
-                    <span style="font-size: 12px; color: var(--muted);">Шаг сетки</span>
-                    <input type="range" id="meshStep" min="1" max="8" value="4" step="1" style="width: 100px;">
-                    <span id="meshStepVal">4</span>
-                </label>
-            </div>
-
             <div class="tabs" id="controlsTabs" style="margin-top: 12px;">
                 <button id="tabAIControls">Команды AI</button>
                 <button id="tabCameraControls" class="active">Параметры камеры</button>
@@ -477,42 +470,29 @@
     </div>
 </div>
 
-<script type="importmap">
-{
-    "imports": {
-        "three": "https://unpkg.com/three@0.157.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.157.0/examples/jsm/"
-    }
-}
-</script>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script>
+// ===================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====================
+let engine, scene3D, camera3D, meshModel = null, meshActive = false;
+let lastMeshFetch = 0;
 
-<script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
-// ---------- DOM элементы ----------
+// DOM элементы
 const videoContainer = document.getElementById('video-container');
 const meshContainer = document.getElementById('mesh-container');
+const tabVideo = document.getElementById('tabVideo');
+const tabMesh = document.getElementById('tabMesh');
 const depthTooltip = document.getElementById('depth-tooltip');
 const meshTooltip = document.getElementById('mesh-tooltip');
 const videoFeed = document.getElementById('video-feed');
 const meshCanvas = document.getElementById('mesh-canvas');
-const tabVideo = document.getElementById('tabVideo');
-const tabMesh = document.getElementById('tabMesh');
-const meshStepSlider = document.getElementById('meshStep');
-const meshStepVal = document.getElementById('meshStepVal');
 
-// Остальные элементы UI
-const tabAIControls = document.getElementById('tabAIControls');
-const tabCameraControls = document.getElementById('tabCameraControls');
-const tabTrackingControls = document.getElementById('tabTrackingControls');
-const aiControlsDiv = document.getElementById('ai-controls');
-const cameraControlsDiv = document.getElementById('camera-controls');
-const trackingControlsDiv = document.getElementById('tracking-controls');
+// AI панель
 const aiAudioEnabledChk = document.getElementById('aiAudioEnabled');
 const aiCommandInput = document.getElementById('ai-command-input');
 const aiSendBtn = document.getElementById('ai-send-btn');
 const aiLiveResponse = document.getElementById('ai-live-response');
+
+// Параметры камеры и трекинга
 const eyeLeft = document.getElementById('eyeLeft');
 const eyeRight = document.getElementById('eyeRight');
 const depthAlphaSlider = document.getElementById('depthAlpha');
@@ -528,6 +508,8 @@ const scaleYSpan = document.getElementById('scaleYVal');
 const offsetXSpan = document.getElementById('offsetXVal');
 const offsetYSpan = document.getElementById('offsetYVal');
 const servoTrackingChk = document.getElementById('servoTrackingEnabled');
+
+// Терминал и вкладки
 const terminalOutputDiv = document.getElementById('terminal-output');
 const terminalInput = document.getElementById('terminal-command');
 const logsOutput = document.getElementById('logs-output');
@@ -538,51 +520,128 @@ const terminalPane = document.getElementById('terminal-pane');
 const logsPane = document.getElementById('logs-pane');
 const pythonPane = document.getElementById('python-pane');
 
-// Three.js переменные
-let scene, camera3D, renderer, orbitControls;
-let meshModel = null;
-let animationId = null;
-let meshActive = false;
-let lastMeshFetch = 0;
+// ===================== ИНИЦИАЛИЗАЦИЯ 3D СЦЕНЫ (BABYLON.JS) =====================
+function initBabylon() {
+    canvas3D = meshCanvas;
+    engine = new BABYLON.Engine(canvas3D, true);
+    scene3D = new BABYLON.Scene(engine);
+    scene3D.clearColor = new BABYLON.Color4(0.07, 0.07, 0.07, 1.0);
 
-// AI polling
-let lastResponseText = '';
-let pollingInterval = null;
+    camera3D = new BABYLON.ArcRotateCamera("Camera", -Math.PI/4, Math.PI/3, 2, BABYLON.Vector3.Zero(), scene3D);
+    camera3D.attachControl(canvas3D, true);
+    camera3D.lowerRadiusLimit = 0.3;
+    camera3D.upperRadiusLimit = 5;
 
-// Terminal
-let lastTerminalOutput = '';
-let fetchingTerminal = false;
-let sendingCmd = false;
+    new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0.5, 1, 0.5), scene3D);
+    const dirLight = new BABYLON.DirectionalLight("dir", new BABYLON.Vector3(0.5, 1, 0.5), scene3D);
+    dirLight.intensity = 0.7;
 
-// ---------- Вспомогательные функции ----------
+    const grid = BABYLON.MeshBuilder.CreateGround("grid", { width: 4, height: 4, subdivisions: 20 }, scene3D);
+    grid.isPickable = false;
+    const gridMat = new BABYLON.StandardMaterial("gridMat", scene3D);
+    gridMat.wireframe = true;
+    gridMat.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+    grid.material = gridMat;
+
+    BABYLON.MeshBuilder.CreateLines("axisX", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0.5,0,0)] }, scene3D).color = BABYLON.Color3.Red();
+    BABYLON.MeshBuilder.CreateLines("axisY", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0,0.5,0)] }, scene3D).color = BABYLON.Color3.Green();
+    BABYLON.MeshBuilder.CreateLines("axisZ", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0,0,0.5)] }, scene3D).color = BABYLON.Color3.Blue();
+
+    meshCanvas.addEventListener('mousemove', (evt) => {
+        if (!meshActive || !meshModel) return;
+        const pickResult = scene3D.pick(scene3D.pointerX, scene3D.pointerY);
+        if (pickResult.hit && pickResult.pickedMesh === meshModel) {
+            const p = pickResult.pickedPoint;
+            meshTooltip.style.left = (evt.clientX - meshContainer.getBoundingClientRect().left + 12) + 'px';
+            meshTooltip.style.top = (evt.clientY - meshContainer.getBoundingClientRect().top + 12) + 'px';
+            meshTooltip.textContent = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)} Z:${p.z.toFixed(2)}`;
+            meshTooltip.classList.remove('hidden');
+        } else {
+            meshTooltip.classList.add('hidden');
+        }
+    });
+    meshCanvas.addEventListener('mouseleave', () => meshTooltip.classList.add('hidden'));
+
+    engine.runRenderLoop(() => scene3D.render());
+    window.addEventListener('resize', () => engine.resize());
+}
+
+function buildMeshFromData(data) {
+    if (!data.points || data.points.length === 0) return;
+    const w = data.width, h = data.height, points = data.points;
+    const positions = [], colors = [], indices = [];
+    const vertMap = new Array(h * w).fill(-1);
+    let vc = 0;
+
+    for (let i = 0; i < points.length; i++) {
+        const pt = points[i];
+        if (pt.valid) {
+            positions.push(pt.x / 100, pt.y / 100, pt.z / 100);
+            colors.push(pt.r / 255, pt.g / 255, pt.b / 255);
+            vertMap[i] = vc++;
+        }
+    }
+
+    for (let y = 0; y < h-1; y++) {
+        for (let x = 0; x < w-1; x++) {
+            const i00 = vertMap[y*w+x], i01 = vertMap[y*w+x+1], i10 = vertMap[(y+1)*w+x], i11 = vertMap[(y+1)*w+x+1];
+            if (i00!=-1 && i01!=-1 && i10!=-1) indices.push(i00, i01, i10);
+            if (i01!=-1 && i11!=-1 && i10!=-1) indices.push(i01, i11, i10);
+        }
+    }
+
+    if (meshModel) meshModel.dispose();
+    const vertexData = new BABYLON.VertexData();
+    vertexData.positions = positions;
+    vertexData.indices = indices;
+    vertexData.colors = colors;
+    meshModel = new BABYLON.Mesh("depthMesh", scene3D);
+    vertexData.applyToMesh(meshModel);
+    const mat = new BABYLON.StandardMaterial("mat", scene3D);
+    mat.disableLighting = true;
+    mat.emissiveColor = BABYLON.Color3.White();
+    mat.backFaceCulling = false;
+    meshModel.material = mat;
+}
+
+async function updateMesh() {
+    if (!meshActive || !scene3D) return;
+    try {
+        const resp = await fetch('/api/mesh');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        buildMeshFromData(data);
+    } catch(e) { console.warn("Mesh error:", e); }
+}
+
+let meshInterval = null;
+function startMeshView() {
+    if (!scene3D) initBabylon();
+    videoContainer.classList.add('hidden');
+    meshContainer.classList.remove('hidden');
+    meshActive = true;
+    updateMesh();
+    meshInterval = setInterval(updateMesh, 1000);
+}
+
+function stopMeshView() {
+    meshActive = false;
+    if (meshInterval) clearInterval(meshInterval);
+    meshContainer.classList.add('hidden');
+    videoContainer.classList.remove('hidden');
+}
+
+// ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ UI =====================
 function setActiveTab(activeBtn, allBtns) {
-    allBtns.forEach(btn => btn.classList.remove('active'));
+    allBtns.forEach(b => b.classList.remove('active'));
     activeBtn.classList.add('active');
 }
 
-function showTooltip(el, x, y, text) {
-    el.style.left = (x + 12) + 'px';
-    el.style.top = (y + 12) + 'px';
-    el.textContent = text;
-    el.classList.remove('hidden');
-}
-
-function hideTooltip(el) {
-    el.classList.add('hidden');
-}
-
-// ---------- Видео: запрос XYZ координат ----------
 async function getVideoCoords(ix, iy) {
     try {
-        const resp = await fetch('/api/coords3d', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ x: ix, y: iy })
-        });
-        const data = await resp.json();
-        if (data.x !== null && data.x !== undefined) {
-            return `X:${data.x.toFixed(1)} Y:${data.y.toFixed(1)} Z:${data.z.toFixed(1)} см`;
-        }
+        const r = await fetch('/api/coords3d', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({x:ix,y:iy}) });
+        const d = await r.json();
+        if (d.x !== null) return `X:${d.x.toFixed(1)} Y:${d.y.toFixed(1)} Z:${d.z.toFixed(1)} см`;
     } catch(e) {}
     return null;
 }
@@ -592,324 +651,132 @@ function initVideoTooltip() {
         const rect = videoFeed.getBoundingClientRect();
         const sx = videoFeed.naturalWidth / rect.width;
         const sy = videoFeed.naturalHeight / rect.height;
-        const ix = Math.round((e.clientX - rect.left) * sx);
-        const iy = Math.round((e.clientY - rect.top) * sy);
-        const text = await getVideoCoords(ix, iy);
+        const text = await getVideoCoords(Math.round((e.clientX-rect.left)*sx), Math.round((e.clientY-rect.top)*sy));
         if (text) {
-            showTooltip(depthTooltip,
-                e.clientX - videoContainer.getBoundingClientRect().left,
-                e.clientY - videoContainer.getBoundingClientRect().top,
-                text);
-        } else {
-            hideTooltip(depthTooltip);
-        }
+            depthTooltip.style.left = (e.clientX - videoContainer.getBoundingClientRect().left + 12) + 'px';
+            depthTooltip.style.top = (e.clientY - videoContainer.getBoundingClientRect().top + 12) + 'px';
+            depthTooltip.textContent = text;
+            depthTooltip.classList.remove('hidden');
+        } else depthTooltip.classList.add('hidden');
     });
-    videoFeed.addEventListener('mouseleave', () => hideTooltip(depthTooltip));
+    videoFeed.addEventListener('mouseleave', () => depthTooltip.classList.add('hidden'));
 }
 
-// ---------- 3D сцена ----------
-function initThree() {
-    const w = meshContainer.clientWidth;
-    const h = meshContainer.clientHeight;
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111);
-    camera3D = new THREE.PerspectiveCamera(60, w / h, 0.01, 50);
-    camera3D.position.set(0.8, 0.6, 1.4);
-    renderer = new THREE.WebGLRenderer({ canvas: meshCanvas, antialias: true });
-    renderer.setSize(w, h);
-    orbitControls = new OrbitControls(camera3D, renderer.domElement);
-    orbitControls.enableDamping = true;
-
-    // Освещение
-    scene.add(new THREE.AmbientLight(0x404040));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(0.5, 1, 0.5);
-    scene.add(dirLight);
-
-    // Вспомогательные объекты
-    scene.add(new THREE.GridHelper(4, 40, 0x606060, 0x2e2e2e));
-    scene.add(new THREE.AxesHelper(0.6));
-
-    // Raycaster для подсказки на 3D модели
-    const raycaster = new THREE.Raycaster();
-    meshCanvas.addEventListener('mousemove', (e) => {
-        if (!meshModel || !meshActive) return;
-        const rect = meshCanvas.getBoundingClientRect();
-        const mouse = new THREE.Vector2(
-            ((e.clientX - rect.left) / rect.width) * 2 - 1,
-            -((e.clientY - rect.top) / rect.height) * 2 + 1
-        );
-        raycaster.setFromCamera(mouse, camera3D);
-        const intersects = raycaster.intersectObject(meshModel);
-        if (intersects.length > 0) {
-            const p = intersects[0].point;
-            showTooltip(meshTooltip,
-                e.clientX - meshContainer.getBoundingClientRect().left,
-                e.clientY - meshContainer.getBoundingClientRect().top,
-                `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)} Z:${p.z.toFixed(2)}`);
-        } else {
-            hideTooltip(meshTooltip);
-        }
-    });
-    meshCanvas.addEventListener('mouseleave', () => hideTooltip(meshTooltip));
-
-    window.addEventListener('resize', onResize3D);
+// ===================== СЕРВОПРИВОДЫ =====================
+function updateServoVal(ch, val) {
+    const s = document.getElementById(`servo${ch}_val`);
+    if (s) s.textContent = val + '°';
 }
 
-function onResize3D() {
-    if (!meshActive) return;
-    const w = meshContainer.clientWidth;
-    const h = meshContainer.clientHeight;
-    camera3D.aspect = w / h;
-    camera3D.updateProjectionMatrix();
-    renderer.setSize(w, h);
+async function setServo(ch, angle) {
+    try { await fetch(`/api/servo/${ch}/${angle}`, {method:'POST'}); } catch(e) {}
 }
 
-function buildMeshFromData(data) {
-    if (!data.points || data.points.length === 0) return;
-
-    const w = data.width;
-    const h = data.height;
-    const points = data.points;
-
-    const positions = [];
-    const colors = [];
-    const indices = [];
-    const vertMap = new Array(h * w).fill(-1);
-    let vertCount = 0;
-
-    for (let i = 0; i < points.length; i++) {
-        const pt = points[i];
-        if (pt.valid) {
-            positions.push(pt.x / 100.0, pt.y / 100.0, pt.z / 100.0);
-            colors.push(pt.r / 255.0, pt.g / 255.0, pt.b / 255.0);
-            vertMap[i] = vertCount++;
-        }
+for (let i=0; i<=7; i++) {
+    const slider = document.getElementById(`servo${i}`);
+    if (slider) {
+        slider.addEventListener('input', () => updateServoVal(i, slider.value));
+        slider.addEventListener('change', () => setServo(i, parseInt(slider.value)));
+        updateServoVal(i, slider.value);
     }
-
-    for (let v = 0; v < h - 1; v++) {
-        for (let u = 0; u < w - 1; u++) {
-            const i00 = vertMap[v * w + u];
-            const i01 = vertMap[v * w + u + 1];
-            const i10 = vertMap[(v + 1) * w + u];
-            const i11 = vertMap[(v + 1) * w + u + 1];
-
-            if (i00 !== -1 && i01 !== -1 && i10 !== -1) {
-                indices.push(i00, i01, i10);
-            }
-            if (i01 !== -1 && i11 !== -1 && i10 !== -1) {
-                indices.push(i01, i11, i10);
-            }
-        }
-    }
-
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-    geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
-    geom.setIndex(indices);
-    geom.computeVertexNormals();
-
-    const material = new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        side: THREE.DoubleSide,
-        roughness: 0.6,
-    });
-
-    if (meshModel) scene.remove(meshModel);
-    meshModel = new THREE.Mesh(geom, material);
-    scene.add(meshModel);
 }
 
-async function updateMesh() {
-    if (!meshActive) return;
-    const step = parseInt(meshStepSlider.value, 10) || 4;
+// ===================== ПАРАМЕТРЫ КАМЕРЫ И ТРЕКИНГ =====================
+async function sendCameraParams() {
     try {
-        const resp = await fetch(`/api/mesh?step=${step}`);
-        const data = await resp.json();
-        buildMeshFromData(data);
+        await fetch('/api/camera/params', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({
+                depth_enabled: depthEnabledChk.checked,
+                face_tracking_enabled: trackingEnabledChk.checked,
+                tracking_mode: trackingModeSelect.value,
+                tracking_scale_x: parseInt(trackingScaleX.value),
+                tracking_scale_y: parseInt(trackingScaleY.value),
+                tracking_offset_x: parseInt(trackingOffsetX.value),
+                tracking_offset_y: parseInt(trackingOffsetY.value)
+            })
+        });
     } catch(e) {}
 }
 
-function animateMesh() {
-    if (!meshActive) return;
-    animationId = requestAnimationFrame(animateMesh);
-    orbitControls.update();
-    renderer.render(scene, camera3D);
-    const now = performance.now();
-    if (now - lastMeshFetch > 1000) {
-        lastMeshFetch = now;
-        updateMesh();
-    }
-}
-
-function startMeshView() {
-    if (!scene) initThree();
-    videoContainer.classList.add('hidden');
-    meshContainer.classList.remove('hidden');
-    meshActive = true;
-    onResize3D();
-    if (animationId) cancelAnimationFrame(animationId);
-    updateMesh();
-    animateMesh();
-}
-
-function stopMeshView() {
-    meshActive = false;
-    if (animationId) cancelAnimationFrame(animationId);
-    meshContainer.classList.add('hidden');
-    videoContainer.classList.remove('hidden');
-}
-
-// ---------- Сервоприводы ----------
-function updateServoValue(channel, val) {
-    const span = document.getElementById(`servo${channel}_val`);
-    if (span) span.innerText = val + '°';
-}
-
-async function setServo(channel, angle) {
-    try {
-        await fetch(`/api/servo/${channel}/${angle}`, { method: 'POST' });
-    } catch(e) { console.warn("servo err", e); }
-}
-
-for (let ch = 0; ch <= 7; ch++) {
-    const slider = document.getElementById(`servo${ch}`);
-    if (slider) {
-        slider.addEventListener('input', () => updateServoValue(ch, slider.value));
-        slider.addEventListener('change', () => setServo(ch, parseInt(slider.value)));
-        updateServoValue(ch, slider.value);
-    }
-}
-
-// ---------- Параметры камеры ----------
-async function sendCameraParams() {
-    const payload = {
-        depth_enabled: depthEnabledChk.checked,
-        face_tracking_enabled: trackingEnabledChk.checked,
-        tracking_mode: trackingModeSelect.value,
-        tracking_scale_x: parseInt(trackingScaleX.value, 10),
-        tracking_scale_y: parseInt(trackingScaleY.value, 10),
-        tracking_offset_x: parseInt(trackingOffsetX.value, 10),
-        tracking_offset_y: parseInt(trackingOffsetY.value, 10)
-    };
-    try {
-        await fetch('/api/camera/params', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-    } catch(err) { console.warn("camera params post error", err); }
-}
-
 async function updateRenderParams() {
-    const alpha = parseInt(depthAlphaSlider.value, 10);
-    const showLeft = eyeLeft.checked;
     try {
         await fetch('/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ alpha_depth: alpha, show_left: showLeft, num_disp: 5 })
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ alpha_depth: parseInt(depthAlphaSlider.value), show_left: eyeLeft.checked, num_disp: 5 })
         });
-    } catch(e) { console.warn("update error", e); }
+    } catch(e) {}
 }
 
 async function loadCameraParams() {
     try {
-        const res = await fetch('/api/camera/params');
-        const p = await res.json();
-        depthEnabledChk.checked = p.depth_enabled;
-        trackingEnabledChk.checked = p.face_tracking_enabled;
+        const r = await fetch('/api/camera/params');
+        const p = await r.json();
+        depthEnabledChk.checked = p.depth_enabled || false;
+        trackingEnabledChk.checked = p.face_tracking_enabled || false;
         trackingModeSelect.value = p.tracking_mode || 'face';
         trackingScaleX.value = p.tracking_scale_x ?? 50;
         trackingScaleY.value = p.tracking_scale_y ?? 30;
         trackingOffsetX.value = p.tracking_offset_x ?? 0;
         trackingOffsetY.value = p.tracking_offset_y ?? 0;
         updateTrackingDisplay();
-    } catch(e) { console.warn("load camera params", e); }
+    } catch(e) {}
 }
 
 async function loadServoTrackingState() {
     try {
-        const res = await fetch('/api/servo/tracking');
-        const data = await res.json();
-        servoTrackingChk.checked = data.enabled === true;
-    } catch(e) {}
-}
-
-async function setServoTracking() {
-    try {
-        await fetch('/api/servo/tracking', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: servoTrackingChk.checked })
-        });
+        const r = await fetch('/api/servo/tracking');
+        const d = await r.json();
+        servoTrackingChk.checked = d.enabled === true;
     } catch(e) {}
 }
 
 function updateTrackingDisplay() {
-    scaleXSpan.innerText = trackingScaleX.value;
-    scaleYSpan.innerText = trackingScaleY.value;
-    offsetXSpan.innerText = trackingOffsetX.value;
-    offsetYSpan.innerText = trackingOffsetY.value;
+    if (scaleXSpan) scaleXSpan.textContent = trackingScaleX.value;
+    if (scaleYSpan) scaleYSpan.textContent = trackingScaleY.value;
+    if (offsetXSpan) offsetXSpan.textContent = trackingOffsetX.value;
+    if (offsetYSpan) offsetYSpan.textContent = trackingOffsetY.value;
 }
 
-// ---------- Терминал ----------
-function stripAnsi(s) {
-    return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
-            .replace(/\x1b\][0-9;]*[a-zA-Z]?.*?\x07/g, '')
-            .replace(/\x1b\\/g, '')
-            .replace(/\x07/g, '')
-            .replace(/\r\n/g, '\n')
-            .replace(/\r/g, '\n');
-}
+// ===================== ТЕРМИНАЛ =====================
+let lastTerminalOutput = '', fetchingTerminal = false, sendingCmd = false;
 
 async function fetchTerminalOutput() {
     if (fetchingTerminal) return;
     fetchingTerminal = true;
     try {
-        const resp = await fetch('/api/cmd/output');
-        const data = await resp.json();
-        if (data.output !== lastTerminalOutput) {
-            terminalOutputDiv.textContent = stripAnsi(data.output);
+        const r = await fetch('/api/cmd/output');
+        const d = await r.json();
+        if (d.output !== lastTerminalOutput) {
+            terminalOutputDiv.textContent = d.output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'');
             terminalOutputDiv.scrollTop = terminalOutputDiv.scrollHeight;
-            lastTerminalOutput = data.output;
+            lastTerminalOutput = d.output;
         }
-    } catch (e) {}
-    finally { fetchingTerminal = false; }
+    } catch(e) {} finally { fetchingTerminal = false; }
 }
 
 async function sendTerminalCommand(cmd) {
     if (sendingCmd || !cmd.trim()) return;
     sendingCmd = true;
     try {
-        await fetch('/api/cmd/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ command: cmd })
-        });
+        await fetch('/api/cmd/send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd})});
         await fetchTerminalOutput();
-    } catch(e) {}
-    finally { sendingCmd = false; }
+    } catch(e) {} finally { sendingCmd = false; }
 }
 
-terminalInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        sendTerminalCommand(terminalInput.value.trim());
-        terminalInput.value = '';
-    }
-});
+// ===================== AI =====================
+let lastResponseText = '', pollingInterval = null;
 
-// ---------- AI панель ----------
 function startPollingAI() {
     if (pollingInterval) clearInterval(pollingInterval);
     pollingInterval = setInterval(async () => {
         try {
-            const resp = await fetch('/api/ai/get_current_response');
-            const data = await resp.json();
-            const currentText = data.response || '';
-            if (currentText !== lastResponseText) {
-                lastResponseText = currentText;
-                aiLiveResponse.textContent = currentText || '✨ Ожидание ответа...';
+            const r = await fetch('/api/ai/get_current_response');
+            const d = await r.json();
+            const txt = d.response || '';
+            if (txt !== lastResponseText) {
+                lastResponseText = txt;
+                aiLiveResponse.textContent = txt || '✨ Ожидание ответа...';
                 aiLiveResponse.scrollTop = aiLiveResponse.scrollHeight;
                 aiLiveResponse.classList.add('flash-green');
                 setTimeout(() => aiLiveResponse.classList.remove('flash-green'), 300);
@@ -922,183 +789,134 @@ async function sendAICommand() {
     const cmd = aiCommandInput.value.trim();
     if (!cmd) return;
     lastResponseText = '';
-    aiLiveResponse.textContent = '🤖 Генерация... (ответ появится)';
+    aiLiveResponse.textContent = '🤖 Генерация...';
     aiLiveResponse.classList.add('flash-green');
     setTimeout(() => aiLiveResponse.classList.remove('flash-green'), 300);
     aiCommandInput.value = '';
     try {
-        const resp = await fetch('/api/ai/command', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ command: cmd })
-        });
-        const data = await resp.json();
-        if (data.error) {
-            aiLiveResponse.textContent = `Ошибка: ${data.error}`;
-        }
-    } catch(e) {
-        aiLiveResponse.textContent = `Ошибка отправки: ${e.message}`;
-    }
+        const r = await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd})});
+        const d = await r.json();
+        if (d.error) aiLiveResponse.textContent = 'Ошибка: ' + d.error;
+    } catch(e) { aiLiveResponse.textContent = 'Ошибка отправки'; }
 }
 
-aiSendBtn.addEventListener('click', sendAICommand);
-aiCommandInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAICommand(); });
-aiAudioEnabledChk.addEventListener('change', async () => {
-    try {
-        await fetch('/api/ai/audio', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: aiAudioEnabledChk.checked })
-        });
-    } catch(e) {}
-});
-
-// ---------- Системная статистика и логи ----------
+// ===================== СТАТИСТИКА =====================
 async function fetchSystemStats() {
     try {
         const r = await fetch('/api/data');
         const d = await r.json();
-        document.getElementById('cpuStat').innerText = d.cpu ?? 0;
-        document.getElementById('ramStat').innerText = d.ram ?? 0;
-        document.getElementById('tempStat').innerText = d.temp ?? '--';
-        document.getElementById('fpsStat').innerText = d.fps ?? 0;
-        if (logsOutput && logsPane && !logsPane.classList.contains('hidden')) {
-            logsOutput.textContent = d.logs.join('\n');
+        document.getElementById('cpuStat').textContent = d.cpu ?? 0;
+        document.getElementById('ramStat').textContent = d.ram ?? 0;
+        document.getElementById('tempStat').textContent = d.temp ?? '--';
+        document.getElementById('fpsStat').textContent = d.fps ?? 0;
+        if (!logsPane.classList.contains('hidden')) {
+            logsOutput.textContent = (d.logs || []).join('\n');
             logsOutput.scrollTop = logsOutput.scrollHeight;
         }
     } catch(e) {}
 }
 
-async function fetchLogs() {
-    try {
-        const r = await fetch('/api/data');
-        const d = await r.json();
-        if (logsOutput && d.logs) {
-            logsOutput.textContent = d.logs.join('\n');
-            logsOutput.scrollTop = logsOutput.scrollHeight;
-        }
-    } catch(e) {}
-}
-
-// ---------- Python панель ----------
-document.getElementById('run-python-btn').addEventListener('click', async () => {
-    const code = document.getElementById('python-code').value;
-    if (!code.trim()) return;
-    const output = document.getElementById('python-output');
-    output.textContent = 'Выполнение...';
-    try {
-        const resp = await fetch('/api/python/exec', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code })
-        });
-        const data = await resp.json();
-        let out = '';
-        if (data.stdout) out += data.stdout;
-        if (data.stderr) out += '\n--- ОШИБКИ ---\n' + data.stderr;
-        output.textContent = out || '✓ Успешно';
-        output.scrollTop = output.scrollHeight;
-    } catch(e) { output.textContent = 'Ошибка: ' + e.message; }
-});
-
-document.getElementById('clear-python-btn').addEventListener('click', () => {
-    document.getElementById('python-code').value = '';
-    document.getElementById('python-output').textContent = '';
-});
-
-// ---------- Кнопки обновления и выключения ----------
-document.getElementById('updateBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('updateBtn');
-    btn.disabled = true;
-    btn.textContent = 'Обновление...';
-    try {
-        const resp = await fetch('/api/update', { method: 'POST' });
-        const data = await resp.json();
-        alert(data.message || 'Обновление запущено.');
-    } catch(e) {
-        alert('Ошибка: ' + e.message);
-        btn.disabled = false;
-        btn.textContent = '↻';
-    }
-});
-
-document.getElementById('exitBtn').addEventListener('click', async () => {
-    try {
-        const resp = await fetch('/api/shutdown', { method: 'POST' });
-        const data = await resp.json();
-        alert(data.message || 'Завершение работы...');
-    } catch(e) { alert('Ошибка при завершении'); }
-});
-
-// ---------- Обработчики табов ----------
+// ===================== ОБРАБОТЧИКИ СОБЫТИЙ =====================
 function attachEvents() {
-    tabVideo.addEventListener('click', () => {
-        setActiveTab(tabVideo, [tabVideo, tabMesh]);
-        stopMeshView();
-    });
-    tabMesh.addEventListener('click', () => {
-        setActiveTab(tabMesh, [tabVideo, tabMesh]);
-        startMeshView();
-    });
+    tabVideo.onclick = () => { setActiveTab(tabVideo, [tabVideo, tabMesh]); stopMeshView(); };
+    tabMesh.onclick = () => { setActiveTab(tabMesh, [tabVideo, tabMesh]); startMeshView(); };
 
-    tabCameraControls.addEventListener('click', () => {
+    const tabAIControls = document.getElementById('tabAIControls');
+    const tabCameraControls = document.getElementById('tabCameraControls');
+    const tabTrackingControls = document.getElementById('tabTrackingControls');
+    const aiControlsDiv = document.getElementById('ai-controls');
+    const cameraControlsDiv = document.getElementById('camera-controls');
+    const trackingControlsDiv = document.getElementById('tracking-controls');
+
+    tabCameraControls.onclick = () => {
         setActiveTab(tabCameraControls, [tabAIControls, tabCameraControls, tabTrackingControls]);
         cameraControlsDiv.classList.remove('hidden');
         aiControlsDiv.classList.add('hidden');
         trackingControlsDiv.classList.add('hidden');
-    });
-    tabTrackingControls.addEventListener('click', () => {
+    };
+    tabTrackingControls.onclick = () => {
         setActiveTab(tabTrackingControls, [tabAIControls, tabCameraControls, tabTrackingControls]);
         trackingControlsDiv.classList.remove('hidden');
         aiControlsDiv.classList.add('hidden');
         cameraControlsDiv.classList.add('hidden');
-    });
-    tabAIControls.addEventListener('click', () => {
+    };
+    tabAIControls.onclick = () => {
         setActiveTab(tabAIControls, [tabAIControls, tabCameraControls, tabTrackingControls]);
         aiControlsDiv.classList.remove('hidden');
         cameraControlsDiv.classList.add('hidden');
         trackingControlsDiv.classList.add('hidden');
-    });
+    };
 
-    tabTerminal.addEventListener('click', () => {
+    tabTerminal.onclick = () => {
         setActiveTab(tabTerminal, [tabTerminal, tabLogs, tabPython]);
-        terminalPane.classList.remove('hidden');
-        logsPane.classList.add('hidden');
-        pythonPane.classList.add('hidden');
-    });
-    tabLogs.addEventListener('click', () => {
+        terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden');
+    };
+    tabLogs.onclick = () => {
         setActiveTab(tabLogs, [tabTerminal, tabLogs, tabPython]);
-        logsPane.classList.remove('hidden');
-        terminalPane.classList.add('hidden');
-        pythonPane.classList.add('hidden');
-        fetchLogs();
-    });
-    tabPython.addEventListener('click', () => {
+        logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden');
+        fetchSystemStats();
+    };
+    tabPython.onclick = () => {
         setActiveTab(tabPython, [tabTerminal, tabLogs, tabPython]);
-        pythonPane.classList.remove('hidden');
-        terminalPane.classList.add('hidden');
-        logsPane.classList.add('hidden');
-    });
+        pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden');
+    };
 
-    eyeLeft.addEventListener('change', updateRenderParams);
-    eyeRight.addEventListener('change', updateRenderParams);
-    depthAlphaSlider.addEventListener('input', updateRenderParams);
-    depthEnabledChk.addEventListener('change', sendCameraParams);
-    trackingEnabledChk.addEventListener('change', sendCameraParams);
-    trackingModeSelect.addEventListener('change', sendCameraParams);
-    trackingScaleX.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
-    trackingScaleY.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
-    trackingOffsetX.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
-    trackingOffsetY.addEventListener('input', () => { updateTrackingDisplay(); sendCameraParams(); });
-    servoTrackingChk.addEventListener('change', setServoTracking);
+    eyeLeft.onchange = updateRenderParams;
+    eyeRight.onchange = updateRenderParams;
+    depthAlphaSlider.oninput = updateRenderParams;
+    depthEnabledChk.onchange = sendCameraParams;
+    trackingEnabledChk.onchange = sendCameraParams;
+    trackingModeSelect.onchange = sendCameraParams;
+    trackingScaleX.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
+    trackingScaleY.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
+    trackingOffsetX.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
+    trackingOffsetY.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
+    servoTrackingChk.onchange = async () => {
+        try { await fetch('/api/servo/tracking', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:servoTrackingChk.checked})}); } catch(e) {}
+    };
 
-    meshStepSlider.addEventListener('input', () => {
-        meshStepVal.textContent = meshStepSlider.value;
-        if (meshActive) updateMesh();
-    });
+    terminalInput.onkeydown = (e) => { if (e.key==='Enter') { sendTerminalCommand(terminalInput.value.trim()); terminalInput.value = ''; } };
+    aiSendBtn.onclick = sendAICommand;
+    aiCommandInput.onkeydown = (e) => { if (e.key==='Enter') sendAICommand(); };
+    aiAudioEnabledChk.onchange = async () => {
+        try { await fetch('/api/ai/audio', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:aiAudioEnabledChk.checked})}); } catch(e) {}
+    };
+
+    document.getElementById('run-python-btn').onclick = async () => {
+        const code = document.getElementById('python-code').value;
+        if (!code.trim()) return;
+        const out = document.getElementById('python-output');
+        out.textContent = 'Выполнение...';
+        try {
+            const r = await fetch('/api/python/exec', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code})});
+            const d = await r.json();
+            out.textContent = (d.stdout||'') + ((d.stderr)?'\n--- ОШИБКИ ---\n'+d.stderr:'') || '✓ Успешно';
+            out.scrollTop = out.scrollHeight;
+        } catch(e) { out.textContent = 'Ошибка: ' + e.message; }
+    };
+    document.getElementById('clear-python-btn').onclick = () => {
+        document.getElementById('python-code').value = '';
+        document.getElementById('python-output').textContent = '';
+    };
+
+    document.getElementById('updateBtn').onclick = async () => {
+        const btn = document.getElementById('updateBtn');
+        btn.disabled = true; btn.textContent = 'Обновление...';
+        try {
+            const r = await fetch('/api/update', {method:'POST'});
+            const d = await r.json();
+            alert(d.message || 'Обновление запущено.');
+        } catch(e) { alert('Ошибка: '+e.message); btn.disabled = false; btn.textContent = '↻'; }
+    };
+    document.getElementById('exitBtn').onclick = async () => {
+        try {
+            const r = await fetch('/api/shutdown', {method:'POST'});
+            alert((await r.json()).message || 'Завершение работы...');
+        } catch(e) { alert('Ошибка при завершении'); }
+    };
 }
 
-// ---------- Инициализация ----------
+// ===================== ИНИЦИАЛИЗАЦИЯ =====================
 async function init() {
     attachEvents();
     await loadCameraParams();
@@ -1111,7 +929,6 @@ async function init() {
     startPollingAI();
     setInterval(fetchSystemStats, 2200);
     setInterval(fetchTerminalOutput, 400);
-    // Стартуем с видео (облако/модель выключены)
     stopMeshView();
 }
 init();
