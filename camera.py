@@ -1,4 +1,4 @@
-# camera.py
+# camera.py (улучшенная версия с WLS и точной картой глубины)
 import cv2
 import numpy as np
 import json
@@ -32,13 +32,19 @@ class StereoCamera:
         self.Q_low = self.Q.copy()
         self.Q_low[:2, :3] *= self.depth_scale
 
-        self.num_disp = 7
-        self.block_size = 7
-        self.alpha_depth = 0.3
+        # Параметры диспаратности (увеличенная дальность)
+        self.num_disp = 8                # 8*16 = 128 уровней диспаратности
+        self.block_size = 7              # Размер блока (нечётное, 5..11)
+        self.alpha_depth = 0.3           # Прозрачность карты глубины на основном виде
         self.show_left = True
         self.depth_enabled = True
 
-        self._init_matcher()
+        # Параметры WLS фильтра
+        self.wls_enabled = True
+        self.wls_lambda = 8000           # Гладкость (8000 – золотая середина)
+        self.wls_sigma = 1.5             # Сохранение краёв (1.5 – хорошо для помещений)
+
+        self._init_matchers()
 
         self.lock = threading.Lock()
         self.rectL = None
@@ -61,12 +67,37 @@ class StereoCamera:
         threading.Thread(target=self._capture_loop, daemon=True).start()
         threading.Thread(target=self._processing_loop, daemon=True).start()
 
-    def _init_matcher(self):
+    def _init_matchers(self):
         max_d = self.num_disp * 16
+
+        # Левый матчер (основной) с улучшенными параметрами
         self.matcher_l = cv2.StereoSGBM_create(
-            minDisparity=0, numDisparities=max_d, blockSize=self.block_size,
-            P1=8 * 3 * self.block_size ** 2, P2=32 * 3 * self.block_size ** 2,
-            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY)
+            minDisparity=0,
+            numDisparities=max_d,
+            blockSize=self.block_size,
+            P1=8 * 3 * self.block_size ** 2,
+            P2=32 * 3 * self.block_size ** 2,
+            disp12MaxDiff=1,
+            uniquenessRatio=10,          # Убирает неоднозначности (10 – строгий, но не слишком)
+            speckleWindowSize=100,       # Размер окна для фильтрации пятен (100 – хорошо)
+            speckleRange=32,            # Макс. разница диспаратности в окне (32 – средне)
+            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
+        )
+
+        # Правый матчер и WLS-фильтр (если доступен)
+        self.wls_available = False
+        self.matcher_r = None
+        self.wls_filter = None
+        try:
+            self.matcher_r = cv2.ximgproc.createRightMatcher(self.matcher_l)
+            self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(self.matcher_l)
+            self.wls_filter.setLambda(self.wls_lambda)
+            self.wls_filter.setSigmaColor(self.wls_sigma)
+            self.wls_available = True
+            print("[CAM] WLS filter initialized")
+        except Exception as e:
+            print(f"[CAM] WLS not available: {e} (install opencv-contrib-python)")
+            self.wls_available = False
 
     def _capture_loop(self):
         while self.running:
@@ -103,6 +134,7 @@ class StereoCamera:
                 self.rawL = None
                 self.rawR = None
 
+            # Ректификация
             rectL = cv2.remap(imgL, self.mapL1, self.mapL2, cv2.INTER_LINEAR)
             rectR = cv2.remap(imgR, self.mapR1, self.mapR2, cv2.INTER_LINEAR)
             with self.lock:
@@ -112,16 +144,34 @@ class StereoCamera:
             main_view = rectL if self.show_left else rectR
 
             if self.depth_enabled:
+                # Уменьшаем разрешение для быстродействия
                 lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
                 lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
                 grayL = cv2.cvtColor(lowL, cv2.COLOR_BGR2GRAY)
                 grayR = cv2.cvtColor(lowR, cv2.COLOR_BGR2GRAY)
+
+                # Вычисление диспаратности
                 dispL = self.matcher_l.compute(grayL, grayR).astype(np.float32) / 16.0
-                points = cv2.reprojectImageTo3D(dispL, self.Q_low)
+
+                if self.wls_enabled and self.wls_available:
+                    dispR = self.matcher_r.compute(grayR, grayL).astype(np.float32) / 16.0
+                    # Применяем WLS фильтр (требует левый цветной кадр для сохранения краёв)
+                    filtered_disp = self.wls_filter.filter(dispL, lowL, disparity_map_right=dispR)
+                    # WLS возвращает float32, но может содержать -16 (невалидные) — убираем
+                    filtered_disp[filtered_disp <= 0] = 0
+                    d_float = filtered_disp
+                else:
+                    d_float = dispL
+
+                # 3D точки
+                points = cv2.reprojectImageTo3D(d_float, self.Q_low)
+
+                # Визуализация диспаратности
                 with np.errstate(invalid='ignore'):
-                    disp_vis = np.clip((dispL / (self.num_disp * 16)) * 255, 0, 255).astype(np.uint8)
+                    disp_vis = np.clip(d_float / (self.num_disp * 16) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
                 output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
+
                 with self.lock:
                     self.points_3d = points
             else:
@@ -197,9 +247,11 @@ class StereoCamera:
                 self.show_left = show_left
             if num_disp is not None and num_disp != self.num_disp:
                 self.num_disp = num_disp
-                self._init_matcher()
+                self._init_matchers()
             if depth_enabled is not None:
                 self.depth_enabled = depth_enabled
+            if wls_enabled is not None:
+                self.wls_enabled = wls_enabled
 
     def stop(self):
         self.running = False
