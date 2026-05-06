@@ -1,4 +1,4 @@
-# camera.py (улучшенная версия с WLS и точной картой глубины)
+# camera.py (стабильная карта глубины с временным сглаживанием)
 import cv2
 import numpy as np
 import json
@@ -32,17 +32,22 @@ class StereoCamera:
         self.Q_low = self.Q.copy()
         self.Q_low[:2, :3] *= self.depth_scale
 
-        # Параметры диспаратности (увеличенная дальность)
+        # Параметры диспаратности (улучшенные для стабильности)
         self.num_disp = 8                # 8*16 = 128 уровней диспаратности
-        self.block_size = 7              # Размер блока (нечётное, 5..11)
+        self.block_size = 7              # Размер блока
         self.alpha_depth = 0.3           # Прозрачность карты глубины на основном виде
         self.show_left = True
         self.depth_enabled = True
 
         # Параметры WLS фильтра
         self.wls_enabled = True
-        self.wls_lambda = 8000           # Гладкость (8000 – золотая середина)
-        self.wls_sigma = 1.5             # Сохранение краёв (1.5 – хорошо для помещений)
+        self.wls_lambda = 10000          # Увеличена гладкость
+        self.wls_sigma = 1.5             # Сохранение краёв
+
+        # Параметры временной стабилизации
+        self.ema_alpha = 0.3             # Коэффициент сглаживания (0.1..0.5)
+        self.prev_disp = None            # Буфер предыдущей диспаратности
+        self.prev_disp_lock = threading.Lock()
 
         self._init_matchers()
 
@@ -70,7 +75,7 @@ class StereoCamera:
     def _init_matchers(self):
         max_d = self.num_disp * 16
 
-        # Левый матчер (основной) с улучшенными параметрами
+        # Левый матчер (основной) с улучшенными параметрами стабильности
         self.matcher_l = cv2.StereoSGBM_create(
             minDisparity=0,
             numDisparities=max_d,
@@ -78,9 +83,9 @@ class StereoCamera:
             P1=8 * 3 * self.block_size ** 2,
             P2=32 * 3 * self.block_size ** 2,
             disp12MaxDiff=1,
-            uniquenessRatio=10,          # Убирает неоднозначности (10 – строгий, но не слишком)
-            speckleWindowSize=100,       # Размер окна для фильтрации пятен (100 – хорошо)
-            speckleRange=32,            # Макс. разница диспаратности в окне (32 – средне)
+            uniquenessRatio=15,          # Жёстче фильтрует неоднозначности
+            speckleWindowSize=200,       # Сильнее подавляет мелкие пятна
+            speckleRange=32,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
 
@@ -155,20 +160,30 @@ class StereoCamera:
 
                 if self.wls_enabled and self.wls_available:
                     dispR = self.matcher_r.compute(grayR, grayL).astype(np.float32) / 16.0
-                    # Применяем WLS фильтр (требует левый цветной кадр для сохранения краёв)
                     filtered_disp = self.wls_filter.filter(dispL, lowL, disparity_map_right=dispR)
-                    # WLS возвращает float32, но может содержать -16 (невалидные) — убираем
                     filtered_disp[filtered_disp <= 0] = 0
-                    d_float = filtered_disp
+                    current_disp = filtered_disp
                 else:
-                    d_float = dispL
+                    current_disp = dispL
 
-                # 3D точки
-                points = cv2.reprojectImageTo3D(d_float, self.Q_low)
+                # Временное сглаживание (EMA) для подавления дрожания
+                with self.prev_disp_lock:
+                    if self.prev_disp is not None and self.prev_disp.shape == current_disp.shape:
+                        # Маска: сглаживаем только пиксели, где у обоих кадров валидная диспаратность
+                        valid = (self.prev_disp > 0) & (current_disp > 0)
+                        smoothed = np.where(valid,
+                                           self.ema_alpha * current_disp + (1 - self.ema_alpha) * self.prev_disp,
+                                           current_disp)
+                    else:
+                        smoothed = current_disp
+                    self.prev_disp = smoothed.copy()
+
+                # 3D точки из сглаженной диспаратности
+                points = cv2.reprojectImageTo3D(smoothed, self.Q_low)
 
                 # Визуализация диспаратности
                 with np.errstate(invalid='ignore'):
-                    disp_vis = np.clip(d_float / (self.num_disp * 16) * 255, 0, 255).astype(np.uint8)
+                    disp_vis = np.clip(smoothed / (self.num_disp * 16) * 255, 0, 255).astype(np.uint8)
                 disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
                 output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
 
@@ -224,6 +239,7 @@ class StereoCamera:
             for y in range(0, h, step):
                 for x in range(0, w, step):
                     X, Y, Z = pts[y, x]
+                    # Дополнительная фильтрация дальних выбросов
                     if Z <= 0 or Z > max_distance_cm * 10:
                         continue
                     points.append({
@@ -248,6 +264,9 @@ class StereoCamera:
             if num_disp is not None and num_disp != self.num_disp:
                 self.num_disp = num_disp
                 self._init_matchers()
+                # Сброс буфера сглаживания при смене параметров
+                with self.prev_disp_lock:
+                    self.prev_disp = None
             if depth_enabled is not None:
                 self.depth_enabled = depth_enabled
             if wls_enabled is not None:
