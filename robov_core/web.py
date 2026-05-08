@@ -8,8 +8,8 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, render_template, request
 
-from r2_app.config import AppConfig
-from r2_app.high_level import (
+from robov_core.config import AppConfig
+from robov_core.high_level import (
     _camera,
     _servo,
     health_snapshot,
@@ -22,8 +22,6 @@ from r2_app.high_level import (
     supported_emotes,
     set_eyes_position,
     get_eyes_position,
-    servo_tracking_enabled,
-    set_servo_tracking,
     get_logs,
     build_point_cloud,
 )
@@ -57,7 +55,7 @@ def create_app() -> Flask:
             return jsonify({"status": "error", "message": "launcher.py not found"}), 404
         try:
             subprocess.Popen([sys.executable, str(launcher_path)])
-            from r2_app.high_level import log
+            from robov_core.high_level import log
             log("Update process started")
 
             def shutdown():
@@ -71,7 +69,7 @@ def create_app() -> Flask:
 
     @app.route("/api/shutdown", methods=["POST"])
     def api_shutdown():
-        from r2_app.high_level import log, cleanup
+        from robov_core.high_level import log, cleanup
         log("Shutdown command received")
 
         def shutdown():
@@ -154,12 +152,6 @@ def create_app() -> Flask:
                 return jsonify(
                     {
                         "depth_enabled": getattr(camera, 'depth_enabled', False),
-                        "face_tracking_enabled": getattr(camera, 'face_tracking_enabled', False),
-                        "tracking_mode": getattr(camera, 'tracking_mode', 'face'),
-                        "tracking_scale_x": getattr(camera, 'tracking_scale_x', 50.0),
-                        "tracking_scale_y": getattr(camera, 'tracking_scale_y', 30.0),
-                        "tracking_offset_x": getattr(camera, 'tracking_offset_x', 0.0),
-                        "tracking_offset_y": getattr(camera, 'tracking_offset_y', 0.0),
                         "alpha_depth": getattr(camera, 'alpha_depth', 0.3),
                         "show_left": getattr(camera, 'show_left', True),
                         "num_disp": getattr(camera, 'num_disp', 7),
@@ -169,25 +161,11 @@ def create_app() -> Flask:
         data = request.get_json(silent=True) or {}
         camera.update_params(
             depth_enabled=data.get("depth_enabled"),
-            face_tracking_enabled=data.get("face_tracking_enabled"),
-            tracking_mode=data.get("tracking_mode"),
-            tracking_scale_x=data.get("tracking_scale_x"),
-            tracking_scale_y=data.get("tracking_scale_y"),
-            tracking_offset_x=data.get("tracking_offset_x"),
-            tracking_offset_y=data.get("tracking_offset_y"),
             alpha_depth=data.get("alpha_depth"),
             show_left=data.get("show_left"),
             num_disp=data.get("num_disp"),
         )
         return jsonify({"status": "ok"})
-
-    @app.route("/api/tracking/offsets")
-    def tracking_offsets():
-        camera = _camera
-        if not camera:
-            return jsonify({"dx": 0, "dy": 0})
-        dx, dy = camera.get_eye_offsets()
-        return jsonify({"dx": dx, "dy": dy})
 
     # Новые endpoints
     @app.route("/api/coords3d", methods=["POST"])
@@ -211,7 +189,7 @@ def create_app() -> Flask:
             px, py, pz = camera.points_3d[ly, lx]
             if pz <= 0:
                 return jsonify({"x": None, "y": None, "z": None})
-            return jsonify({"x": float(px / 10.0), "y": float(py / 10.0), "z": float(pz / 10.0)})
+        return jsonify({"x": float(px / 10.0), "y": float(py / 10.0), "z": float(pz / 10.0)})
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     def set_servo(channel, angle):
@@ -227,17 +205,6 @@ def create_app() -> Flask:
             return jsonify({"status": "ok", "channel": channel, "angle": angle})
         return jsonify({"error": "Failed to set servo"}), 500
 
-    @app.route("/api/servo/tracking", methods=["GET", "POST"])
-    def servo_tracking():
-        if request.method == "GET":
-            return jsonify({"enabled": servo_tracking_enabled})
-
-        data = request.get_json(silent=True) or {}
-        set_servo_tracking(bool(data.get("enabled", False)))
-        from r2_app.high_level import log
-        log(f"Servo tracking {'enabled' if servo_tracking_enabled else 'disabled'}")
-        return jsonify({"status": "ok", "enabled": servo_tracking_enabled})
-
     @app.route("/api/ai/command", methods=["POST"])
     def ai_command():
         """Send command to AI and get response."""
@@ -248,7 +215,7 @@ def create_app() -> Flask:
             return jsonify({"error": "No command provided"}), 400
         
         try:
-            from ai import command as ai_command_func
+            from robov_core.ai import command as ai_command_func
             response = ai_command_func(command_text)
             return jsonify({"response": response})
         except Exception as e:
@@ -258,7 +225,7 @@ def create_app() -> Flask:
     def ai_get_current_response():
         """Возвращает текущий накопленный текст ответа AI."""
         try:
-            from ai import get_current_response
+            from robov_core.ai import get_current_response
             current = get_current_response()
         except (ImportError, AttributeError):
             current = ""
@@ -271,7 +238,7 @@ def create_app() -> Flask:
         enabled = bool(data.get("enabled", True))
         
         try:
-            from ai import enable_ai_audio
+            from robov_core.ai import enable_ai_audio
             enable_ai_audio(enabled)
             return jsonify({"status": "ok", "audio_enabled": enabled})
         except Exception as e:
@@ -323,7 +290,7 @@ def create_app() -> Flask:
         
         data = request.get_json(silent=True) or {}
         code = str(data.get("code", "")).strip()
-        code = f"from r2_app.high_level import *\n{code}"
+        code = f"from robov_core.high_level import *\n{code}"
         
         if not code:
             return jsonify({"stdout": "", "stderr": "No code provided"}), 400

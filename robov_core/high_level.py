@@ -13,11 +13,11 @@ import cv2
 import numpy as np
 import psutil
 
-from camera import StereoCamera
-from servo import ServoController
+from robov_core.camera import StereoCamera
+from robov_core.servo import ServoController
 
 try:
-    from eyes_display import EyeDisplay, optimize_for_arm
+    from robov_core.eyes_display import EyeDisplay, optimize_for_arm
     _HAS_DISPLAY = True
 except ImportError:
     _HAS_DISPLAY = False
@@ -57,8 +57,6 @@ class StdoutCapture:
 _stdout_capture = StdoutCapture()
 _stderr_capture = StdoutCapture()
 
-servo_tracking_enabled = False
-_tracking_thread = None
 _hardware_initialized = False
 _shutdown_requested = False
 
@@ -72,7 +70,8 @@ _current_emote = "normal"
 _eyes_x = 0.0
 _eyes_y = 0.0
 _emote_lock = threading.Lock()
-_supported_emotes = [os.path.splitext(f)[0] for f in os.listdir("emotions") if f.endswith(".png")]
+_emotions_dir = os.path.join(os.path.dirname(__file__), "emotions")
+_supported_emotes = [os.path.splitext(f)[0] for f in os.listdir(_emotions_dir) if f.endswith(".png")]
 
 _all_threads = []
 
@@ -86,19 +85,11 @@ class MockStereoCamera:
         self.lock = threading.Lock()
         self.img_size = (1280, 720)
         self.low_size = (320, 180)
-        self.depth_enabled = True
-        self.face_tracking_enabled = True
-        self.tracking_mode = "person"
-        self.tracking_scale_x = 50.0
-        self.tracking_scale_y = 30.0
-        self.tracking_offset_x = 0.0
-        self.tracking_offset_y = 0.0
+        self.depth_enabled = False
         self.alpha_depth = 0.3
         self.show_left = True
         self.num_disp = 5
         self.wls_enabled = False
-        self.face_dx = 0.0
-        self.face_dy = 0.0
         self.fps = 30.0
         self.points_3d = np.zeros((self.low_size[1], self.low_size[0], 3), dtype=np.float32)
         self._tick = 0
@@ -124,10 +115,6 @@ class MockStereoCamera:
         _ = (x, y)
         return 120.0
 
-    def get_eye_offsets(self):
-        with self.lock:
-            return self.face_dx, self.face_dy
-
     def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
         _ = max_distance_cm
         points = []
@@ -151,7 +138,7 @@ def _init_hardware():
         log("Simulation mode enabled: mock camera and mock servo are active")
     else:
         try:
-            from r2_app.config import AppConfig
+            from robov_core.config import AppConfig
             config = AppConfig()
             if config.camera_config_path.exists():
                 _camera = StereoCamera(str(config.camera_config_path), source=config.camera_source)
@@ -166,7 +153,7 @@ def _init_hardware():
         try:
             _servo = ServoController(bus=0, address=0x40, freq=50)
             log("Servo controller initialized")
-            from r2_app.config import AppConfig
+            from robov_core.config import AppConfig
             config = AppConfig()
             for channel, angle in config.default_servo_angles.items():
                 if channel in _servo.channel_configs:
@@ -174,59 +161,6 @@ def _init_hardware():
         except Exception as exc:
             log(f"Servo init error: {exc}")
             log("Falling back to mock servo")
-
-
-def _tracking_loop():
-    global _camera, _servo, servo_tracking_enabled, _shutdown_requested
-
-    default_neck = 90
-    default_tilt = 90
-    max_neck_delta = 30
-    max_tilt_delta = 15
-    last_neck = default_neck
-    last_tilt = default_tilt
-    last_target_time = time.time()
-    target_lost = True
-
-    while not _shutdown_requested:
-        if servo_tracking_enabled and _camera and _servo:
-            dx, dy = _camera.get_eye_offsets()
-            scale_x = getattr(_camera, 'tracking_scale_x', 50.0) or 1.0
-            scale_y = getattr(_camera, 'tracking_scale_y', 30.0) or 1.0
-
-            target_present = (dx != 0.0 or dy != 0.0)
-            if target_present:
-                target_lost = False
-                last_target_time = time.time()
-
-                neck_angle = default_neck + (dx / scale_x) * max_neck_delta
-                neck_angle = max(default_neck - max_neck_delta, min(default_neck + max_neck_delta, neck_angle))
-                tilt_angle = default_tilt + (dy / scale_y) * max_tilt_delta
-                tilt_angle = max(default_tilt - max_tilt_delta, min(default_tilt + max_tilt_delta, tilt_angle))
-
-                if abs(neck_angle - last_neck) > 1:
-                    _servo.set_servo(0, int(round(neck_angle)), smooth=True, step_delay=0.01, step_angle=2)
-                    last_neck = neck_angle
-                if abs(tilt_angle - last_tilt) > 1:
-                    _servo.set_servo(3, int(round(tilt_angle)), smooth=True, step_delay=0.01, step_angle=2)
-                    last_tilt = tilt_angle
-            else:
-                if not target_lost:
-                    target_lost = True
-                    last_target_time = time.time()
-                    log(f"Target lost, waiting before returning to center")
-                elif (time.time() - last_target_time) >= 5:
-                    if abs(last_neck - default_neck) > 1:
-                        _servo.set_servo(0, default_neck, smooth=True, step_delay=0.01, step_angle=2)
-                        last_neck = default_neck
-                    if abs(last_tilt - default_tilt) > 1:
-                        _servo.set_servo(3, default_tilt, smooth=True, step_delay=0.01, step_angle=2)
-                        last_tilt = default_tilt
-        else:
-            target_lost = True
-            last_target_time = time.time()
-
-        time.sleep(0.05)
 
 
 def _shell_reader():
@@ -425,7 +359,7 @@ def _display_worker():
 
 
 def start_background():
-    global _hardware_initialized, _tracking_thread, _all_threads
+    global _hardware_initialized, _all_threads
 
     if _hardware_initialized:
         return
@@ -437,16 +371,12 @@ def start_background():
 
     _init_hardware()
 
-    _tracking_thread = threading.Thread(target=_tracking_loop, daemon=True, name="r2-tracking-thread")
-    _tracking_thread.start()
-    _all_threads.append(_tracking_thread)
-
     shell_start()
     if _shell_thread:
         _all_threads.append(_shell_thread)
 
-    from r2_app.web import create_app
-    from r2_app.config import AppConfig
+    from robov_core.web import create_app
+    from robov_core.config import AppConfig
     config = AppConfig()
     app = create_app()
     web_thread = threading.Thread(
@@ -475,8 +405,6 @@ def cleanup():
     _shutdown_requested = True
     _shell_running = False
 
-    if _tracking_thread and _tracking_thread.is_alive():
-        _tracking_thread.join(timeout=2.0)
     if _shell_thread and _shell_thread.is_alive():
         _shell_thread.join(timeout=2.0)
 
@@ -553,11 +481,6 @@ def build_point_cloud(stereo_image, camera_image, step: int = 2):
     if camera is None:
         return []
     return camera.get_point_cloud_sample(step=step)
-
-
-def set_servo_tracking(enabled: bool):
-    global servo_tracking_enabled
-    servo_tracking_enabled = bool(enabled)
 
 
 def emote(emotion_name: str):

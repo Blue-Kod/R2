@@ -35,7 +35,7 @@ class StereoCamera:
         self.block_size = 7
         self.alpha_depth = 0.3
         self.show_left = True
-        self.depth_enabled = True
+        self.depth_enabled = False  # Disabled by default for performance
 
         self.wls_enabled = True
         self.wls_lambda = 10000
@@ -54,8 +54,6 @@ class StereoCamera:
         self.points_3d = None
         self.points_color = None
         self.fps = 0.0
-        self.face_dx = 0.0
-        self.face_dy = 0.0
 
         self.cap = cv2.VideoCapture(self.source)
         if not self.cap.isOpened():
@@ -97,14 +95,30 @@ class StereoCamera:
             print(f"[CAM] WLS not available: {e}")
 
     def _capture_loop(self):
+        reconnect_delay = 1.0
         while self.running:
             if self.cap is None or not self.cap.isOpened():
-                time.sleep(0.1)
+                time.sleep(reconnect_delay)
+                try:
+                    self.cap = cv2.VideoCapture(self.source)
+                    if self.cap.isOpened():
+                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                        self.cap.set(cv2.CAP_PROP_FPS, 30)
+                        print("[CAM] Camera reconnected")
+                except Exception as e:
+                    print(f"[CAM] Reconnection failed: {e}")
                 continue
+            
             ret, frame = self.cap.read()
             if not ret:
-                time.sleep(0.01)
+                print("[CAM] Frame read failed, attempting reconnect...")
+                self.cap.release()
+                self.cap = None
+                time.sleep(0.5)
                 continue
+            
             frame = cv2.rotate(frame, cv2.ROTATE_180)
             if frame.shape[1] == 2560 and frame.shape[0] == 720:
                 imgL = frame[:, :1280]
@@ -199,9 +213,6 @@ class StereoCamera:
                 return self.rectR.copy()
             return None
 
-    def get_eye_offsets(self):
-        return 0.0, 0.0
-
     def get_depth_at(self, x, y):
         with self.lock:
             if self.points_3d is None:
@@ -217,37 +228,40 @@ class StereoCamera:
                 return z / 10.0
             return None
 
-    def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
+    def get_depth_image(self):
+        """Return depth map as normalized 8-bit image. Computes depth on-demand if disabled."""
         with self.lock:
-            if self.points_3d is None:
-                return []
-            pts = self.points_3d
-            colors = self.points_color
-            h, w = pts.shape[:2]
-            points = []
-            for y in range(0, h, step):
-                for x in range(0, w, step):
-                    X, Y, Z = pts[y, x]
-                    if Z <= 0 or Z > max_distance_cm * 10:
-                        continue
-                    r, g, b = 200, 200, 200
-                    if colors is not None and y < colors.shape[0] and x < colors.shape[1]:
-                        bgr = colors[y, x]
-                        r, g, b = int(bgr[2]), int(bgr[1]), int(bgr[0])
-                    points.append({
-                        'x': float(X / 10),
-                        'y': float(Y / 10),
-                        'z': float(Z / 10),
-                        'r': r, 'g': g, 'b': b
-                    })
-            return points
+            rectL = self.rectL.copy() if self.rectL is not None else None
+            rectR = self.rectR.copy() if self.rectR is not None else None
+            if rectL is None or rectR is None:
+                return None
+        
+        # Compute depth map
+        lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
+        lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
+        grayL = cv2.cvtColor(lowL, cv2.COLOR_BGR2GRAY)
+        grayR = cv2.cvtColor(lowR, cv2.COLOR_BGR2GRAY)
+
+        dispL = self.matcher_l.compute(grayL, grayR).astype(np.float32) / 16.0
+
+        if self.wls_enabled and self.wls_available:
+            dispR = self.matcher_r.compute(grayR, grayL).astype(np.float32) / 16.0
+            filtered_disp = self.wls_filter.filter(dispL, lowL, disparity_map_right=dispR)
+            filtered_disp[filtered_disp <= 0] = 0
+            disp = filtered_disp
+        else:
+            disp = dispL
+
+        # Normalize to 0-255 for visualization
+        with np.errstate(invalid='ignore'):
+            disp_normalized = np.clip(disp / (self.num_disp * 16) * 255, 0, 255).astype(np.uint8)
+        
+        # Apply colormap and resize to full resolution
+        disp_color = cv2.applyColorMap(disp_normalized, cv2.COLORMAP_MAGMA)
+        return cv2.resize(disp_color, self.img_size)
 
     def update_params(self, alpha_depth=None, show_left=None, num_disp=None,
-                      depth_enabled=None, face_tracking_enabled=None,
-                      tracking_mode=None,
-                      tracking_scale_x=None, tracking_scale_y=None,
-                      tracking_offset_x=None, tracking_offset_y=None,
-                      wls_enabled=None):
+                      depth_enabled=None, wls_enabled=None):
         with self.lock:
             if alpha_depth is not None:
                 self.alpha_depth = max(0.0, min(1.0, alpha_depth))

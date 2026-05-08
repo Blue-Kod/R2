@@ -381,7 +381,6 @@
             <div class="tabs" id="controlsTabs" style="margin-top: 12px;">
                 <button id="tabAIControls">Команды AI</button>
                 <button id="tabCameraControls" class="active">Параметры камеры</button>
-                <button id="tabTrackingControls">Трекинг & CV</button>
             </div>
 
             <div id="camera-controls">
@@ -396,22 +395,6 @@
                 <div class="control-group">
                     <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled"></div>
                 </div>
-            </div>
-
-            <div id="tracking-controls" class="hidden">
-                <div class="control-row"><label>Включить трекинг:</label><input type="checkbox" id="trackingEnabled"></div>
-                <div class="control-row"><label>Тип цели:</label>
-                    <select id="trackingMode">
-                        <option value="person">Человек</option>
-                        <option value="face">Лицо</option>
-                        <option value="motion">Движение</option>
-                    </select>
-                </div>
-                <div class="control-row"><label>Scale X:</label><input type="range" id="trackingScaleX" min="0" max="200" value="50" step="1"><span id="scaleXVal">50</span></div>
-                <div class="control-row"><label>Scale Y:</label><input type="range" id="trackingScaleY" min="0" max="200" value="30" step="1"><span id="scaleYVal">30</span></div>
-                <div class="control-row"><label>Offset X:</label><input type="range" id="trackingOffsetX" min="-100" max="100" value="0" step="1"><span id="offsetXVal">0</span></div>
-                <div class="control-row"><label>Offset Y:</label><input type="range" id="trackingOffsetY" min="-100" max="100" value="0" step="1"><span id="offsetYVal">0</span></div>
-                <div class="control-row"><label>Авто-серво по цели:</label><input type="checkbox" id="servoTrackingEnabled"></div>
             </div>
 
             <div id="ai-controls" class="hidden" style="display:flex; flex-direction:column; gap: 12px;">
@@ -473,22 +456,11 @@ const aiCommandInput = document.getElementById('ai-command-input');
 const aiSendBtn = document.getElementById('ai-send-btn');
 const aiLiveResponse = document.getElementById('ai-live-response');
 
-// Параметры камеры и трекинга
+// Параметры камеры
 const eyeLeft = document.getElementById('eyeLeft');
 const eyeRight = document.getElementById('eyeRight');
 const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
-const trackingEnabledChk = document.getElementById('trackingEnabled');
-const trackingModeSelect = document.getElementById('trackingMode');
-const trackingScaleX = document.getElementById('trackingScaleX');
-const trackingScaleY = document.getElementById('trackingScaleY');
-const trackingOffsetX = document.getElementById('trackingOffsetX');
-const trackingOffsetY = document.getElementById('trackingOffsetY');
-const scaleXSpan = document.getElementById('scaleXVal');
-const scaleYSpan = document.getElementById('scaleYVal');
-const offsetXSpan = document.getElementById('offsetXVal');
-const offsetYSpan = document.getElementById('offsetYVal');
-const servoTrackingChk = document.getElementById('servoTrackingEnabled');
 
 // Терминал и вкладки
 const terminalOutputDiv = document.getElementById('terminal-output');
@@ -551,19 +523,13 @@ for (let i=0; i<=7; i++) {
     }
 }
 
-// ===================== ПАРАМЕТРЫ КАМЕРЫ И ТРЕКИНГ =====================
+// ===================== ПАРАМЕТРЫ КАМЕРЫ =====================
 async function sendCameraParams() {
     try {
         await fetch('/api/camera/params', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({
-                depth_enabled: depthEnabledChk.checked,
-                face_tracking_enabled: trackingEnabledChk.checked,
-                tracking_mode: trackingModeSelect.value,
-                tracking_scale_x: parseInt(trackingScaleX.value),
-                tracking_scale_y: parseInt(trackingScaleY.value),
-                tracking_offset_x: parseInt(trackingOffsetX.value),
-                tracking_offset_y: parseInt(trackingOffsetY.value)
+                depth_enabled: depthEnabledChk.checked
             })
         });
     } catch(e) {}
@@ -583,29 +549,7 @@ async function loadCameraParams() {
         const r = await fetch('/api/camera/params');
         const p = await r.json();
         depthEnabledChk.checked = p.depth_enabled || false;
-        trackingEnabledChk.checked = p.face_tracking_enabled || false;
-        trackingModeSelect.value = p.tracking_mode || 'face';
-        trackingScaleX.value = p.tracking_scale_x ?? 50;
-        trackingScaleY.value = p.tracking_scale_y ?? 30;
-        trackingOffsetX.value = p.tracking_offset_x ?? 0;
-        trackingOffsetY.value = p.tracking_offset_y ?? 0;
-        updateTrackingDisplay();
     } catch(e) {}
-}
-
-async function loadServoTrackingState() {
-    try {
-        const r = await fetch('/api/servo/tracking');
-        const d = await r.json();
-        servoTrackingChk.checked = d.enabled === true;
-    } catch(e) {}
-}
-
-function updateTrackingDisplay() {
-    if (scaleXSpan) scaleXSpan.textContent = trackingScaleX.value;
-    if (scaleYSpan) scaleYSpan.textContent = trackingScaleY.value;
-    if (offsetXSpan) offsetXSpan.textContent = trackingOffsetX.value;
-    if (offsetYSpan) offsetYSpan.textContent = trackingOffsetY.value;
 }
 
 // ===================== ТЕРМИНАЛ =====================
@@ -692,28 +636,18 @@ function attachEvents() {
 
     const tabAIControls = document.getElementById('tabAIControls');
     const tabCameraControls = document.getElementById('tabCameraControls');
-    const tabTrackingControls = document.getElementById('tabTrackingControls');
     const aiControlsDiv = document.getElementById('ai-controls');
     const cameraControlsDiv = document.getElementById('camera-controls');
-    const trackingControlsDiv = document.getElementById('tracking-controls');
 
     tabCameraControls.onclick = () => {
-        setActiveTab(tabCameraControls, [tabAIControls, tabCameraControls, tabTrackingControls]);
+        setActiveTab(tabCameraControls, [tabAIControls, tabCameraControls]);
         cameraControlsDiv.classList.remove('hidden');
         aiControlsDiv.classList.add('hidden');
-        trackingControlsDiv.classList.add('hidden');
-    };
-    tabTrackingControls.onclick = () => {
-        setActiveTab(tabTrackingControls, [tabAIControls, tabCameraControls, tabTrackingControls]);
-        trackingControlsDiv.classList.remove('hidden');
-        aiControlsDiv.classList.add('hidden');
-        cameraControlsDiv.classList.add('hidden');
     };
     tabAIControls.onclick = () => {
-        setActiveTab(tabAIControls, [tabAIControls, tabCameraControls, tabTrackingControls]);
+        setActiveTab(tabAIControls, [tabAIControls, tabCameraControls]);
         aiControlsDiv.classList.remove('hidden');
         cameraControlsDiv.classList.add('hidden');
-        trackingControlsDiv.classList.add('hidden');
     };
 
     tabTerminal.onclick = () => {
@@ -734,15 +668,6 @@ function attachEvents() {
     eyeRight.onchange = updateRenderParams;
     depthAlphaSlider.oninput = updateRenderParams;
     depthEnabledChk.onchange = sendCameraParams;
-    trackingEnabledChk.onchange = sendCameraParams;
-    trackingModeSelect.onchange = sendCameraParams;
-    trackingScaleX.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
-    trackingScaleY.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
-    trackingOffsetX.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
-    trackingOffsetY.oninput = () => { updateTrackingDisplay(); sendCameraParams(); };
-    servoTrackingChk.onchange = async () => {
-        try { await fetch('/api/servo/tracking', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:servoTrackingChk.checked})}); } catch(e) {}
-    };
 
     terminalInput.onkeydown = (e) => { if (e.key==='Enter') { sendTerminalCommand(terminalInput.value.trim()); terminalInput.value = ''; } };
     aiSendBtn.onclick = sendAICommand;
@@ -789,8 +714,6 @@ function attachEvents() {
 async function init() {
     attachEvents();
     await loadCameraParams();
-    await loadServoTrackingState();
-    updateTrackingDisplay();
     await updateRenderParams();
     fetchSystemStats();
     fetchTerminalOutput();
