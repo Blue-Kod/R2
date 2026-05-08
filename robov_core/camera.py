@@ -8,7 +8,7 @@ from datetime import datetime
 
 def log(message):
     """Log message with timestamp for Logs tab."""
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [CAM] {message}")
+    print(f"[CAM] {message}")
 
 class StereoCamera:
     def __init__(self, config_path, source=0):
@@ -51,7 +51,7 @@ class StereoCamera:
         self.block_size = 7
         self.alpha_depth = 0.3
         self.show_left = True
-        self.depth_enabled = False  # Disabled by default for performance
+        self.depth_enabled = True  # Disabled by default for performance
         log(f"Depth scale: {self.depth_scale}, Low size: {self.low_size}")
 
         self.wls_enabled = True
