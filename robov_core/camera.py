@@ -35,7 +35,7 @@ class StereoCamera:
         self.block_size = 7
         self.alpha_depth = 0.3
         self.show_left = True
-        self.depth_enabled = True
+        self.depth_enabled = False
 
         self.wls_enabled = True
         self.wls_lambda = 10000
