@@ -3,6 +3,7 @@ import numpy as np
 import json
 import threading
 import time
+import platform
 
 class StereoCamera:
     def __init__(self, config_path, source=0):
@@ -55,13 +56,10 @@ class StereoCamera:
         self.points_color = None
         self.fps = 0.0
 
-        self.cap = cv2.VideoCapture(self.source)
+        self.cap = self._create_capture()
         if not self.cap.isOpened():
             raise IOError(f"Cannot open camera source {self.source}")
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self._configure_capture()
 
         self.running = True
         threading.Thread(target=self._capture_loop, daemon=True).start()
@@ -100,12 +98,9 @@ class StereoCamera:
             if self.cap is None or not self.cap.isOpened():
                 time.sleep(reconnect_delay)
                 try:
-                    self.cap = cv2.VideoCapture(self.source)
+                    self.cap = self._create_capture()
                     if self.cap.isOpened():
-                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-                        self.cap.set(cv2.CAP_PROP_FPS, 30)
+                        self._configure_capture()
                         print("[CAM] Camera reconnected")
                 except Exception as e:
                     print(f"[CAM] Reconnection failed: {e}")
@@ -276,6 +271,42 @@ class StereoCamera:
                 self.depth_enabled = depth_enabled
             if wls_enabled is not None:
                 self.wls_enabled = wls_enabled
+
+    def _create_capture(self):
+        """Create VideoCapture with appropriate backend for the platform."""
+        if platform.system() == "Linux":
+            # On Linux/Debian, explicitly use V4L2 backend
+            print(f"[CAM] Opening camera {self.source} with V4L2 backend...")
+            
+            # Check if device exists
+            import os
+            device_path = f"/dev/video{self.source}" if isinstance(self.source, int) else self.source
+            if os.path.exists(device_path):
+                print(f"[CAM] Device {device_path} found")
+            else:
+                print(f"[CAM] Warning: Device {device_path} not found. Available devices:")
+                try:
+                    import subprocess
+                    result = subprocess.run(['v4l2-ctl', '--list-devices'], capture_output=True, text=True, timeout=5)
+                    print(f"[CAM] {result.stdout}")
+                except:
+                    print("[CAM] Install v4l-utils for device listing: sudo apt install v4l-utils")
+            
+            cap = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
+            if cap.isOpened():
+                return cap
+            print("[CAM] V4L2 failed, trying default backend...")
+        
+        # Fallback to default backend
+        cap = cv2.VideoCapture(self.source)
+        return cap
+
+    def _configure_capture(self):
+        """Configure capture properties."""
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
 
     def stop(self):
         self.running = False
