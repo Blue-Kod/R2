@@ -340,7 +340,17 @@ def create_app() -> Flask:
     @app.route("/file_manager")
     def file_manager():
         """File manager page."""
-        return render_template("file_manager.html")
+        try:
+            return render_template("file_manager.html")
+        except Exception as e:
+            # Log the error for debugging
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"File manager error: {error_details}")
+            
+            # Return a simple error page or redirect to main page
+            return render_template("index.html", 
+                               error=f"File manager temporarily unavailable: {str(e)}"), 500
 
     # ===================== FILE MANAGER API =====================
     
@@ -393,15 +403,15 @@ def create_app() -> Flask:
     @app.route("/api/files", methods=["GET"])
     def api_files_list():
         """List files and directories."""
-        path_str = request.args.get("path", "/")
-        path = normalize_path(path_str)
-        
-        # If path doesn't exist, try to fallback to current working directory
-        if not path.exists():
-            path = Path.cwd().resolve()
-        
-        items = []
         try:
+            path_str = request.args.get("path", "/")
+            path = normalize_path(path_str)
+            
+            # If path doesn't exist, try to fallback to current working directory
+            if not path.exists():
+                path = Path.cwd().resolve()
+            
+            items = []
             if path.is_dir():
                 try:
                     for item in path.iterdir():
@@ -415,24 +425,33 @@ def create_app() -> Flask:
                         "path": str(path).replace("\\", "/"),
                         "items": []
                     }), 403
+                except OSError as e:
+                    return jsonify({
+                        "error": f"System error accessing directory: {str(e)}", 
+                        "path": str(path).replace("\\", "/"),
+                        "items": []
+                    }), 500
             else:
                 info = get_file_info(path)
                 if info:
                     items.append(info)
-        except PermissionError as e:
-            return jsonify({"error": f"Permission denied: {str(e)}", "path": str(path).replace("\\", "/")}), 403
-        except OSError as e:
-            return jsonify({"error": f"System error: {str(e)}", "path": str(path).replace("\\", "/")}), 500
+            
+            # Sort items: directories first, then files, both alphabetically
+            items.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
+            
+            return jsonify({
+                "path": str(path).replace("\\", "/"),
+                "items": items
+            })
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}", "path": str(path).replace("\\", "/")}), 500
-        
-        # Sort items: directories first, then files, both alphabetically
-        items.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
-        
-        return jsonify({
-            "path": str(path).replace("\\", "/"),
-            "items": items
-        })
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"API files list error: {error_details}")
+            return jsonify({
+                "error": f"Server error: {str(e)}", 
+                "path": path_str if 'path_str' in locals() else "unknown",
+                "items": []
+            }), 500
 
     @app.route("/api/files/read", methods=["GET"])
     def api_files_read():
@@ -687,5 +706,58 @@ def create_app() -> Flask:
             return jsonify({"error": f"System error: {str(e)}"}), 500
         except Exception as e:
             return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
+    @app.route("/simple_files")
+    def simple_files():
+        """Simple file listing fallback."""
+        try:
+            import json
+            path = Path.cwd().resolve()
+            items = []
+            
+            try:
+                for item in path.iterdir():
+                    try:
+                        if item.is_file():
+                            items.append({
+                                "name": item.name,
+                                "type": "file",
+                                "size": item.stat().st_size if item.exists() else 0
+                            })
+                        elif item.is_dir():
+                            items.append({
+                                "name": item.name,
+                                "type": "directory",
+                                "size": 0
+                            })
+                    except:
+                        continue
+            except:
+                items = [{"name": "Error accessing directory", "type": "error", "size": 0}]
+            
+            return f"""
+            <html>
+            <head><title>Simple File Manager</title></head>
+            <body>
+            <h2>Simple File Manager (Fallback)</h2>
+            <p>Current directory: {path}</p>
+            <ul>
+            {"".join([f'<li>{item["name"]} ({item["type"]})</li>' for item in items])}
+            </ul>
+            <p><a href="/">Back to Main</a></p>
+            </body>
+            </html>
+            """
+        except Exception as e:
+            return f"""
+            <html>
+            <head><title>Error</title></head>
+            <body>
+            <h2>Error</h2>
+            <p>File manager error: {str(e)}</p>
+            <p><a href="/">Back to Main</a></p>
+            </body>
+            </html>
+            """
 
     return app
