@@ -452,6 +452,41 @@ def get_servo_angles():
         log(f"Error getting servo angles: {e}")
         return {}
 
+def get_servo_angles_physical():
+    """Возвращает словарь {channel: angle} физических углов (с инверсией)."""
+    servo = _servo
+    if servo is None:
+        return {}
+    try:
+        with servo.lock:
+            physical_angles = {}
+            for ch, angle in servo.current_angles.items():
+                if ch in servo.inverted_channels:
+                    min_angle, max_angle, _, _ = servo.channel_configs[ch]
+                    physical_angle = max_angle - (angle - min_angle)
+                    physical_angles[ch] = physical_angle
+                else:
+                    physical_angles[ch] = angle
+            return physical_angles
+    except Exception as e:
+        log(f"Error getting physical servo angles: {e}")
+        return {}
+
+def set_servo_physical(channel: int, physical_angle: int) -> bool:
+    """Устанавливает физический угол сервопривода (с учетом инверсии)."""
+    servo = _servo
+    if servo is None:
+        return False
+    if channel not in servo.channel_configs:
+        return False
+    min_angle, max_angle, _, _ = servo.channel_configs[channel]
+    physical_angle = max(min_angle, min(max_angle, physical_angle))
+    if channel in servo.inverted_channels:
+        logical_angle = max_angle - (physical_angle - min_angle)
+    else:
+        logical_angle = physical_angle
+    return servo.set_servo(channel, int(logical_angle), smooth=True, step_delay=0.01, step_angle=2)
+
 def set_servo_offset(channel: int, offset: float):
     """Устанавливает оффсет сервоканала."""
     servo = _servo

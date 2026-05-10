@@ -28,7 +28,9 @@ from robov_core.high_level import (
     get_eyes_position,
     get_logs,
     get_servo_angles,
+    get_servo_angles_physical,
     get_servo_offsets,
+    set_servo_physical,
 )
 
 
@@ -51,11 +53,11 @@ def create_app() -> Flask:
                     "show_left": getattr(camera, 'show_left', True),
                     "num_disp": getattr(camera, 'num_disp', 128),
                     "fps": round(getattr(camera, 'fps', 0.0), 1),
-                    "img_size": getattr(camera, 'img_size', [640, 480]),
+                    "img_size": getattr(camera, 'img_size', [853, 480]),
                 }
         
-        # Get servo data
-        servo_angles = get_servo_angles()
+        # Get servo data (physical angles with inversion)
+        servo_angles = get_servo_angles_physical()
         servo_offsets = get_servo_offsets()
         
         # Get current emote and eyes position
@@ -144,9 +146,9 @@ def create_app() -> Flask:
                 if camera:
                     frame = camera.get_frame()
                     if frame is None:
-                        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                        frame = np.zeros((480, 853, 3), dtype=np.uint8)
                 else:
-                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    frame = np.zeros((480, 853, 3), dtype=np.uint8)
                     cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
                 # Optimize JPEG encoding for performance
@@ -219,7 +221,7 @@ def create_app() -> Flask:
         min_angle, max_angle, _, _ = servo.channel_configs[channel]
         if angle < min_angle or angle > max_angle:
             return jsonify({"error": f"Angle must be {min_angle}-{max_angle}"}), 400
-        if servo.set_servo(channel, angle, smooth=True, step_delay=0.01, step_angle=2):
+        if set_servo_physical(channel, angle):
             return jsonify({"status": "ok", "channel": channel, "angle": angle})
         return jsonify({"error": "Failed to set servo"}), 500
 

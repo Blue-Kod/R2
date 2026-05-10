@@ -25,13 +25,13 @@ class StereoCamera:
         self.lock = threading.Lock()
         
         # Additional properties for compatibility with high_level.py
-        self.img_size = (640, 480)  # Reduced from 1280x720 for better performance
+        self.img_size = (853, 480)  # Match CSS camera container size
         self.low_size = (160, 120)   # Reduced from 320x180
         self.depth_enabled = False   # Disabled by default for performance
         self.alpha_depth = 0.3
         self.show_left = True
         self.num_disp = 5
-        self.wls_enabled = False     # Disabled WLS filter for performance
+        self.wls_enabled = True      # Enabled WLS filter for better depth quality
         self.fps = 30.0
         self._tick = 0
         self._last_frame_time = time.time()
@@ -90,7 +90,7 @@ class StereoCamera:
         )
         
         # Only setup right matcher and WLS filter if depth is enabled
-        if self.depth_enabled:
+        if self.depth_enabled or self.wls_enabled:
             self.right_matcher = cv2.ximgproc.createRightMatcher(self.left_matcher)
             self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(matcher_left=self.left_matcher)
             self.wls_filter.setLambda(8000.0)
@@ -104,9 +104,9 @@ class StereoCamera:
     def initialize_camera(self):
         """Initialize the camera capture with optimized settings."""
         self.cap = cv2.VideoCapture(self.camera_source)
-        # Set lower resolution for better performance
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Reduced from 2560
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)   # Reduced from 720
+        # Set camera resolution to match CSS container
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Full stereo frame width
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)   # Height matches CSS
         self.cap.set(cv2.CAP_PROP_FPS, 15)             # Target 15 FPS
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Reduce buffer for lower latency
         return self.cap.isOpened()
@@ -169,8 +169,8 @@ class StereoCamera:
         
         displ = self.left_matcher.compute(grayL, grayR)
         
-        # Only apply WLS filtering if depth is enabled and filter is available
-        if self.depth_enabled and self.right_matcher and self.wls_filter:
+        # Apply WLS filtering if enabled and filter is available
+        if (self.depth_enabled or self.wls_enabled) and self.right_matcher and self.wls_filter:
             dispr = self.right_matcher.compute(grayR, grayL)
             filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
         else:
@@ -301,7 +301,7 @@ class StereoCamera:
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
             # Return black frame if camera failed - use camera's actual resolution
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Match camera resolution
+            frame = np.zeros((480, 853, 3), dtype=np.uint8)  # Match camera resolution
             cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
             return frame
         return left_frame if left else right_frame
