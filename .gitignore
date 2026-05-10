@@ -1,2 +1,8 @@
+# Development
 /dev/
 /backups/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

@@ -520,7 +520,17 @@ def start_main():
         if system_name == "Linux":
             env = os.environ.copy()
             env["DISPLAY"] = ":0"
-            env["XAUTHORITY"] = "/home/orangepi/.Xauthority"
+            # Get XAUTHORITY from environment or construct from user home
+            xauth = os.environ.get('XAUTHORITY')
+            if not xauth:
+                try:
+                    import pwd
+                    user = get_display_user()
+                    pw = pwd.getpwnam(user)
+                    xauth = os.path.join(pw.pw_dir, '.Xauthority')
+                except:
+                    xauth = '/root/.Xauthority'
+            env["XAUTHORITY"] = xauth
             env["PYTHONPATH"] = script_dir
 
             python_cmd = f"python3 {shlex.quote(main_path)}"

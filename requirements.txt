@@ -1,15 +1,41 @@
-flask
-psutil
-requests
-ptyprocess
-opencv-python
-opencv-contrib-python
-numpy
-PCA9685-smbus2
-mediapipe
-pygame
-python-dotenv
-websockets
-sounddevice
-scipy
-sherpa-onnx
+# R2 Robot - Production Requirements
+# Target: Orange Pi 4 Pro (ARM64, Debian)
+
+# Web framework
+flask>=2.3.0,<3.0.0
+
+# System monitoring
+psutil>=5.9.0
+
+# HTTP requests
+requests>=2.31.0
+
+# Terminal/shell support
+ptyprocess>=0.7.0
+
+# OpenCV - use opencv-python-headless for server environments (no GUI deps)
+# For Orange Pi with display, use opencv-python instead
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+
+# NumPy - pinned for ARM compatibility
+numpy>=1.24.0,<2.0.0
+
+# Hardware I2C control for PCA9685 servo driver
+PCA9685-smbus2>=1.0.0
+
+
+# Display/graphics
+pygame>=2.5.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# WebSocket support
+websockets>=11.0.0
+
+# Audio - may need system deps: apt-get install libportaudio2
+sounddevice>=0.4.6
+
+# Scientific computing - heavy, install only if needed
+scipy>=1.11.0

@@ -403,33 +403,34 @@ def angle(servo: int, angle_value: int):
 
 
 def get_coords_stereo(stereo_image, x: int, y: int):
-    _ = stereo_image
+    """Get real-world coordinates from stereo image at pixel position (x, y).
+    
+    Args:
+        stereo_image: Not used (kept for API compatibility)
+        x: X pixel coordinate
+        y: Y pixel coordinate
+        
+    Returns:
+        tuple: (x, y, z) in meters or None if failed
+    """
+    _ = stereo_image  # Kept for API compatibility
     camera = get_stereo_camera()
     if camera is None:
         return None
-    with camera.lock:
-        if camera.points_3d is None:
+    try:
+        coords = camera.get_real_coords(x, y)
+        if coords is None:
             return None
-        scale_x = camera.low_size[0] / camera.img_size[0]
-        scale_y = camera.low_size[1] / camera.img_size[1]
-        lx = int(x * scale_x)
-        ly = int(y * scale_y)
-        if lx < 0 or lx >= camera.low_size[0] or ly < 0 or ly >= camera.low_size[1]:
-            return None
-        px, py, pz = camera.points_3d[ly, lx]
-        if pz <= 0:
-            return None
-        return float(px / 10.0), float(py / 10.0), float(pz / 10.0)
+        return coords['x'], coords['y'], coords['z']
+    except Exception as e:
+        log(f"get_coords_stereo error: {e}")
+        return None
 
 
 
 
 def emote(emotion_name: str):
     return set_emote(emotion_name)
-
-
-def set_eyes_position(x, y):
-    return set_eyes_position(x, y)
 
 def get_servo_offsets():
     """Возвращает словарь {channel: offset} текущих оффсетов."""
@@ -444,17 +445,12 @@ def get_servo_angles():
     servo = _servo
     if servo is None:
         return {}
-    angles = {}
     try:
-        # Получаем текущие углы из конфигурации сервоприводов
-        if hasattr(servo, 'channel_configs'):
-            for channel in servo.channel_configs:
-                # Здесь можно добавить логику для получения реальных углов
-                # Пока используем значения по умолчанию из конфигурации
-                angles[channel] = servo.channel_configs[channel][0]  # min_angle как заглушка
+        with servo.lock:
+            return dict(servo.current_angles)
     except Exception as e:
-        print(f"Error getting servo angles: {e}")
-    return angles
+        log(f"Error getting servo angles: {e}")
+        return {}
 
 def set_servo_offset(channel: int, offset: float):
     """Устанавливает оффсет сервоканала."""

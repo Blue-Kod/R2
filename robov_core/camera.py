@@ -124,31 +124,24 @@ class StereoCamera:
             tuple: (left_rectified, right_rectified) frames or (None, None) if failed
         """
         if not self.cap or not self.cap.isOpened():
-            # Try to re-initialize camera
-            if self.initialize_camera():
-                print("Camera re-initialized successfully")
-            else:
+            if not self.initialize_camera():
                 return None, None
-            
+            print("Camera re-initialized successfully")
+
         ret, frame = self.cap.read()
-        frame = cv2.rotate(frame, cv2.ROTATE_180)
         if not ret:
-            # Try to re-initialize camera on frame read failure
             print("Frame read failed, attempting camera re-initialization...")
-            if self.initialize_camera():
-                print("Camera re-initialized successfully")
-                # Try reading frame again
-                ret, frame = self.cap.read()
-                frame = cv2.rotate(frame, cv2.ROTATE_180)
-                if not ret:
-                    return None, None
-            else:
+            if not self.initialize_camera():
                 return None, None
-            
+            ret, frame = self.cap.read()
+            if not ret:
+                return None, None
+
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
         half_w = frame.shape[1] // 2
         imgL = cv2.remap(frame[:, :half_w], self.lMapX, self.lMapY, cv2.INTER_LINEAR)
         imgR = cv2.remap(frame[:, half_w:], self.rMapX, self.rMapY, cv2.INTER_LINEAR)
-        
+
         return imgL, imgR
         
     def compute_disparity(self, left_frame, right_frame):
