@@ -11,7 +11,7 @@ class AppConfig:
     camera_params_file: str = "cam_params.json"
     launcher_script: str = "launcher.py"
     tracking_timeout_seconds: float = 10.0
-    eyes_scale_factor: float = 2
+    eyes_scale_factor: float = 1.3
     default_servo_angles: Dict[int, int] = field(
         default_factory=lambda: {
             0: 90,  # Шея
