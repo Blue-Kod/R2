@@ -53,7 +53,7 @@ def create_app() -> Flask:
                     "show_left": getattr(camera, 'show_left', True),
                     "num_disp": getattr(camera, 'num_disp', 128),
                     "fps": round(getattr(camera, 'fps', 0.0), 1),
-                    "img_size": getattr(camera, 'img_size', [640, 480]),
+                    "img_size": getattr(camera, 'img_size', [1280, 720]),
                 }
         
         # Get servo data (physical angles with inversion)
@@ -146,15 +146,15 @@ def create_app() -> Flask:
                 if camera:
                     frame = camera.get_frame()
                     if frame is None:
-                        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
                 else:
-                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
                     cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
                 # Optimize JPEG encoding for performance
                 _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])  # Reduced quality
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
-                time.sleep(0.033)  # Target ~30 FPS (1/30 ≈ 0.033)
+                time.sleep(0.066)  # Target ~15 FPS (1/15 ≈ 0.066)
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 

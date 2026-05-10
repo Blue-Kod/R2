@@ -25,7 +25,7 @@ class StereoCamera:
         self.lock = threading.Lock()
         
         # Additional properties for compatibility with high_level.py
-        self.img_size = (640, 480)  # Single eye resolution (half of stereo frame)
+        self.img_size = (1280, 720)  # Single eye resolution (half of stereo frame)
         self.low_size = (160, 120)   # Reduced from 320x180
         self.depth_enabled = False   # Disabled by default for performance
         self.alpha_depth = 0.3
@@ -104,12 +104,9 @@ class StereoCamera:
     def initialize_camera(self):
         """Initialize the camera capture with optimized settings."""
         self.cap = cv2.VideoCapture(self.camera_source)
-        # Set camera to optimized resolution: 1280x480 stereo (640x480 per eye) @ 30 FPS
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Stereo frame width
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)   # Height for both eyes
-        self.cap.set(cv2.CAP_PROP_FPS, 30)             # Optimal 30 FPS
-        # MJPG format for better performance (compressed)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        # Set camera to native stereo resolution
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)  # Full stereo frame width
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)   # Native height
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Reduce buffer for lower latency
         return self.cap.isOpened()
         
@@ -141,22 +138,8 @@ class StereoCamera:
 
         frame = cv2.rotate(frame, cv2.ROTATE_180)
         half_w = frame.shape[1] // 2
-        
-        # Split stereo frame - each eye is 640x480
-        left_raw = frame[:, :half_w]
-        right_raw = frame[:, half_w:]
-        
-        # Scale rectification maps for 640x480 resolution
-        # Calibration was done at 1280x720, so we scale maps by 0.5 in x and 0.666 in y
-        h, w = left_raw.shape[:2]
-        lMapX_scaled = cv2.resize(self.lMapX, (w, h))
-        lMapY_scaled = cv2.resize(self.lMapY, (w, h))
-        rMapX_scaled = cv2.resize(self.rMapX, (w, h))
-        rMapY_scaled = cv2.resize(self.rMapY, (w, h))
-        
-        # Apply rectification with scaled maps
-        imgL = cv2.remap(left_raw, lMapX_scaled, lMapY_scaled, cv2.INTER_LINEAR)
-        imgR = cv2.remap(right_raw, rMapX_scaled, rMapY_scaled, cv2.INTER_LINEAR)
+        imgL = cv2.remap(frame[:, :half_w], self.lMapX, self.lMapY, cv2.INTER_LINEAR)
+        imgR = cv2.remap(frame[:, half_w:], self.rMapX, self.rMapY, cv2.INTER_LINEAR)
 
         return imgL, imgR
         
@@ -317,7 +300,7 @@ class StereoCamera:
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
             # Return black frame if camera failed - use camera's actual resolution
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Single eye resolution
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)  # Single eye resolution
             cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
             return frame
         return left_frame if left else right_frame
