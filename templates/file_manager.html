@@ -684,14 +684,14 @@
 
 <script>
 // ===================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====================
-let currentPath = '';
+let currentPath = '/';
 let selectedFile = null;
 let originalContent = '';
 
 // ===================== ИНИЦИАЛИЗАЦИЯ =====================
 document.addEventListener('DOMContentLoaded', function() {
-    // Start with empty path - backend will choose appropriate default
-    currentPath = '';
+    // Start with root path
+    currentPath = '/';
     loadFiles();
     setupEventListeners();
 });

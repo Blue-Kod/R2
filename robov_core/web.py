@@ -348,15 +348,12 @@ def create_app() -> Flask:
         """Normalize and validate file path for security."""
         if not path_str or path_str == "/":
             # On Windows: use current drive root
-            # On Linux/Unix: use home directory instead of root for safety
+            # On Linux/Unix: use root directory as requested
             if os.name == 'nt':
                 return Path.cwd().resolve().anchor
             else:
-                # On Debian/Linux, use home directory
-                home_dir = Path.home()
-                if home_dir.exists():
-                    return home_dir
-                return Path.cwd().resolve()
+                # On Linux/Unix, use root directory (/)
+                return Path("/")
         
         path = Path(path_str).resolve()
         
