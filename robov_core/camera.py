@@ -25,7 +25,7 @@ class StereoCamera:
         self.lock = threading.Lock()
         
         # Additional properties for compatibility with high_level.py
-        self.img_size = (1280, 720)  # Single eye resolution (half of stereo frame)
+        self.img_size = (1280, 720)  # Single eye resolution (optimal for performance)
         self.low_size = (160, 120)   # Reduced from 320x180
         self.depth_enabled = False   # Disabled by default for performance
         self.alpha_depth = 0.3
@@ -104,10 +104,10 @@ class StereoCamera:
     def initialize_camera(self):
         """Initialize the camera capture with optimized settings."""
         self.cap = cv2.VideoCapture(self.camera_source)
-        # Set camera to optimal mode: 1280x720 @ 30 FPS MJPG
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)   # Optimized width
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)    # Optimized height
-        self.cap.set(cv2.CAP_PROP_FPS, 30)             # Target 30 FPS
+        # Set camera to optimal resolution for performance
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Single eye width
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)   # Optimal height
+        self.cap.set(cv2.CAP_PROP_FPS, 30)            # Target 30 FPS for smooth video
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # Use MJPG for better performance
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Reduce buffer for lower latency
         return self.cap.isOpened()
