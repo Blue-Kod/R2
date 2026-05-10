@@ -141,8 +141,22 @@ class StereoCamera:
 
         frame = cv2.rotate(frame, cv2.ROTATE_180)
         half_w = frame.shape[1] // 2
-        imgL = cv2.remap(frame[:, :half_w], self.lMapX, self.lMapY, cv2.INTER_LINEAR)
-        imgR = cv2.remap(frame[:, half_w:], self.rMapX, self.rMapY, cv2.INTER_LINEAR)
+        
+        # Split stereo frame - each eye is 640x480
+        left_raw = frame[:, :half_w]
+        right_raw = frame[:, half_w:]
+        
+        # Scale rectification maps for 640x480 resolution
+        # Calibration was done at 1280x720, so we scale maps by 0.5 in x and 0.666 in y
+        h, w = left_raw.shape[:2]
+        lMapX_scaled = cv2.resize(self.lMapX, (w, h))
+        lMapY_scaled = cv2.resize(self.lMapY, (w, h))
+        rMapX_scaled = cv2.resize(self.rMapX, (w, h))
+        rMapY_scaled = cv2.resize(self.rMapY, (w, h))
+        
+        # Apply rectification with scaled maps
+        imgL = cv2.remap(left_raw, lMapX_scaled, lMapY_scaled, cv2.INTER_LINEAR)
+        imgR = cv2.remap(right_raw, rMapX_scaled, rMapY_scaled, cv2.INTER_LINEAR)
 
         return imgL, imgR
         
