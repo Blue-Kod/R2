@@ -25,7 +25,7 @@ class StereoCamera:
         self.lock = threading.Lock()
         
         # Additional properties for compatibility with high_level.py
-        self.img_size = (640, 480)  # Stable resolution for good FPS
+        self.img_size = (1280, 720)  # Single eye resolution (half of stereo frame)
         self.low_size = (160, 120)   # Reduced from 320x180
         self.depth_enabled = False   # Disabled by default for performance
         self.alpha_depth = 0.3
@@ -104,9 +104,9 @@ class StereoCamera:
     def initialize_camera(self):
         """Initialize the camera capture with optimized settings."""
         self.cap = cv2.VideoCapture(self.camera_source)
-        # Set camera to stable mode: 640x480 @ 30 FPS MJPG
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)    # Stable width
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)    # Stable height
+        # Set camera to optimal mode: 1280x720 @ 30 FPS MJPG
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)   # Optimized width
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)    # Optimized height
         self.cap.set(cv2.CAP_PROP_FPS, 30)             # Target 30 FPS
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # Use MJPG for better performance
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Reduce buffer for lower latency
@@ -302,7 +302,7 @@ class StereoCamera:
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
             # Return black frame if camera failed - use camera's actual resolution
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Stable resolution
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)  # Single eye resolution
             cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
             return frame
         return left_frame if left else right_frame
