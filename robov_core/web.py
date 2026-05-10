@@ -358,7 +358,11 @@ def create_app() -> Flask:
                     return home_dir
                 return Path.cwd().resolve()
         
-        path = Path(path_str).resolve()
+        try:
+            path = Path(path_str).resolve()
+        except (OSError, ValueError) as e:
+            # Handle invalid paths on Unix systems
+            return Path.cwd().resolve()
         
         # Allow access to root directory and all subdirectories
         # Only block access to Windows system directories for safety
@@ -399,18 +403,28 @@ def create_app() -> Flask:
         items = []
         try:
             if path.is_dir():
-                for item in path.iterdir():
-                    info = get_file_info(item)
-                    if info:
-                        items.append(info)
+                try:
+                    for item in path.iterdir():
+                        info = get_file_info(item)
+                        if info:
+                            items.append(info)
+                except PermissionError as e:
+                    # Try to get what we can access, fail gracefully
+                    return jsonify({
+                        "error": f"Permission denied accessing directory: {str(e)}", 
+                        "path": str(path).replace("\\", "/"),
+                        "items": []
+                    }), 403
             else:
                 info = get_file_info(path)
                 if info:
                     items.append(info)
-        except PermissionError:
-            return jsonify({"error": "Permission denied", "path": str(path).replace("\\", "/")}), 403
+        except PermissionError as e:
+            return jsonify({"error": f"Permission denied: {str(e)}", "path": str(path).replace("\\", "/")}), 403
+        except OSError as e:
+            return jsonify({"error": f"System error: {str(e)}", "path": str(path).replace("\\", "/")}), 500
         except Exception as e:
-            return jsonify({"error": str(e), "path": str(path).replace("\\", "/")}), 500
+            return jsonify({"error": f"Unexpected error: {str(e)}", "path": str(path).replace("\\", "/")}), 500
         
         # Sort items: directories first, then files, both alphabetically
         items.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
@@ -432,30 +446,39 @@ def create_app() -> Flask:
         try:
             # Try to detect encoding
             content = None
-            encodings = ['utf-8', 'utf-8-sig', 'cp1251', 'latin1']
+            used_encoding = None
+            encodings = ['utf-8', 'utf-8-sig', 'cp1251', 'latin1', 'ascii']
             
             for encoding in encodings:
                 try:
                     with open(path, 'r', encoding=encoding) as f:
                         content = f.read()
+                    used_encoding = encoding
                     break
-                except UnicodeDecodeError:
+                except (UnicodeDecodeError, LookupError):
                     continue
             
             if content is None:
                 # If all text encodings fail, treat as binary
-                with open(path, 'rb') as f:
-                    content = f.read().decode('latin1', errors='replace')
+                try:
+                    with open(path, 'rb') as f:
+                        binary_content = f.read()
+                    content = binary_content.decode('latin1', errors='replace')
+                    used_encoding = 'binary'
+                except Exception as e:
+                    return jsonify({"error": f"Cannot read file: {str(e)}"}), 500
             
             return jsonify({
                 "content": content,
-                "encoding": encoding if content else "binary",
+                "encoding": used_encoding,
                 "size": path.stat().st_size
             })
         except PermissionError:
             return jsonify({"error": "Permission denied"}), 403
+        except OSError as e:
+            return jsonify({"error": f"System error: {str(e)}"}), 500
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
     @app.route("/api/files/write", methods=["POST"])
     def api_files_write():
@@ -470,6 +493,9 @@ def create_app() -> Flask:
             return jsonify({"error": "Parent directory does not exist"}), 404
         
         try:
+            # Ensure parent directory exists with proper permissions
+            path.parent.mkdir(parents=True, exist_ok=True)
+            
             # Write with UTF-8 encoding
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -480,9 +506,11 @@ def create_app() -> Flask:
                 "size": len(content.encode('utf-8'))
             })
         except PermissionError:
-            return jsonify({"error": "Permission denied"}), 403
+            return jsonify({"error": "Permission denied - check file/directory permissions"}), 403
+        except OSError as e:
+            return jsonify({"error": f"System error: {str(e)}"}), 500
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
     @app.route("/api/files/create", methods=["POST"])
     def api_files_create():
@@ -514,9 +542,11 @@ def create_app() -> Flask:
                 "path": str(item_path).replace("\\", "/")
             })
         except PermissionError:
-            return jsonify({"error": "Permission denied"}), 403
+            return jsonify({"error": "Permission denied - check directory permissions"}), 403
+        except OSError as e:
+            return jsonify({"error": f"System error: {str(e)}"}), 500
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
     @app.route("/api/files/delete", methods=["POST"])
     def api_files_delete():
@@ -540,9 +570,11 @@ def create_app() -> Flask:
                 "message": "Deleted successfully"
             })
         except PermissionError:
-            return jsonify({"error": "Permission denied"}), 403
+            return jsonify({"error": "Permission denied - check file/directory permissions"}), 403
+        except OSError as e:
+            return jsonify({"error": f"System error: {str(e)}"}), 500
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
     @app.route("/api/files/rename", methods=["POST"])
     def api_files_rename():
@@ -573,9 +605,11 @@ def create_app() -> Flask:
                 "new_path": str(new_path).replace("\\", "/")
             })
         except PermissionError:
-            return jsonify({"error": "Permission denied"}), 403
+            return jsonify({"error": "Permission denied - check file/directory permissions"}), 403
+        except OSError as e:
+            return jsonify({"error": f"System error: {str(e)}"}), 500
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
     @app.route("/api/files/upload", methods=["POST"])
     def api_files_upload():
@@ -608,8 +642,12 @@ def create_app() -> Flask:
                 file.save(str(file_path))
                 uploaded_count += 1
                 
+            except PermissionError:
+                errors.append(f"{file.filename}: Permission denied")
+            except OSError as e:
+                errors.append(f"{file.filename}: System error - {str(e)}")
             except Exception as e:
-                errors.append(f"{file.filename}: {str(e)}")
+                errors.append(f"{file.filename}: Unexpected error - {str(e)}")
         
         response_data = {
             "success": uploaded_count > 0,
@@ -644,8 +682,10 @@ def create_app() -> Flask:
                 mimetype=mime_type
             )
         except PermissionError:
-            return jsonify({"error": "Permission denied"}), 403
+            return jsonify({"error": "Permission denied - check file permissions"}), 403
+        except OSError as e:
+            return jsonify({"error": f"System error: {str(e)}"}), 500
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
     return app
