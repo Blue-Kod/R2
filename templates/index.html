@@ -190,7 +190,8 @@
         #video-container {
             width: 100%;
             height: var(--cam-h);
-            flex-shrink: 0;
+            flex: 1;
+            min-height: 360px;
             position: relative;
             border-radius: 16px;
             border: 1px solid var(--line);
@@ -668,8 +669,6 @@ async function fetchSystemStats() {
 
 // ===================== ОБРАБОТЧИКИ СОБЫТИЙ =====================
 function attachEvents() {
-    tabVideo.onclick = () => { setActiveTab(tabVideo, [tabVideo]); };
-
     const tabAIControls = document.getElementById('tabAIControls');
     const tabCameraControls = document.getElementById('tabCameraControls');
     const aiControlsDiv = document.getElementById('ai-controls');
