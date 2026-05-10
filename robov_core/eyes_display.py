@@ -250,7 +250,7 @@ class RobotFace:
         info = pygame.display.Info()
         sw, sh = info.current_w, info.current_h
 
-        screen = pygame.display.set_mode((sw, sh), pygame.FULLSCREEN | pygame.DOUBLEBUF | pygame.HWSURFACE)
+        screen = pygame.display.set_mode((sw, sh), pygame.FULLSCREEN | pygame.SCALED)
         pygame.event.set_grab(True)
         pygame.mouse.set_visible(True)
         clock = pygame.time.Clock()
