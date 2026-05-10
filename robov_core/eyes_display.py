@@ -317,10 +317,9 @@ class RobotFace:
 
             scaled_tex = pygame.transform.scale(tex, (target_width, target_height))
 
-            # Draw centred vertically with jiggle effect
-            y_offset = (sh - target_height) // 2
-            x_offset = int(self._jiggle_x)
-            y_offset = int(y_offset + self._jiggle_y)
+            # Draw centered both horizontally and vertically with jiggle effect
+            x_offset = (sw - target_width) // 2 + int(self._jiggle_x)
+            y_offset = (sh - target_height) // 2 + int(self._jiggle_y)
             screen.blit(scaled_tex, (x_offset, y_offset))
 
             # Menu overlay (simplified – touch bottom area toggles)
@@ -379,7 +378,7 @@ class EyeAPI:
 
 
 class EyeDisplay:
-    def __init__(self, scale_factor=1):
+    def __init__(self, scale_factor=0.5):
         self._face = RobotFace(scale_factor)
         self._api = EyeAPI(self._face)
 
