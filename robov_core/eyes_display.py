@@ -16,7 +16,8 @@ import socket
 import time
 import random
 
-os.environ['SDL_VIDEO_CENTERED'] = '1'
+os.environ['SDL_VIDEO_CENTERED'] = '0'
+os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
 
 try:
     import pygame
@@ -250,7 +251,7 @@ class RobotFace:
         info = pygame.display.Info()
         sw, sh = info.current_w, info.current_h
 
-        screen = pygame.display.set_mode((sw, sh), pygame.FULLSCREEN)
+        screen = pygame.display.set_mode((sw, sh), pygame.NOFRAME)
         pygame.event.set_grab(True)
         pygame.mouse.set_visible(True)
         clock = pygame.time.Clock()
