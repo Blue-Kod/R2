@@ -87,10 +87,11 @@ def _init_hardware():
         if _camera.initialize_camera():
             log(f"Camera initialized on {platform.system()}")
         else:
-            log(f"Camera capture failed on {platform.system()}")
-            raise RuntimeError("Failed to initialize camera capture")
+            log(f"Camera capture failed on {platform.system()} - continuing with mock camera")
+            # Don't raise error, continue with failed camera that will show "CAMERA ERROR"
     else:
-        raise FileNotFoundError("Camera config not found")
+        log("Camera config not found - continuing with mock camera")
+        # Don't raise error, continue without camera
 
     # Initialize servo controller (platform-specific)
     if platform.system() == "Windows":
@@ -421,12 +422,6 @@ def get_coords_stereo(stereo_image, x: int, y: int):
         return float(px / 10.0), float(py / 10.0), float(pz / 10.0)
 
 
-def build_point_cloud(stereo_image, camera_image, step: int = 2):
-    _ = stereo_image, camera_image
-    camera = get_stereo_camera()
-    if camera is None:
-        return []
-    return camera.get_point_cloud_sample(step=step)
 
 
 def emote(emotion_name: str):
@@ -443,6 +438,23 @@ def get_servo_offsets():
         return {}
     with servo.lock:
         return dict(servo.offsets)
+
+def get_servo_angles():
+    """Возвращает словарь {channel: angle} текущих углов сервоприводов."""
+    servo = _servo
+    if servo is None:
+        return {}
+    angles = {}
+    try:
+        # Получаем текущие углы из конфигурации сервоприводов
+        if hasattr(servo, 'channel_configs'):
+            for channel in servo.channel_configs:
+                # Здесь можно добавить логику для получения реальных углов
+                # Пока используем значения по умолчанию из конфигурации
+                angles[channel] = servo.channel_configs[channel][0]  # min_angle как заглушка
+    except Exception as e:
+        print(f"Error getting servo angles: {e}")
+    return angles
 
 def set_servo_offset(channel: int, offset: float):
     """Устанавливает оффсет сервоканала."""

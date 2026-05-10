@@ -167,10 +167,11 @@ class FaceState:
 
 
 class RobotFace:
-    def __init__(self):
+    def __init__(self, scale_factor=1.5):
         self.state = FaceState()
         self._exit_btn_rect = pygame.Rect(0, 0, 0, 0)
         self._textures = {}   # cache: emote_name -> pygame.Surface
+        self.scale_factor = scale_factor  # Масштаб спрайта лица
         
         # Jiggle effect parameters
         self._jiggle_x = 0.0
@@ -303,8 +304,8 @@ class RobotFace:
             tex = self._get_texture_for_emote(emote)
             blink_scale = self.state.get_blink_scale()
 
-            # Scale texture to fill screen width (touch left/right edges)
-            target_width = sw
+            # Scale texture to fill screen width with scale factor
+            target_width = int(sw * self.scale_factor)
             # original aspect-ratio height
             orig_height = int(tex.get_height() * (target_width / tex.get_width()))
             # apply blink squish
@@ -378,8 +379,8 @@ class EyeAPI:
 
 
 class EyeDisplay:
-    def __init__(self):
-        self._face = RobotFace()
+    def __init__(self, scale_factor=1.5):
+        self._face = RobotFace(scale_factor)
         self._api = EyeAPI(self._face)
 
     @property

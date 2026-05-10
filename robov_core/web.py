@@ -23,7 +23,8 @@ from robov_core.high_level import (
     set_eyes_position,
     get_eyes_position,
     get_logs,
-    build_point_cloud,
+    get_servo_angles,
+    get_servo_offsets,
 )
 
 
@@ -35,7 +36,40 @@ def create_app() -> Flask:
 
     @app.route("/")
     def index():
-        return render_template("index.html")
+        # Get all dynamic data for page load
+        camera = get_stereo_camera()
+        camera_params = {}
+        if camera:
+            with camera.lock:
+                camera_params = {
+                    "depth_enabled": getattr(camera, 'depth_enabled', False),
+                    "alpha_depth": getattr(camera, 'alpha_depth', 0.3),
+                    "show_left": getattr(camera, 'show_left', True),
+                    "num_disp": getattr(camera, 'num_disp', 128),
+                    "fps": round(getattr(camera, 'fps', 0.0), 1),
+                    "img_size": getattr(camera, 'img_size', [640, 480]),
+                }
+        
+        # Get servo data
+        servo_angles = get_servo_angles()
+        servo_offsets = get_servo_offsets()
+        
+        # Get current emote and eyes position
+        current_emote = get_emote()
+        eyes_x, eyes_y = get_eyes_position()
+        
+        # Get system data
+        system_data = health_snapshot()
+        system_data["ip"] = ip_address()
+        
+        return render_template("index.html", 
+                             camera_params=camera_params,
+                             servo_angles=servo_angles,
+                             servo_offsets=servo_offsets,
+                             current_emote=current_emote,
+                             eyes_position={"x": eyes_x, "y": eyes_y},
+                             supported_emotes=supported_emotes(),
+                             system_data=system_data)
 
     @app.route("/api/data")
     def api_data():
@@ -106,14 +140,15 @@ def create_app() -> Flask:
                 if camera:
                     frame = camera.get_frame()
                     if frame is None:
-                        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+                        frame = np.zeros((480, 640, 3), dtype=np.uint8)
                 else:
                     frame = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-                _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                # Optimize JPEG encoding for performance
+                _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])  # Reduced quality
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
-                time.sleep(0.03)
+                time.sleep(0.066)  # Target ~15 FPS (1/15 ≈ 0.066)
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 

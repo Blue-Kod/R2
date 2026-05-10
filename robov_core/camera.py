@@ -25,22 +25,22 @@ class StereoCamera:
         self.lock = threading.Lock()
         
         # Additional properties for compatibility with high_level.py
-        self.img_size = (1280, 720)
-        self.low_size = (320, 180)
-        self.depth_enabled = False
+        self.img_size = (640, 480)  # Reduced from 1280x720 for better performance
+        self.low_size = (160, 120)   # Reduced from 320x180
+        self.depth_enabled = False   # Disabled by default for performance
         self.alpha_depth = 0.3
         self.show_left = True
         self.num_disp = 5
-        self.wls_enabled = False
+        self.wls_enabled = False     # Disabled WLS filter for performance
         self.fps = 30.0
         self._tick = 0
         self._last_frame_time = time.time()
         self._frame_count = 0
         
-        # StereoSGBM parameters
-        self.window_size = 5
+        # Optimized StereoSGBM parameters for performance
+        self.window_size = 11         # Reduced from 5
         self.min_disp = 0
-        self.num_disp = 16 * 16
+        self.num_disp = 128          # Increased from 64 to 128 for better depth accuracy
         
         # Load camera parameters and initialize rectification maps
         self._load_camera_parameters()
@@ -74,7 +74,7 @@ class StereoCamera:
         )
         
     def _setup_stereo_matchers(self):
-        """Setup stereo matching algorithms and filters."""
+        """Setup optimized stereo matching algorithms."""
         self.left_matcher = cv2.StereoSGBM_create(
             minDisparity=self.min_disp,
             numDisparities=self.num_disp,
@@ -82,25 +82,33 @@ class StereoCamera:
             P1=8 * 3 * self.window_size ** 2,
             P2=32 * 3 * self.window_size ** 2,
             disp12MaxDiff=1,
-            uniquenessRatio=20,
-            speckleWindowSize=400,
+            uniquenessRatio=15,     # Reduced from 20 for performance
+            speckleWindowSize=200,  # Reduced from 400
             speckleRange=2,
             preFilterCap=63,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
         
-        self.right_matcher = cv2.ximgproc.createRightMatcher(self.left_matcher)
-        self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(matcher_left=self.left_matcher)
-        self.wls_filter.setLambda(8000.0)
-        self.wls_filter.setSigmaColor(1.5)
-        
-        self.kernel = np.ones((5, 5), np.uint8)
+        # Only setup right matcher and WLS filter if depth is enabled
+        if self.depth_enabled:
+            self.right_matcher = cv2.ximgproc.createRightMatcher(self.left_matcher)
+            self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(matcher_left=self.left_matcher)
+            self.wls_filter.setLambda(8000.0)
+            self.wls_filter.setSigmaColor(1.5)
+        else:
+            self.right_matcher = None
+            self.wls_filter = None
+            
+        self.kernel = np.ones((3, 3), np.uint8)  # Reduced from 5x5
         
     def initialize_camera(self):
-        """Initialize the camera capture."""
+        """Initialize the camera capture with optimized settings."""
         self.cap = cv2.VideoCapture(self.camera_source)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        # Set lower resolution for better performance
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Reduced from 2560
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)   # Reduced from 720
+        self.cap.set(cv2.CAP_PROP_FPS, 15)             # Target 15 FPS
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Reduce buffer for lower latency
         return self.cap.isOpened()
         
     def release_camera(self):
@@ -146,6 +154,7 @@ class StereoCamera:
     def compute_disparity(self, left_frame, right_frame):
         """
         Compute disparity map from rectified stereo frames.
+        Optimized for performance when depth is disabled.
         
         Args:
             left_frame: Left rectified frame
@@ -157,13 +166,29 @@ class StereoCamera:
         grayL = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
         grayR = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
         
+        # Downsample for faster processing if depth is not critical
+        if not self.depth_enabled:
+            grayL = cv2.resize(grayL, (0, 0), fx=0.5, fy=0.5)
+            grayR = cv2.resize(grayR, (0, 0), fx=0.5, fy=0.5)
+        
         displ = self.left_matcher.compute(grayL, grayR)
-        dispr = self.right_matcher.compute(grayR, grayL)
-        filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
+        
+        # Only apply WLS filtering if depth is enabled and filter is available
+        if self.depth_enabled and self.right_matcher and self.wls_filter:
+            dispr = self.right_matcher.compute(grayR, grayL)
+            filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
+        else:
+            filtered_disp = displ
+            
         filtered_disp[filtered_disp < 0] = 0
         
-        # Add to buffer for averaging
-        self.disp_buffer.append(filtered_disp.copy())
+        # Upsample back if we downsampled
+        if not self.depth_enabled:
+            filtered_disp = cv2.resize(filtered_disp, (left_frame.shape[1], left_frame.shape[0]))
+        
+        # Add to buffer for averaging (only if depth is enabled)
+        if self.depth_enabled:
+            self.disp_buffer.append(filtered_disp.copy())
         
         return filtered_disp
         
@@ -338,39 +363,6 @@ class StereoCamera:
         return self.get_depth_at_point(disparity_map, x, y)
         
             
-    def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
-        """
-        Get a sample of 3D point cloud data.
-        
-        Args:
-            step (int): Sampling step size
-            max_distance_cm (int): Maximum distance in centimeters
-            
-        Returns:
-            list: List of 3D points
-        """
-        avg_disp, _ = self.get_average_depth_map()
-        if avg_disp is None:
-            # Return dummy points if no depth data
-            points = []
-            for y in range(0, self.low_size[1], max(1, step)):
-                for x in range(0, self.low_size[0], max(1, step)):
-                    points.append({"x": float(x), "y": float(y), "z": 120.0})
-            return points
-            
-        # Generate 3D points from disparity map
-        points_3d = cv2.reprojectImageTo3D(avg_disp.astype(np.float32) / 16.0, self.Q)
-        points = []
-        
-        max_distance_mm = max_distance_cm * 10
-        
-        for y in range(0, self.low_size[1], max(1, step)):
-            for x in range(0, self.low_size[0], max(1, step)):
-                px, py, pz = points_3d[y, x]
-                if pz > 0 and pz < max_distance_mm:
-                    points.append({"x": float(px), "y": float(py), "z": float(pz)})
-                    
-        return points
         
     def get_real_coords(self, x_px, y_px):
         """

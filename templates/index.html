@@ -442,6 +442,54 @@
 </div>
 
 <script>
+// ===================== ЗАГРУЗКА НАСТРОЕК С СЕРВЕРА =====================
+// Данные передаются с сервера через Jinja2 шаблон
+const serverData = {
+    camera_params: {{ camera_params | tojson }},
+    servo_angles: {{ servo_angles | tojson }},
+    servo_offsets: {{ servo_offsets | tojson }},
+    current_emote: "{{ current_emote }}",
+    eyes_position: {{ eyes_position | tojson }},
+    supported_emotes: {{ supported_emotes | tojson }},
+    system_data: {{ system_data | tojson }}
+};
+
+function loadSettingsFromServer() {
+    console.log('Loading settings from server:', serverData);
+    
+    // Восстанавливаем настройки камеры
+    if (serverData.camera_params) {
+        const cp = serverData.camera_params;
+        depthEnabledChk.checked = cp.depth_enabled || false;
+        depthAlphaSlider.value = (cp.alpha_depth || 0.3) * 100;
+        eyeLeft.checked = cp.show_left !== false; // по умолчанию левый
+        eyeRight.checked = !eyeLeft.checked;
+        console.log('Camera params restored:', cp);
+    }
+    
+    // Восстанавливаем углы сервоприводов
+    if (serverData.servo_angles) {
+        Object.keys(serverData.servo_angles).forEach(ch => {
+            const slider = document.getElementById(`servo${ch}`);
+            if (slider) {
+                slider.value = serverData.servo_angles[ch];
+                updateServoVal(ch, slider.value);
+            }
+        });
+        console.log('Servo angles restored:', serverData.servo_angles);
+    }
+    
+    // Восстанавливаем системные данные
+    if (serverData.system_data) {
+        const sd = serverData.system_data;
+        document.getElementById('cpuStat').textContent = Math.round(sd.cpu || 0);
+        document.getElementById('ramStat').textContent = Math.round(sd.ram || 0);
+        document.getElementById('tempStat').textContent = sd.temp || '--';
+        document.getElementById('fpsStat').textContent = (sd.fps || 0).toFixed(1);
+        console.log('System data restored:', sd);
+    }
+}
+
 // ===================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====================
 
 // DOM элементы
@@ -696,7 +744,9 @@ function attachEvents() {
 // ===================== ИНИЦИАЛИЗАЦИЯ =====================
 async function init() {
     attachEvents();
-    await loadCameraParams();
+    // Сначала загружаем настройки с сервера
+    loadSettingsFromServer();
+    // Затем применяем их и запускаем обновления
     await updateRenderParams();
     fetchSystemStats();
     fetchTerminalOutput();
