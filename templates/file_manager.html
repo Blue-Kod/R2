@@ -417,6 +417,126 @@
             display: none !important;
         }
 
+        /* Media Player Styles */
+        .media-player-content {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            width: 98vw;
+            height: 98vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .media-player-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            min-height: 0;
+        }
+
+        .media-info {
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 16px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .media-viewport {
+            flex: 1;
+            background: #0a0a0a;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+            min-height: 300px;
+            overflow: hidden;
+        }
+
+        .media-viewport video,
+        .media-viewport audio {
+            max-width: 100%;
+            max-height: 100%;
+            border-radius: 8px;
+        }
+
+        .media-viewport audio {
+            width: 100%;
+        }
+
+        .media-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 16px;
+            background: var(--panel-2);
+            border-radius: 12px;
+        }
+
+        .media-controls-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .media-progress {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+        }
+
+        .media-progress input[type="range"] {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--line);
+            outline: none;
+        }
+
+        .media-progress input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+        }
+
+        .media-time {
+            font-size: 12px;
+            color: var(--muted);
+            font-family: 'JetBrains Mono', monospace;
+            min-width: 120px;
+        }
+
+        .media-volume {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .media-volume input[type="range"] {
+            width: 80px;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--line);
+            outline: none;
+        }
+
+        .media-volume input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+        }
+
         /* Image Viewer Styles */
         .image-viewer-content {
             background: var(--panel);
@@ -591,6 +711,7 @@
                 <button class="btn btn-primary" onclick="showUploadModal()">⬆ Загрузить</button>
                 <button class="btn" onclick="createFolder()">📁 Новая папка</button>
                 <button class="btn" onclick="createFile()">📄 Новый файл</button>
+                <button class="btn" id="toggleHiddenBtn" onclick="toggleHiddenFiles()">👁️ Скрытые файлы</button>
                 <button class="btn btn-danger" onclick="deleteSelected()">🗑 Удалить</button>
             </div>
 
@@ -643,6 +764,36 @@
     </div>
 </div>
 
+<!-- Модальное окно медиа плеера -->
+<div class="modal" id="mediaPlayerModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-title" id="mediaPlayerTitle">Медиа плеер</div>
+            <button class="modal-close" onclick="closeMediaPlayer()">×</button>
+        </div>
+        <div class="media-player-container">
+            <div class="media-info" id="mediaInfo">Файл: /path/to/media</div>
+            <div class="media-viewport" id="mediaViewport">
+                <!-- Video element will be inserted here -->
+            </div>
+            <div class="media-controls">
+                <button class="btn" id="playPauseBtn" onclick="togglePlayPause()">▶️ Воспроизвести</button>
+                <button class="btn" onclick="stopMedia()">⏹️ Стоп</button>
+                <button class="btn" onclick="previousMedia()">⏮️ Предыдущий</button>
+                <button class="btn" onclick="nextMedia()">⏭️ Следующий</button>
+                <div class="media-progress">
+                    <input type="range" id="mediaProgress" min="0" max="100" value="0" onchange="seekMedia(this.value)">
+                    <span id="mediaTime">0:00 / 0:00</span>
+                </div>
+                <div class="media-volume">
+                    <span>🔊</span>
+                    <input type="range" id="mediaVolume" min="0" max="100" value="50" onchange="setVolume(this.value)">
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Модальное окно просмотра изображений -->
 <div class="modal" id="imageViewerModal">
     <div class="image-viewer-content">
@@ -676,9 +827,11 @@
 <div class="context-menu" id="contextMenu">
     <div class="context-menu-item" id="ctxOpen" onclick="openFile()">📂 Открыть</div>
     <div class="context-menu-item" id="ctxView" onclick="viewImage()">🖼️ Просмотр</div>
+    <div class="context-menu-item" id="ctxPlay" onclick="playMedia()">▶️ Воспроизвести</div>
     <div class="context-menu-item" id="ctxEdit" onclick="editFile()">✏️ Изменить</div>
     <div class="context-menu-item" onclick="downloadFile()">⬇️ Скачать</div>
     <div class="context-menu-item" onclick="renameFile()">🏷️ Переименовать</div>
+    <div class="context-menu-item" id="ctxToggleHidden" onclick="toggleHiddenFiles()">👁️ Показать скрытые файлы</div>
     <div class="context-menu-item danger" onclick="deleteFile()">🗑️ Удалить</div>
 </div>
 
@@ -687,6 +840,7 @@
 let currentPath = '/';
 let selectedFile = null;
 let originalContent = '';
+let showHiddenFiles = false;
 
 // ===================== ИНИЦИАЛИЗАЦИЯ =====================
 document.addEventListener('DOMContentLoaded', function() {
@@ -792,9 +946,15 @@ async function loadFiles() {
     const fileList = document.getElementById('fileList');
     fileList.innerHTML = '';
     
+    // Filter hidden files if showHiddenFiles is false
+    let items = data.items;
+    if (!showHiddenFiles) {
+        items = items.filter(item => !isHiddenFile(item.name));
+    }
+    
     // Сортировка: сначала папки, потом файлы
-    const folders = data.items.filter(item => item.type === 'directory');
-    const files = data.items.filter(item => item.type === 'file');
+    const folders = items.filter(item => item.type === 'directory');
+    const files = items.filter(item => item.type === 'file');
     
     // Отображение папок
     folders.forEach(item => {
@@ -867,9 +1027,16 @@ function getFileIcon(filename) {
         'avi': '🎬',
         'mkv': '🎬',
         'mov': '🎬',
+        'wmv': '🎬',
+        'flv': '🎬',
+        'webm': '🎬',
         'mp3': '🎵',
         'wav': '🎵',
         'flac': '🎵',
+        'aac': '🎵',
+        'ogg': '🎵',
+        'm4a': '🎵',
+        'wma': '🎵',
         'zip': '📦',
         'rar': '📦',
         'tar': '📦',
@@ -904,12 +1071,30 @@ function isImageFile(filename) {
     return imageExtensions.includes(ext);
 }
 
+function isVideoFile(filename) {
+    const videoExtensions = ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm', 'm4v'];
+    const ext = filename.split('.').pop().toLowerCase();
+    return videoExtensions.includes(ext);
+}
+
+function isAudioFile(filename) {
+    const audioExtensions = ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'];
+    const ext = filename.split('.').pop().toLowerCase();
+    return audioExtensions.includes(ext);
+}
+
+function isMediaFile(filename) {
+    return isVideoFile(filename) || isAudioFile(filename);
+}
+
 async function openItem(item) {
     if (item.type === 'directory') {
         currentPath = item.path;
         await loadFiles();
     } else if (isImageFile(item.name)) {
         await viewImage(item);
+    } else if (isMediaFile(item.name)) {
+        await playMedia(item);
     } else {
         await editFile();
     }
@@ -976,6 +1161,30 @@ async function changePath() {
         currentPath = newPath;
         await loadFiles();
     }
+}
+
+// ===================== УПРАВЛЕНИЕ СКРЫТЫМИ ФАЙЛАМИ =====================
+function isHiddenFile(filename) {
+    return filename.startsWith('.');
+}
+
+function toggleHiddenFiles() {
+    showHiddenFiles = !showHiddenFiles;
+    
+    // Update button text
+    const toggleBtn = document.getElementById('toggleHiddenBtn');
+    const ctxToggleItem = document.getElementById('ctxToggleHidden');
+    
+    if (showHiddenFiles) {
+        toggleBtn.textContent = '👁️‍🗨️ Скрыть скрытые';
+        ctxToggleItem.textContent = '👁️‍🗨️ Скрыть скрытые файлы';
+    } else {
+        toggleBtn.textContent = '👁️ Скрытые файлы';
+        ctxToggleItem.textContent = '👁️ Показать скрытые файлы';
+    }
+    
+    // Reload files with new filter
+    loadFiles();
 }
 
 // ===================== ОПЕРАЦИИ С ФАЙЛАМИ =====================
@@ -1293,6 +1502,230 @@ async function handleFiles(files) {
     }
 }
 
+// ===================== МЕДИА ПЛЕЕР =====================
+let currentMediaIndex = 0;
+let mediaInFolder = [];
+let currentMediaElement = null;
+let isPlaying = false;
+
+async function playMedia(item = null) {
+    const fileToPlay = item || selectedFile;
+    if (!fileToPlay || !isMediaFile(fileToPlay.name)) {
+        alert('Выберите медиафайл для воспроизведения');
+        return;
+    }
+    
+    // Get all media files in current folder
+    const data = await apiCall(`?path=${encodeURIComponent(currentPath)}`);
+    if (!data) return;
+    
+    mediaInFolder = data.items.filter(f => f.type === 'file' && isMediaFile(f.name));
+    currentMediaIndex = mediaInFolder.findIndex(media => media.path === fileToPlay.path);
+    
+    if (currentMediaIndex === -1) {
+        currentMediaIndex = 0;
+    }
+    
+    await loadCurrentMedia();
+    document.getElementById('mediaPlayerModal').classList.add('active');
+    
+    // Setup keyboard shortcuts
+    document.addEventListener('keydown', handleMediaPlayerKeys);
+}
+
+async function loadCurrentMedia() {
+    if (mediaInFolder.length === 0) return;
+    
+    const media = mediaInFolder[currentMediaIndex];
+    const viewport = document.getElementById('mediaViewport');
+    const titleElement = document.getElementById('mediaPlayerTitle');
+    const infoElement = document.getElementById('mediaInfo');
+    
+    // Update title and info
+    titleElement.textContent = `Медиа плеер - ${media.name}`;
+    infoElement.textContent = `Файл: ${media.path}`;
+    
+    // Clear previous media
+    viewport.innerHTML = '';
+    if (currentMediaElement) {
+        currentMediaElement.pause();
+        currentMediaElement = null;
+    }
+    
+    // Create media element
+    const mediaUrl = `/api/files/download?path=${encodeURIComponent(media.path)}`;
+    
+    if (isVideoFile(media.name)) {
+        const video = document.createElement('video');
+        video.src = mediaUrl;
+        video.controls = false;
+        video.preload = 'metadata';
+        viewport.appendChild(video);
+        currentMediaElement = video;
+    } else {
+        const audio = document.createElement('audio');
+        audio.src = mediaUrl;
+        audio.controls = false;
+        audio.preload = 'metadata';
+        viewport.appendChild(audio);
+        currentMediaElement = audio;
+    }
+    
+    // Setup media event listeners
+    currentMediaElement.addEventListener('loadedmetadata', updateMediaInfo);
+    currentMediaElement.addEventListener('timeupdate', updateMediaProgress);
+    currentMediaElement.addEventListener('ended', nextMedia);
+    
+    // Set initial volume
+    currentMediaElement.volume = document.getElementById('mediaVolume').value / 100;
+    
+    selectedFile = media;
+}
+
+function updateMediaInfo() {
+    if (!currentMediaElement) return;
+    
+    const duration = currentMediaElement.duration;
+    const timeElement = document.getElementById('mediaTime');
+    
+    if (!isNaN(duration)) {
+        const current = currentMediaElement.currentTime;
+        timeElement.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+        
+        // Update progress bar max
+        const progress = document.getElementById('mediaProgress');
+        progress.max = duration;
+        progress.value = current;
+    }
+}
+
+function updateMediaProgress() {
+    if (!currentMediaElement) return;
+    
+    const current = currentMediaElement.currentTime;
+    const duration = currentMediaElement.duration;
+    const timeElement = document.getElementById('mediaTime');
+    const progress = document.getElementById('mediaProgress');
+    
+    if (!isNaN(duration)) {
+        timeElement.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+        progress.value = current;
+    }
+}
+
+function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function togglePlayPause() {
+    if (!currentMediaElement) return;
+    
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    
+    if (isPlaying) {
+        currentMediaElement.pause();
+        playPauseBtn.textContent = '▶️ Воспроизвести';
+        isPlaying = false;
+    } else {
+        currentMediaElement.play();
+        playPauseBtn.textContent = '⏸️ Пауза';
+        isPlaying = true;
+    }
+}
+
+function stopMedia() {
+    if (!currentMediaElement) return;
+    
+    currentMediaElement.pause();
+    currentMediaElement.currentTime = 0;
+    document.getElementById('playPauseBtn').textContent = '▶️ Воспроизвести';
+    isPlaying = false;
+    updateMediaProgress();
+}
+
+function seekMedia(value) {
+    if (!currentMediaElement) return;
+    currentMediaElement.currentTime = value;
+}
+
+function setVolume(value) {
+    if (!currentMediaElement) return;
+    currentMediaElement.volume = value / 100;
+}
+
+async function previousMedia() {
+    if (mediaInFolder.length === 0) return;
+    
+    if (currentMediaIndex > 0) {
+        currentMediaIndex--;
+    } else {
+        currentMediaIndex = mediaInFolder.length - 1; // Go to last
+    }
+    
+    await loadCurrentMedia();
+    if (isPlaying) {
+        currentMediaElement.play();
+    }
+}
+
+async function nextMedia() {
+    if (mediaInFolder.length === 0) return;
+    
+    if (currentMediaIndex < mediaInFolder.length - 1) {
+        currentMediaIndex++;
+    } else {
+        currentMediaIndex = 0; // Go to first
+    }
+    
+    await loadCurrentMedia();
+    if (isPlaying) {
+        currentMediaElement.play();
+    }
+}
+
+function closeMediaPlayer() {
+    document.getElementById('mediaPlayerModal').classList.remove('active');
+    
+    if (currentMediaElement) {
+        currentMediaElement.pause();
+        currentMediaElement = null;
+    }
+    
+    isPlaying = false;
+    document.removeEventListener('keydown', handleMediaPlayerKeys);
+}
+
+function handleMediaPlayerKeys(e) {
+    if (e.key === ' ') {
+        e.preventDefault();
+        togglePlayPause();
+    } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (currentMediaElement) {
+            currentMediaElement.currentTime -= 10;
+        }
+    } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (currentMediaElement) {
+            currentMediaElement.currentTime += 10;
+        }
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const volume = document.getElementById('mediaVolume');
+        volume.value = Math.min(100, parseInt(volume.value) + 5);
+        setVolume(volume.value);
+    } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const volume = document.getElementById('mediaVolume');
+        volume.value = Math.max(0, parseInt(volume.value) - 5);
+        setVolume(volume.value);
+    } else if (e.key === 'Escape') {
+        closeMediaPlayer();
+    }
+}
+
 // ===================== КОНТЕКСТНОЕ МЕНЮ =====================
 function showContextMenu(e, item) {
     e.preventDefault();
@@ -1303,20 +1736,23 @@ function showContextMenu(e, item) {
     const menu = document.getElementById('contextMenu');
     const ctxOpen = document.getElementById('ctxOpen');
     const ctxView = document.getElementById('ctxView');
+    const ctxPlay = document.getElementById('ctxPlay');
     const ctxEdit = document.getElementById('ctxEdit');
     
-    // Show/hide menu items based on file type
+    // Hide all specific options first
+    ctxOpen.style.display = 'none';
+    ctxView.style.display = 'none';
+    ctxPlay.style.display = 'none';
+    ctxEdit.style.display = 'none';
+    
+    // Show appropriate options based on file type
     if (item.type === 'directory') {
         ctxOpen.style.display = 'block';
-        ctxView.style.display = 'none';
-        ctxEdit.style.display = 'none';
     } else if (isImageFile(item.name)) {
-        ctxOpen.style.display = 'none';
         ctxView.style.display = 'block';
-        ctxEdit.style.display = 'none';
+    } else if (isMediaFile(item.name)) {
+        ctxPlay.style.display = 'block';
     } else {
-        ctxOpen.style.display = 'none';
-        ctxView.style.display = 'none';
         ctxEdit.style.display = 'block';
     }
     
