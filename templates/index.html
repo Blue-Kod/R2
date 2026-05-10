@@ -373,10 +373,6 @@
 
         <!-- Центральная панель -->
         <main class="panel" style="display: flex; flex-direction: column; align-items: center;">
-            <div class="tabs" id="viewTabs">
-                <button id="tabVideo" class="active">Камера</button>
-            </div>
-
             <div id="video-container">
                 <img id="video-feed" src="/video_feed" alt="Video Stream" crossorigin="anonymous">
             </div>
@@ -386,17 +382,23 @@
                 <button id="tabCameraControls" class="active">Параметры камеры</button>
             </div>
 
-            <div id="camera-controls">
-                <div class="control-row">
+            <div id="camera-controls" style="width: 100%;">
+                <div class="control-row" style="display: flex; justify-content: space-between; align-items: center;">
                     <label>Основной глаз:</label>
                     <div style="display: flex; gap: 12px;">
                         <label><input type="radio" name="mainEye" id="eyeLeft" checked> Левый</label>
                         <label><input type="radio" name="mainEye" id="eyeRight"> Правый</label>
                     </div>
                 </div>
-                <div class="control-row"><label>Прозрачность глубины:</label><input type="range" id="depthAlpha" min="0" max="100" value="30"></div>
+                <div class="control-row" style="display: flex; justify-content: space-between; align-items: center;">
+                    <label>Прозрачность глубины:</label>
+                    <input type="range" id="depthAlpha" min="0" max="100" value="30" style="flex: 1; margin-left: 12px;">
+                </div>
                 <div class="control-group">
-                    <div class="control-row"><label>Глубина (вычисления):</label><input type="checkbox" id="depthEnabled"></div>
+                    <div class="control-row" style="display: flex; justify-content: space-between; align-items: center;">
+                        <label>Глубина (вычисления):</label>
+                        <input type="checkbox" id="depthEnabled">
+                    </div>
                 </div>
             </div>
 
