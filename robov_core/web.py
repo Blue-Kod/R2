@@ -13,9 +13,9 @@ import numpy as np
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 from robov_core.config import AppConfig
+from robov_core import high_level
 from robov_core.high_level import (
     get_stereo_camera,
-    _servo,
     health_snapshot,
     ip_address,
     shell_output,
@@ -211,7 +211,7 @@ def create_app() -> Flask:
     
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     def set_servo(channel, angle):
-        servo = _servo
+        servo = high_level._servo
         if not servo:
             return jsonify({"error": "Servo controller not initialized"}), 500
         if channel not in servo.channel_configs:
@@ -345,11 +345,16 @@ def create_app() -> Flask:
     def normalize_path(path_str):
         """Normalize and validate file path for security."""
         if not path_str or path_str == "/":
-            # Start from root of current drive on Windows, or root on Unix
+            # On Windows: use current drive root
+            # On Linux/Unix: use home directory instead of root for safety
             if os.name == 'nt':
-                return Path(path_str).resolve() if path_str else Path.cwd().resolve().anchor
+                return Path.cwd().resolve().anchor
             else:
-                return Path("/")
+                # On Debian/Linux, use home directory
+                home_dir = Path.home()
+                if home_dir.exists():
+                    return home_dir
+                return Path.cwd().resolve()
         
         path = Path(path_str).resolve()
         
@@ -401,7 +406,9 @@ def create_app() -> Flask:
                 if info:
                     items.append(info)
         except PermissionError:
-            return jsonify({"error": "Permission denied"}), 403
+            return jsonify({"error": "Permission denied", "path": str(path).replace("\\", "/")}), 403
+        except Exception as e:
+            return jsonify({"error": str(e), "path": str(path).replace("\\", "/")}), 500
         
         # Sort items: directories first, then files, both alphabetically
         items.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
