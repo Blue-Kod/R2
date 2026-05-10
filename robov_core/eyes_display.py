@@ -379,7 +379,7 @@ class EyeAPI:
 
 
 class EyeDisplay:
-    def __init__(self, scale_factor=1.5):
+    def __init__(self, scale_factor=1):
         self._face = RobotFace(scale_factor)
         self._api = EyeAPI(self._face)
 
