@@ -25,7 +25,7 @@ class StereoCamera:
         self.lock = threading.Lock()
         
         # Additional properties for compatibility with high_level.py
-        self.img_size = (1280, 720)  # Single eye resolution (half of stereo frame)
+        self.img_size = (640, 360)  # Reduced resolution for better performance
         self.low_size = (160, 120)   # Reduced from 320x180
         self.depth_enabled = False   # Disabled by default for performance
         self.alpha_depth = 0.3
@@ -300,10 +300,14 @@ class StereoCamera:
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
             # Return black frame if camera failed - use camera's actual resolution
-            frame = np.zeros((720, 1280, 3), dtype=np.uint8)  # Single eye resolution
+            frame = np.zeros((360, 640, 3), dtype=np.uint8)  # Reduced resolution
             cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
             return frame
-        return left_frame if left else right_frame
+        
+        # Resize to reduced resolution for better performance
+        frame = left_frame if left else right_frame
+        frame = cv2.resize(frame, (640, 360))
+        return frame
         
     def get_frame(self):
         """
