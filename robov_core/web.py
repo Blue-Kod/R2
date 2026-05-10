@@ -10,7 +10,7 @@ from flask import Flask, Response, jsonify, render_template, request
 
 from robov_core.config import AppConfig
 from robov_core.high_level import (
-    _camera,
+    get_stereo_camera,
     _servo,
     health_snapshot,
     ip_address,
@@ -40,7 +40,8 @@ def create_app() -> Flask:
     @app.route("/api/data")
     def api_data():
         payload = health_snapshot()
-        payload["fps"] = round(_camera.fps, 1) if _camera else 0.0
+        camera = get_stereo_camera()
+        payload["fps"] = round(camera.fps, 1) if camera else 0.0
         payload["logs"] = get_logs(500)
         return jsonify(payload)
 
@@ -101,7 +102,7 @@ def create_app() -> Flask:
     def video_feed():
         def stream():
             while True:
-                camera = _camera
+                camera = get_stereo_camera()
                 if camera:
                     frame = camera.get_frame()
                     if frame is None:
@@ -118,7 +119,7 @@ def create_app() -> Flask:
 
     @app.route("/update", methods=["POST"])
     def update_camera():
-        camera = _camera
+        camera = get_stereo_camera()
         if not camera:
             return jsonify({"error": "Camera not initialized"}), 500
         data = request.get_json(silent=True) or {}
@@ -137,14 +138,15 @@ def create_app() -> Flask:
         x, y = data.get("x"), data.get("y")
         if x is None or y is None:
             return jsonify({"error": "Missing coordinates"}), 400
-        camera = _camera
+        camera = get_stereo_camera()
         if not camera:
             return jsonify({"depth": None})
         return jsonify({"depth": camera.get_depth_at(int(x), int(y))})
 
+    
     @app.route("/api/camera/params", methods=["GET", "POST"])
     def camera_params():
-        camera = _camera
+        camera = get_stereo_camera()
         if not camera:
             return jsonify({"error": "Camera not initialized"}), 500
         if request.method == "GET":
@@ -167,30 +169,7 @@ def create_app() -> Flask:
         )
         return jsonify({"status": "ok"})
 
-    # Новые endpoints
-    @app.route("/api/coords3d", methods=["POST"])
-    def coords3d():
-        data = request.get_json(silent=True) or {}
-        x, y = data.get("x"), data.get("y")
-        if x is None or y is None:
-            return jsonify({"error": "Missing coordinates"}), 400
-        camera = _camera
-        if not camera:
-            return jsonify({"x": None, "y": None, "z": None})
-        with camera.lock:
-            if camera.points_3d is None:
-                return jsonify({"x": None, "y": None, "z": None})
-            scale_x = camera.low_size[0] / camera.img_size[0]
-            scale_y = camera.low_size[1] / camera.img_size[1]
-            lx = int(x * scale_x)
-            ly = int(y * scale_y)
-            if lx < 0 or lx >= camera.low_size[0] or ly < 0 or ly >= camera.low_size[1]:
-                return jsonify({"x": None, "y": None, "z": None})
-            px, py, pz = camera.points_3d[ly, lx]
-            if pz <= 0:
-                return jsonify({"x": None, "y": None, "z": None})
-        return jsonify({"x": float(px / 10.0), "y": float(py / 10.0), "z": float(pz / 10.0)})
-
+    
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     def set_servo(channel, angle):
         servo = _servo

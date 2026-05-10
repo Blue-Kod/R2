@@ -78,78 +78,24 @@ _all_threads = []
 def log(message: str) -> None:
     print(message)
 
-class MockStereoCamera:
-    """Windows/dev fallback camera to keep web UI and APIs alive."""
-
-    def __init__(self) -> None:
-        self.lock = threading.Lock()
-        self.img_size = (1280, 720)
-        self.low_size = (320, 180)
-        self.depth_enabled = False
-        self.alpha_depth = 0.3
-        self.show_left = True
-        self.num_disp = 5
-        self.wls_enabled = False
-        self.fps = 30.0
-        self.points_3d = np.zeros((self.low_size[1], self.low_size[0], 3), dtype=np.float32)
-        self._tick = 0
-
-    def _make_frame(self) -> np.ndarray:
-        frame = np.zeros((self.img_size[1], self.img_size[0], 3), dtype=np.uint8)
-        self._tick += 1
-        cx = int((self._tick * 7) % self.img_size[0])
-        cy = int(self.img_size[1] / 2 + np.sin(self._tick / 15.0) * 120)
-        cv2.putText(frame, "SIMULATION MODE", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 2)
-        cv2.putText(frame, "No camera / Camera init failed", (40, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-        cv2.circle(frame, (cx, cy), 40, (0, 200, 255), -1)
-        return frame
-
-    def get_rectified_frame(self, left=True):
-        return self._make_frame()
-
-    def get_frame(self):
-        with self.lock:
-            return self._make_frame()
-
-    def get_depth_at(self, x, y):
-        _ = (x, y)
-        return 120.0
-
-    def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
-        _ = max_distance_cm
-        points = []
-        for y in range(0, self.low_size[1], max(1, step)):
-            for x in range(0, self.low_size[0], max(1, step)):
-                points.append({"x": float(x), "y": float(y), "z": 120.0})
-        return points
-
-    def update_params(self, **kwargs):
-        with self.lock:
-            for key, value in kwargs.items():
-                if value is not None and hasattr(self, key):
-                    setattr(self, key, value)
-
-
 def _init_hardware():
     global _camera, _servo
-
-    if platform.system() == "Windows":
-        _camera = MockStereoCamera()
-        log("Simulation mode enabled: mock camera and mock servo are active")
+    from robov_core.config import AppConfig
+    config = AppConfig()
+    if config.camera_config_path.exists():
+        _camera = StereoCamera(str(config.camera_config_path), source=config.camera_source)
+        if _camera.initialize_camera():
+            log(f"Camera initialized on {platform.system()}")
+        else:
+            log(f"Camera capture failed on {platform.system()}")
+            raise RuntimeError("Failed to initialize camera capture")
     else:
-        try:
-            from robov_core.config import AppConfig
-            config = AppConfig()
-            if config.camera_config_path.exists():
-                _camera = StereoCamera(str(config.camera_config_path), source=config.camera_source)
-                log("Camera initialized")
-            else:
-                raise FileNotFoundError("Camera config not found")
-        except Exception as exc:
-            log(f"Camera init error: {exc}")
-            _camera = MockStereoCamera()
-            log("Falling back to simulation mode")
+        raise FileNotFoundError("Camera config not found")
 
+    # Initialize servo controller (platform-specific)
+    if platform.system() == "Windows":
+        log("Mock servo mode on Windows")
+    else:
         try:
             _servo = ServoController(bus=0, address=0x40, freq=50)
             log("Servo controller initialized")

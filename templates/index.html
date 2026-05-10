@@ -218,6 +218,7 @@
             z-index: 1000;
         }
 
+        
         .hidden {
             display: none !important;
         }
@@ -375,7 +376,6 @@
 
             <div id="video-container">
                 <img id="video-feed" src="/video_feed" alt="Video Stream" crossorigin="anonymous">
-                <div id="depth-tooltip" class="depth-tooltip hidden"></div>
             </div>
 
             <div class="tabs" id="controlsTabs" style="margin-top: 12px;">
@@ -479,30 +479,6 @@ function setActiveTab(activeBtn, allBtns) {
     activeBtn.classList.add('active');
 }
 
-async function getVideoCoords(ix, iy) {
-    try {
-        const r = await fetch('/api/coords3d', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({x:ix,y:iy}) });
-        const d = await r.json();
-        if (d.x !== null) return `X:${d.x.toFixed(1)} Y:${d.y.toFixed(1)} Z:${d.z.toFixed(1)} см`;
-    } catch(e) {}
-    return null;
-}
-
-function initVideoTooltip() {
-    videoFeed.addEventListener('mousemove', async (e) => {
-        const rect = videoFeed.getBoundingClientRect();
-        const sx = videoFeed.naturalWidth / rect.width;
-        const sy = videoFeed.naturalHeight / rect.height;
-        const text = await getVideoCoords(Math.round((e.clientX-rect.left)*sx), Math.round((e.clientY-rect.top)*sy));
-        if (text) {
-            depthTooltip.style.left = (e.clientX - videoContainer.getBoundingClientRect().left + 12) + 'px';
-            depthTooltip.style.top = (e.clientY - videoContainer.getBoundingClientRect().top + 12) + 'px';
-            depthTooltip.textContent = text;
-            depthTooltip.classList.remove('hidden');
-        } else depthTooltip.classList.add('hidden');
-    });
-    videoFeed.addEventListener('mouseleave', () => depthTooltip.classList.add('hidden'));
-}
 
 // ===================== СЕРВОПРИВОДЫ =====================
 function updateServoVal(ch, val) {
@@ -549,7 +525,10 @@ async function loadCameraParams() {
         const r = await fetch('/api/camera/params');
         const p = await r.json();
         depthEnabledChk.checked = p.depth_enabled || false;
-    } catch(e) {}
+        console.log('Depth enabled loaded:', depthEnabledChk.checked);
+    } catch(e) {
+        console.log('Failed to load camera params:', e);
+    }
 }
 
 // ===================== ТЕРМИНАЛ =====================
@@ -613,6 +592,10 @@ async function sendAICommand() {
         if (d.error) aiLiveResponse.textContent = 'Ошибка: ' + d.error;
     } catch(e) { aiLiveResponse.textContent = 'Ошибка отправки'; }
 }
+
+// ===================== КООРДИНАТЫ =====================
+// Метод get_real_coords доступен через API /api/real_coords
+// Можно вызывать из Python вкладки или других скриптов
 
 // ===================== СТАТИСТИКА =====================
 async function fetchSystemStats() {
@@ -717,7 +700,6 @@ async function init() {
     await updateRenderParams();
     fetchSystemStats();
     fetchTerminalOutput();
-    initVideoTooltip();
     startPollingAI();
     setInterval(fetchSystemStats, 2200);
     setInterval(fetchTerminalOutput, 400);

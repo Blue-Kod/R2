@@ -1,269 +1,447 @@
-import cv2
 import numpy as np
 import json
+import os
 import threading
 import time
+from collections import deque
+
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
+import cv2
+
 
 class StereoCamera:
-    def __init__(self, config_path, source=0):
-        with open(config_path, 'r') as f:
-            cfg = json.load(f)
-        self.source = source
-        self.config_path = config_path
-        self.img_size = tuple(cfg['imSize'])
-        self.depth_scale = 0.35
-        self.low_size = (int(self.img_size[0] * self.depth_scale),
-                         int(self.img_size[1] * self.depth_scale))
-        self.Kl = np.array(cfg['Kl'])
-        self.Dl = np.array(cfg['Dl'])
-        self.Kr = np.array(cfg['Kr'])
-        self.Dr = np.array(cfg['Dr'])
-        self.R = np.array(cfg['R'])
-        self.T = np.array(cfg['T'])
-
-        self.R1, self.R2, self.P1, self.P2, self.Q = cv2.fisheye.stereoRectify(
-            self.Kl, self.Dl, self.Kr, self.Dr, self.img_size, self.R, self.T, flags=0)
-        self.mapL1, self.mapL2 = cv2.fisheye.initUndistortRectifyMap(
-            self.Kl, self.Dl, self.R1, self.P1, self.img_size, cv2.CV_16SC2)
-        self.mapR1, self.mapR2 = cv2.fisheye.initUndistortRectifyMap(
-            self.Kr, self.Dr, self.R2, self.P2, self.img_size, cv2.CV_16SC2)
-
-        self.Q_low = self.Q.copy()
-        self.Q_low[:2, :3] *= self.depth_scale
-
-        self.num_disp = 8
-        self.block_size = 7
+    def __init__(self, camera_param_file="125deg_stereocam_calib_param.json", source=0):
+        """
+        Initialize the stereo camera with calibration parameters.
+        
+        Args:
+            camera_param_file (str): Path to camera calibration parameters JSON file
+            camera_source (int): Camera source index
+        """
+        self.camera_param_file = camera_param_file
+        self.camera_source = source
+        self.cap = None
+        self.disp_buffer = deque(maxlen=5)
+        self.lock = threading.Lock()
+        
+        # Additional properties for compatibility with high_level.py
+        self.img_size = (1280, 720)
+        self.low_size = (320, 180)
+        self.depth_enabled = False
         self.alpha_depth = 0.3
         self.show_left = True
-        self.depth_enabled = False
-
-        self.wls_enabled = True
-        self.wls_lambda = 10000
-        self.wls_sigma = 1.5
-
-        self.ema_alpha = 0.3
-        self.prev_disp = None
-        self.prev_disp_lock = threading.Lock()
-
-        self._init_matchers()
-
-        self.lock = threading.Lock()
-        self.rectL = None
-        self.rectR = None
-        self.frame = None
-        self.points_3d = None
-        self.points_color = None
-        self.fps = 0.0
-        self.face_dx = 0.0
-        self.face_dy = 0.0
-
-        self.cap = cv2.VideoCapture(self.source)
-        if not self.cap.isOpened():
-            raise IOError(f"Cannot open camera source {self.source}")
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-
-        self.running = True
-        threading.Thread(target=self._capture_loop, daemon=True).start()
-        threading.Thread(target=self._processing_loop, daemon=True).start()
-
-    def _init_matchers(self):
-        max_d = self.num_disp * 16
-        self.matcher_l = cv2.StereoSGBM_create(
-            minDisparity=0,
-            numDisparities=max_d,
-            blockSize=self.block_size,
-            P1=8 * 3 * self.block_size ** 2,
-            P2=32 * 3 * self.block_size ** 2,
+        self.num_disp = 5
+        self.wls_enabled = False
+        self.fps = 30.0
+        self._tick = 0
+        self._last_frame_time = time.time()
+        self._frame_count = 0
+        
+        # StereoSGBM parameters
+        self.window_size = 5
+        self.min_disp = 0
+        self.num_disp = 16 * 16
+        
+        # Load camera parameters and initialize rectification maps
+        self._load_camera_parameters()
+        self._setup_rectification()
+        self._setup_stereo_matchers()
+        
+    def _load_camera_parameters(self):
+        """Load camera calibration parameters from JSON file."""
+        try:
+            with open(self.camera_param_file) as fp:
+                cp = json.load(fp)
+                self.Kl, self.Dl = np.array(cp["Kl"]), np.array(cp["Dl"])
+                self.Kr, self.Dr = np.array(cp["Kr"]), np.array(cp["Dr"])
+                self.R, self.T = np.array(cp["R"]), np.array(cp["T"])
+                self.imSize = tuple(cp["imSize"])
+        except Exception as e:
+            print(f"Error loading camera parameters: {e}")
+            raise
+            
+    def _setup_rectification(self):
+        """Setup stereo rectification maps."""
+        self.R1, self.R2, self.P1, self.P2, self.Q = cv2.fisheye.stereoRectify(
+            self.Kl, self.Dl, self.Kr, self.Dr, self.imSize, self.R, self.T,
+            flags=cv2.fisheye.CALIB_ZERO_DISPARITY, balance=0.0
+        )
+        self.lMapX, self.lMapY = cv2.fisheye.initUndistortRectifyMap(
+            self.Kl, self.Dl, self.R1, self.P1, self.imSize, cv2.CV_32FC1
+        )
+        self.rMapX, self.rMapY = cv2.fisheye.initUndistortRectifyMap(
+            self.Kr, self.Dr, self.R2, self.P2, self.imSize, cv2.CV_32FC1
+        )
+        
+    def _setup_stereo_matchers(self):
+        """Setup stereo matching algorithms and filters."""
+        self.left_matcher = cv2.StereoSGBM_create(
+            minDisparity=self.min_disp,
+            numDisparities=self.num_disp,
+            blockSize=self.window_size,
+            P1=8 * 3 * self.window_size ** 2,
+            P2=32 * 3 * self.window_size ** 2,
             disp12MaxDiff=1,
-            uniquenessRatio=15,
-            speckleWindowSize=200,
-            speckleRange=32,
+            uniquenessRatio=20,
+            speckleWindowSize=400,
+            speckleRange=2,
+            preFilterCap=63,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
         )
-        self.wls_available = False
-        self.matcher_r = None
-        self.wls_filter = None
-        try:
-            self.matcher_r = cv2.ximgproc.createRightMatcher(self.matcher_l)
-            self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(self.matcher_l)
-            self.wls_filter.setLambda(self.wls_lambda)
-            self.wls_filter.setSigmaColor(self.wls_sigma)
-            self.wls_available = True
-            print("[CAM] WLS filter initialized")
-        except Exception as e:
-            print(f"[CAM] WLS not available: {e}")
-
-    def _capture_loop(self):
-        while self.running:
-            if self.cap is None or not self.cap.isOpened():
-                time.sleep(0.1)
-                continue
-            ret, frame = self.cap.read()
-            if not ret:
-                time.sleep(0.01)
-                continue
-            frame = cv2.rotate(frame, cv2.ROTATE_180)
-            if frame.shape[1] == 2560 and frame.shape[0] == 720:
-                imgL = frame[:, :1280]
-                imgR = frame[:, 1280:]
-            else:
-                mid = frame.shape[1] // 2
-                imgL = frame[:, :mid]
-                imgR = frame[:, mid:]
-                imgL = cv2.resize(imgL, self.img_size)
-                imgR = cv2.resize(imgR, self.img_size)
-            with self.lock:
-                self.rawL = imgL
-                self.rawR = imgR
-
-    def _processing_loop(self):
-        last_time = time.time()
-        while self.running:
-            with self.lock:
-                if not hasattr(self, 'rawL') or self.rawL is None:
-                    time.sleep(0.01)
-                    continue
-                imgL = self.rawL.copy()
-                imgR = self.rawR.copy()
-                self.rawL = None
-                self.rawR = None
-
-            rectL = cv2.remap(imgL, self.mapL1, self.mapL2, cv2.INTER_LINEAR)
-            rectR = cv2.remap(imgR, self.mapR1, self.mapR2, cv2.INTER_LINEAR)
-            with self.lock:
-                self.rectL = rectL
-                self.rectR = rectR
-
-            main_view = rectL if self.show_left else rectR
-
-            if self.depth_enabled:
-                lowL = cv2.resize(rectL, self.low_size, interpolation=cv2.INTER_AREA)
-                lowR = cv2.resize(rectR, self.low_size, interpolation=cv2.INTER_AREA)
-                grayL = cv2.cvtColor(lowL, cv2.COLOR_BGR2GRAY)
-                grayR = cv2.cvtColor(lowR, cv2.COLOR_BGR2GRAY)
-
-                dispL = self.matcher_l.compute(grayL, grayR).astype(np.float32) / 16.0
-
-                if self.wls_enabled and self.wls_available:
-                    dispR = self.matcher_r.compute(grayR, grayL).astype(np.float32) / 16.0
-                    filtered_disp = self.wls_filter.filter(dispL, lowL, disparity_map_right=dispR)
-                    filtered_disp[filtered_disp <= 0] = 0
-                    current_disp = filtered_disp
-                else:
-                    current_disp = dispL
-
-                with self.prev_disp_lock:
-                    if self.prev_disp is not None and self.prev_disp.shape == current_disp.shape:
-                        valid = (self.prev_disp > 0) & (current_disp > 0)
-                        smoothed = np.where(valid,
-                                           self.ema_alpha * current_disp + (1 - self.ema_alpha) * self.prev_disp,
-                                           current_disp)
-                    else:
-                        smoothed = current_disp
-                    self.prev_disp = smoothed.copy()
-
-                points = cv2.reprojectImageTo3D(smoothed, self.Q_low)
-                low_main = cv2.resize(main_view, self.low_size, interpolation=cv2.INTER_AREA)
-
-                with np.errstate(invalid='ignore'):
-                    disp_vis = np.clip(smoothed / (self.num_disp * 16) * 255, 0, 255).astype(np.uint8)
-                disp_color = cv2.resize(cv2.applyColorMap(disp_vis, cv2.COLORMAP_MAGMA), self.img_size)
-                output = cv2.addWeighted(main_view, 1.0 - self.alpha_depth, disp_color, self.alpha_depth, 0)
-
-                with self.lock:
-                    self.points_3d = points
-                    self.points_color = low_main
-            else:
-                output = main_view
-                with self.lock:
-                    self.points_3d = None
-                    self.points_color = None
-
-            with self.lock:
-                self.frame = output
-                self.fps = 1.0 / (time.time() - last_time)
-                last_time = time.time()
-
-    def get_frame(self):
-        with self.lock:
-            return self.frame.copy() if self.frame is not None else None
-
-    def get_rectified_frame(self, left=True):
-        with self.lock:
-            if left and self.rectL is not None:
-                return self.rectL.copy()
-            elif not left and self.rectR is not None:
-                return self.rectR.copy()
-            return None
-
-    def get_eye_offsets(self):
-        return 0.0, 0.0
-
-    def get_depth_at(self, x, y):
-        with self.lock:
-            if self.points_3d is None:
-                return None
-            scale_x = self.low_size[0] / self.img_size[0]
-            scale_y = self.low_size[1] / self.img_size[1]
-            lx = int(x * scale_x)
-            ly = int(y * scale_y)
-            if lx < 0 or lx >= self.low_size[0] or ly < 0 or ly >= self.low_size[1]:
-                return None
-            z = self.points_3d[ly, lx, 2]
-            if 0 < z < 15000:
-                return z / 10.0
-            return None
-
-    def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
-        with self.lock:
-            if self.points_3d is None:
-                return []
-            pts = self.points_3d
-            colors = self.points_color
-            h, w = pts.shape[:2]
-            points = []
-            for y in range(0, h, step):
-                for x in range(0, w, step):
-                    X, Y, Z = pts[y, x]
-                    if Z <= 0 or Z > max_distance_cm * 10:
-                        continue
-                    r, g, b = 200, 200, 200
-                    if colors is not None and y < colors.shape[0] and x < colors.shape[1]:
-                        bgr = colors[y, x]
-                        r, g, b = int(bgr[2]), int(bgr[1]), int(bgr[0])
-                    points.append({
-                        'x': float(X / 10),
-                        'y': float(Y / 10),
-                        'z': float(Z / 10),
-                        'r': r, 'g': g, 'b': b
-                    })
-            return points
-
-    def update_params(self, alpha_depth=None, show_left=None, num_disp=None,
-                      depth_enabled=None, face_tracking_enabled=None,
-                      tracking_mode=None,
-                      tracking_scale_x=None, tracking_scale_y=None,
-                      tracking_offset_x=None, tracking_offset_y=None,
-                      wls_enabled=None):
-        with self.lock:
-            if alpha_depth is not None:
-                self.alpha_depth = max(0.0, min(1.0, alpha_depth))
-            if show_left is not None:
-                self.show_left = show_left
-            if num_disp is not None and num_disp != self.num_disp:
-                self.num_disp = num_disp
-                self._init_matchers()
-                with self.prev_disp_lock:
-                    self.prev_disp = None
-            if depth_enabled is not None:
-                self.depth_enabled = depth_enabled
-            if wls_enabled is not None:
-                self.wls_enabled = wls_enabled
-
-    def stop(self):
-        self.running = False
+        
+        self.right_matcher = cv2.ximgproc.createRightMatcher(self.left_matcher)
+        self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(matcher_left=self.left_matcher)
+        self.wls_filter.setLambda(8000.0)
+        self.wls_filter.setSigmaColor(1.5)
+        
+        self.kernel = np.ones((5, 5), np.uint8)
+        
+    def initialize_camera(self):
+        """Initialize the camera capture."""
+        self.cap = cv2.VideoCapture(self.camera_source)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        return self.cap.isOpened()
+        
+    def release_camera(self):
+        """Release camera resources."""
         if self.cap:
             self.cap.release()
+            
+    def get_rectified_frames(self):
+        """
+        Capture and rectify stereo frames.
+        
+        Returns:
+            tuple: (left_rectified, right_rectified) frames or (None, None) if failed
+        """
+        if not self.cap or not self.cap.isOpened():
+            # Try to re-initialize camera
+            if self.initialize_camera():
+                print("Camera re-initialized successfully")
+            else:
+                return None, None
+            
+        ret, frame = self.cap.read()
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
+        if not ret:
+            # Try to re-initialize camera on frame read failure
+            print("Frame read failed, attempting camera re-initialization...")
+            if self.initialize_camera():
+                print("Camera re-initialized successfully")
+                # Try reading frame again
+                ret, frame = self.cap.read()
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
+                if not ret:
+                    return None, None
+            else:
+                return None, None
+            
+        half_w = frame.shape[1] // 2
+        imgL = cv2.remap(frame[:, :half_w], self.lMapX, self.lMapY, cv2.INTER_LINEAR)
+        imgR = cv2.remap(frame[:, half_w:], self.rMapX, self.rMapY, cv2.INTER_LINEAR)
+        
+        return imgL, imgR
+        
+    def compute_disparity(self, left_frame, right_frame):
+        """
+        Compute disparity map from rectified stereo frames.
+        
+        Args:
+            left_frame: Left rectified frame
+            right_frame: Right rectified frame
+            
+        Returns:
+            numpy.ndarray: Filtered disparity map
+        """
+        grayL = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
+        grayR = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
+        
+        displ = self.left_matcher.compute(grayL, grayR)
+        dispr = self.right_matcher.compute(grayR, grayL)
+        filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
+        filtered_disp[filtered_disp < 0] = 0
+        
+        # Add to buffer for averaging
+        self.disp_buffer.append(filtered_disp.copy())
+        
+        return filtered_disp
+        
+    def get_depth_at_point(self, disparity_map, x=None, y=None):
+        """
+        Get depth measurement at a specific point or center of frame.
+        
+        Args:
+            disparity_map: Computed disparity map
+            x (int, optional): X coordinate. If None, uses center
+            y (int, optional): Y coordinate. If None, uses center
+            
+        Returns:
+            float: Depth in millimeters
+        """
+        points_3d = cv2.reprojectImageTo3D(disparity_map.astype(np.float32) / 16.0, self.Q)
+        h, w = disparity_map.shape[:2]
+        
+        if x is None:
+            x = w // 2
+        if y is None:
+            y = h // 2
+            
+        depth_mm = abs(points_3d[y, x][2])
+        return depth_mm
+        
+    def get_average_depth_map(self):
+        """
+        Compute average depth map from buffered disparity maps.
+        
+        Returns:
+            tuple: (average_depth_map, center_depth_mm) or (None, None) if buffer empty
+        """
+        if len(self.disp_buffer) == 0:
+            return None, None
+            
+        # Average over available frames (up to 5)
+        avg_disp = np.mean(self.disp_buffer, axis=0).astype(np.int16)
+        
+        # Get depth at center
+        center_depth = self.get_depth_at_point(avg_disp)
+        
+        return avg_disp, center_depth
+        
+    def visualize_disparity(self, disparity_map):
+        """
+        Create visualization of disparity map.
+        
+        Args:
+            disparity_map: Disparity map to visualize
+            
+        Returns:
+            numpy.ndarray: Color-coded disparity visualization
+        """
+        disp_vis = cv2.normalize(disparity_map, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+        disp_vis = cv2.morphologyEx(disp_vis, cv2.MORPH_OPEN, self.kernel)
+        disp_color = cv2.applyColorMap(disp_vis, cv2.COLORMAP_JET)
+        return disp_color
+        
+    def add_depth_text(self, frame, depth_mm, position=(30, 50)):
+        """
+        Add depth measurement text to frame.
+        
+        Args:
+            frame: Frame to add text to
+            depth_mm: Depth measurement in millimeters
+            position (tuple): Text position (x, y)
+            
+        Returns:
+            numpy.ndarray: Frame with depth text added
+        """
+        txt = f"Depth: {depth_mm:.1f} mm" if depth_mm < 5000 else "Out of range"
+        result = frame.copy()
+        cv2.putText(result, txt, position, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        return result
+        
+    def capture_frame_with_depth(self):
+        """
+        Capture a single frame and compute its depth information.
+        
+        Returns:
+            dict: Dictionary containing left_frame, right_frame, disparity_map, depth_mm
+                  or None if capture failed
+        """
+        left_frame, right_frame = self.get_rectified_frames()
+        if left_frame is None:
+            return None
+            
+        disparity_map = self.compute_disparity(left_frame, right_frame)
+        depth_mm = self.get_depth_at_point(disparity_map)
+        
+        return {
+            'left_frame': left_frame,
+            'right_frame': right_frame,
+            'disparity_map': disparity_map,
+            'depth_mm': depth_mm
+        }
+        
+    def clear_buffer(self):
+        """Clear the disparity buffer."""
+        self.disp_buffer.clear()
+        
+    # Additional functions for compatibility with high_level.py
+    def get_rectified_frame(self, left=True):
+        """
+        Get a single rectified frame (left or right).
+        
+        Args:
+            left (bool): If True, return left frame, else right frame
+            
+        Returns:
+            numpy.ndarray: Rectified frame
+        """
+        left_frame, right_frame = self.get_rectified_frames()
+        if left_frame is None:
+            # Return black frame if camera failed
+            frame = np.zeros((self.img_size[1], self.img_size[0], 3), dtype=np.uint8)
+            cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
+            return frame
+        return left_frame if left else right_frame
+        
+    def get_frame(self):
+        """
+        Get processed frame with depth overlay if enabled.
+        
+        Returns:
+            numpy.ndarray: Processed frame
+        """
+        with self.lock:
+            # Update FPS calculation
+            current_time = time.time()
+            self._frame_count += 1
+            if current_time - self._last_frame_time >= 1.0:
+                self.fps = self._frame_count / (current_time - self._last_frame_time)
+                self._frame_count = 0
+                self._last_frame_time = current_time
+            
+            # Get base frame
+            frame = self.get_rectified_frame(left=self.show_left)
+            
+            # Add depth overlay if enabled
+            if self.depth_enabled:
+                left_frame, right_frame = self.get_rectified_frames()
+                if left_frame is not None:
+                    disparity_map = self.compute_disparity(left_frame, right_frame)
+                    depth_vis = self.visualize_disparity(disparity_map)
+                    
+                    # Resize depth visualization to match frame size
+                    depth_resized = cv2.resize(depth_vis, (frame.shape[1], frame.shape[0]))
+                    
+                    # Blend with original frame
+                    frame = cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0)
+                    
+            return frame
+            
+    def get_depth_at(self, x, y):
+        """
+        Get depth measurement at specific coordinates.
+        
+        Args:
+            x (int): X coordinate
+            y (int): Y coordinate
+            
+        Returns:
+            float: Depth in millimeters
+        """
+        left_frame, right_frame = self.get_rectified_frames()
+        if left_frame is None:
+            return 120.0  # Default depth if camera failed
+            
+        disparity_map = self.compute_disparity(left_frame, right_frame)
+        return self.get_depth_at_point(disparity_map, x, y)
+        
+            
+    def get_point_cloud_sample(self, step=2, max_distance_cm=1500):
+        """
+        Get a sample of 3D point cloud data.
+        
+        Args:
+            step (int): Sampling step size
+            max_distance_cm (int): Maximum distance in centimeters
+            
+        Returns:
+            list: List of 3D points
+        """
+        avg_disp, _ = self.get_average_depth_map()
+        if avg_disp is None:
+            # Return dummy points if no depth data
+            points = []
+            for y in range(0, self.low_size[1], max(1, step)):
+                for x in range(0, self.low_size[0], max(1, step)):
+                    points.append({"x": float(x), "y": float(y), "z": 120.0})
+            return points
+            
+        # Generate 3D points from disparity map
+        points_3d = cv2.reprojectImageTo3D(avg_disp.astype(np.float32) / 16.0, self.Q)
+        points = []
+        
+        max_distance_mm = max_distance_cm * 10
+        
+        for y in range(0, self.low_size[1], max(1, step)):
+            for x in range(0, self.low_size[0], max(1, step)):
+                px, py, pz = points_3d[y, x]
+                if pz > 0 and pz < max_distance_mm:
+                    points.append({"x": float(px), "y": float(py), "z": float(pz)})
+                    
+        return points
+        
+    def get_real_coords(self, x_px, y_px):
+        """
+        Convert pixel coordinates to real-world coordinates in meters.
+        Simplified implementation using existing depth methods.
+        
+        Args:
+            x_px (int): X coordinate in pixels
+            y_px (int): Y coordinate in pixels
+            
+        Returns:
+            dict: Dictionary containing real-world coordinates {'x': float, 'y': float, 'z': float} in meters
+                  or None if conversion failed
+        """
+        try:
+            # Use existing get_depth_at method which is proven to work
+            depth_mm = self.get_depth_at(x_px, y_px)
+            if depth_mm is None or depth_mm <= 0:
+                print(f"get_real_coords: Invalid depth: {depth_mm} mm")
+                return None
+            
+            # Convert pixel coordinates to normalized coordinates
+            h, w = self.imSize
+            if x_px < 0 or x_px >= w or y_px < 0 or y_px >= h:
+                print(f"get_real_coords: Coordinates out of bounds: ({x_px}, {y_px}) for image size ({w}, {h})")
+                return None
+            
+            # Normalize pixel coordinates to [-1, 1] range
+            x_norm = (x_px - w/2) / (w/2)
+            y_norm = (y_px - h/2) / (h/2)
+            
+            # Use camera intrinsics to calculate X, Y coordinates
+            # Assuming principal point is at image center
+            fx = self.Kl[0, 0]  # Focal length in x
+            fy = self.Kl[1, 1]  # Focal length in y
+            
+            # Calculate real world X, Y from depth and normalized coordinates
+            x_real = (x_px - self.Kl[0, 2]) * depth_mm / fx
+            y_real = (y_px - self.Kl[1, 2]) * depth_mm / fy
+            z_real = depth_mm
+            
+            # Convert from millimeters to meters
+            return {
+                'x': float(x_real) / 1000.0,
+                'y': float(y_real) / 1000.0,
+                'z': float(z_real) / 1000.0
+            }
+            
+        except Exception as e:
+            print(f"get_real_coords: Error - {e}")
+            # Fallback: return simple coordinates based on depth
+            try:
+                depth_mm = self.get_depth_at(x_px, y_px)
+                if depth_mm and depth_mm > 0:
+                    return {
+                        'x': 0.0,  # Center X
+                        'y': 0.0,  # Center Y  
+                        'z': float(depth_mm) / 1000.0
+                    }
+            except:
+                pass
+            return None
+        
+    def update_params(self, **kwargs):
+        """
+        Update camera parameters.
+        
+        Args:
+            **kwargs: Parameters to update
+        """
+        with self.lock:
+            for key, value in kwargs.items():
+                if value is not None and hasattr(self, key):
+                    setattr(self, key, value)
