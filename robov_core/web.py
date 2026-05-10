@@ -707,57 +707,5 @@ def create_app() -> Flask:
         except Exception as e:
             return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
-    @app.route("/simple_files")
-    def simple_files():
-        """Simple file listing fallback."""
-        try:
-            import json
-            path = Path.cwd().resolve()
-            items = []
-            
-            try:
-                for item in path.iterdir():
-                    try:
-                        if item.is_file():
-                            items.append({
-                                "name": item.name,
-                                "type": "file",
-                                "size": item.stat().st_size if item.exists() else 0
-                            })
-                        elif item.is_dir():
-                            items.append({
-                                "name": item.name,
-                                "type": "directory",
-                                "size": 0
-                            })
-                    except:
-                        continue
-            except:
-                items = [{"name": "Error accessing directory", "type": "error", "size": 0}]
-            
-            return f"""
-            <html>
-            <head><title>Simple File Manager</title></head>
-            <body>
-            <h2>Simple File Manager (Fallback)</h2>
-            <p>Current directory: {path}</p>
-            <ul>
-            {"".join([f'<li>{item["name"]} ({item["type"]})</li>' for item in items])}
-            </ul>
-            <p><a href="/">Back to Main</a></p>
-            </body>
-            </html>
-            """
-        except Exception as e:
-            return f"""
-            <html>
-            <head><title>Error</title></head>
-            <body>
-            <h2>Error</h2>
-            <p>File manager error: {str(e)}</p>
-            <p><a href="/">Back to Main</a></p>
-            </body>
-            </html>
-            """
-
+    
     return app
