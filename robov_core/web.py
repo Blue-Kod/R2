@@ -354,201 +354,163 @@ def create_app() -> Flask:
 
     # ===================== FILE MANAGER API =====================
     
-    def normalize_path(path_str):
-        """Normalize and validate file path for security."""
-        if not path_str or path_str == "/":
-            # On Windows: use current drive root
-            # On Linux/Unix: use home directory instead of root for safety
-            if os.name == 'nt':
-                return Path.cwd().resolve().anchor
-            else:
-                # On Debian/Linux, use home directory
-                home_dir = Path.home()
-                if home_dir.exists():
-                    return home_dir
-                return Path.cwd().resolve()
-        
+    def get_robot_directory():
+        """Get the robot's main directory."""
+        # Use the project root as robot directory
+        return Path(__file__).resolve().parent.parent
+    
+    def safe_path(base_dir, target_path):
+        """Safely join paths to prevent directory traversal."""
         try:
-            path = Path(path_str).resolve()
-        except (OSError, ValueError) as e:
-            # Handle invalid paths on Unix systems
-            return Path.cwd().resolve()
-        
-        # Allow access to root directory and all subdirectories
-        # Only block access to Windows system directories for safety
-        if os.name == 'nt':  # Windows
-            system_dirs = ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 
-                          'C:\\ProgramData', 'C:\\System32', 'C:\\SysWOW64']
-            for sys_dir in system_dirs:
-                if str(path).lower().startswith(sys_dir.lower()):
-                    return Path.cwd().resolve()
-        
-        return path
-
-    def get_file_info(file_path):
-        """Get file information dictionary."""
-        try:
-            stat = file_path.stat()
-            return {
-                "name": file_path.name,
-                "path": str(file_path).replace("\\", "/"),
-                "type": "directory" if file_path.is_dir() else "file",
-                "size": stat.st_size if file_path.is_file() else 0,
-                "modified": stat.st_mtime,
-                "permissions": oct(stat.st_mode)[-3:]
-            }
+            base = Path(base_dir).resolve()
+            target = Path(target_path).resolve()
+            
+            # If target is outside base, use base
+            if not str(target).startswith(str(base)):
+                return base
+            
+            return target
         except:
-            return None
-
+            return get_robot_directory()
+    
     @app.route("/api/files", methods=["GET"])
     def api_files_list():
-        """List files and directories."""
+        """List files and directories in robot directory."""
         try:
-            path_str = request.args.get("path", "/")
-            path = normalize_path(path_str)
+            robot_dir = get_robot_directory()
+            path_str = request.args.get("path", "")
             
-            # If path doesn't exist, try to fallback to current working directory
-            if not path.exists():
-                path = Path.cwd().resolve()
+            if path_str:
+                target_dir = safe_path(robot_dir, path_str)
+            else:
+                target_dir = robot_dir
+            
+            if not target_dir.exists():
+                target_dir = robot_dir
             
             items = []
-            if path.is_dir():
-                try:
-                    for item in path.iterdir():
-                        info = get_file_info(item)
-                        if info:
-                            items.append(info)
-                except PermissionError as e:
-                    # Try to get what we can access, fail gracefully
-                    return jsonify({
-                        "error": f"Permission denied accessing directory: {str(e)}", 
-                        "path": str(path).replace("\\", "/"),
-                        "items": []
-                    }), 403
-                except OSError as e:
-                    return jsonify({
-                        "error": f"System error accessing directory: {str(e)}", 
-                        "path": str(path).replace("\\", "/"),
-                        "items": []
-                    }), 500
-            else:
-                info = get_file_info(path)
-                if info:
-                    items.append(info)
             
-            # Sort items: directories first, then files, both alphabetically
+            if target_dir.is_dir():
+                try:
+                    for item in target_dir.iterdir():
+                        try:
+                            stat = item.stat()
+                            items.append({
+                                "name": item.name,
+                                "path": str(item).replace("\\", "/"),
+                                "type": "directory" if item.is_dir() else "file",
+                                "size": stat.st_size if item.is_file() else 0,
+                                "modified": stat.st_mtime
+                            })
+                        except:
+                            continue
+                except PermissionError:
+                    return jsonify({
+                        "error": "Permission denied",
+                        "path": str(target_dir).replace("\\", "/"),
+                        "items": []
+                    })
+            
+            # Sort: directories first, then files
             items.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
             
             return jsonify({
-                "path": str(path).replace("\\", "/"),
+                "path": str(target_dir).replace("\\", "/"),
                 "items": items
             })
+            
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            print(f"API files list error: {error_details}")
             return jsonify({
-                "error": f"Server error: {str(e)}", 
-                "path": path_str if 'path_str' in locals() else "unknown",
+                "error": str(e),
+                "path": "",
                 "items": []
-            }), 500
+            })
 
     @app.route("/api/files/read", methods=["GET"])
     def api_files_read():
-        """Read file content with proper encoding detection."""
-        path_str = request.args.get("path", "")
-        path = normalize_path(path_str)
-        
-        if not path.exists() or not path.is_file():
-            return jsonify({"error": "File not found"}), 404
-        
+        """Read file content."""
         try:
-            # Try to detect encoding
-            content = None
-            used_encoding = None
-            encodings = ['utf-8', 'utf-8-sig', 'cp1251', 'latin1', 'ascii']
+            robot_dir = get_robot_directory()
+            path_str = request.args.get("path", "")
             
-            for encoding in encodings:
-                try:
-                    with open(path, 'r', encoding=encoding) as f:
-                        content = f.read()
-                    used_encoding = encoding
-                    break
-                except (UnicodeDecodeError, LookupError):
-                    continue
+            if not path_str:
+                return jsonify({"error": "Path required"}), 400
             
-            if content is None:
-                # If all text encodings fail, treat as binary
-                try:
-                    with open(path, 'rb') as f:
-                        binary_content = f.read()
-                    content = binary_content.decode('latin1', errors='replace')
-                    used_encoding = 'binary'
-                except Exception as e:
-                    return jsonify({"error": f"Cannot read file: {str(e)}"}), 500
+            target_file = safe_path(robot_dir, path_str)
             
-            return jsonify({
-                "content": content,
-                "encoding": used_encoding,
-                "size": path.stat().st_size
-            })
-        except PermissionError:
-            return jsonify({"error": "Permission denied"}), 403
-        except OSError as e:
-            return jsonify({"error": f"System error: {str(e)}"}), 500
+            if not target_file.exists() or not target_file.is_file():
+                return jsonify({"error": "File not found"}), 404
+            
+            # Try to read as text
+            try:
+                with open(target_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return jsonify({
+                    "content": content,
+                    "encoding": "utf-8",
+                    "size": target_file.stat().st_size
+                })
+            except UnicodeDecodeError:
+                # Fallback to binary
+                with open(target_file, 'rb') as f:
+                    content = f.read().decode('latin1', errors='replace')
+                return jsonify({
+                    "content": content,
+                    "encoding": "binary",
+                    "size": target_file.stat().st_size
+                })
+                
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/files/write", methods=["POST"])
     def api_files_write():
-        """Write file content with UTF-8 encoding."""
-        data = request.get_json(silent=True) or {}
-        path_str = data.get("path", "")
-        content = data.get("content", "")
-        
-        path = normalize_path(path_str)
-        
-        if not path.parent.exists():
-            return jsonify({"error": "Parent directory does not exist"}), 404
-        
+        """Write file content."""
         try:
-            # Ensure parent directory exists with proper permissions
-            path.parent.mkdir(parents=True, exist_ok=True)
+            data = request.get_json(silent=True) or {}
+            path_str = data.get("path", "")
+            content = data.get("content", "")
             
-            # Write with UTF-8 encoding
-            with open(path, 'w', encoding='utf-8') as f:
+            if not path_str:
+                return jsonify({"error": "Path required"}), 400
+            
+            robot_dir = get_robot_directory()
+            target_file = safe_path(robot_dir, path_str)
+            
+            # Ensure parent directory exists
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Write file
+            with open(target_file, 'w', encoding='utf-8') as f:
                 f.write(content)
             
             return jsonify({
                 "success": True,
-                "message": "File saved successfully",
-                "size": len(content.encode('utf-8'))
+                "message": "File saved"
             })
-        except PermissionError:
-            return jsonify({"error": "Permission denied - check file/directory permissions"}), 403
-        except OSError as e:
-            return jsonify({"error": f"System error: {str(e)}"}), 500
+            
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/files/create", methods=["POST"])
     def api_files_create():
-        """Create new file or directory."""
-        data = request.get_json(silent=True) or {}
-        path_str = data.get("path", "/")
-        name = data.get("name", "")
-        item_type = data.get("type", "file")
-        
-        if not name:
-            return jsonify({"error": "Name is required"}), 400
-        
-        parent_path = normalize_path(path_str)
-        item_path = parent_path / name
-        
-        if item_path.exists():
-            return jsonify({"error": "Already exists"}), 409
-        
+        """Create file or directory."""
         try:
+            data = request.get_json(silent=True) or {}
+            path_str = data.get("path", "")
+            name = data.get("name", "")
+            item_type = data.get("type", "file")
+            
+            if not name:
+                return jsonify({"error": "Name required"}), 400
+            
+            robot_dir = get_robot_directory()
+            parent_dir = safe_path(robot_dir, path_str) if path_str else robot_dir
+            item_path = parent_dir / name
+            
+            if item_path.exists():
+                return jsonify({"error": "Already exists"}), 409
+            
             if item_type == "directory":
                 item_path.mkdir(parents=True, exist_ok=True)
             else:
@@ -557,155 +519,130 @@ def create_app() -> Flask:
             
             return jsonify({
                 "success": True,
-                "message": f"{item_type.capitalize()} created successfully",
-                "path": str(item_path).replace("\\", "/")
+                "message": f"{item_type} created"
             })
-        except PermissionError:
-            return jsonify({"error": "Permission denied - check directory permissions"}), 403
-        except OSError as e:
-            return jsonify({"error": f"System error: {str(e)}"}), 500
+            
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/files/delete", methods=["POST"])
     def api_files_delete():
         """Delete file or directory."""
-        data = request.get_json(silent=True) or {}
-        path_str = data.get("path", "")
-        
-        path = normalize_path(path_str)
-        
-        if not path.exists():
-            return jsonify({"error": "Path does not exist"}), 404
-        
         try:
-            if path.is_dir():
-                shutil.rmtree(path)
+            data = request.get_json(silent=True) or {}
+            path_str = data.get("path", "")
+            
+            if not path_str:
+                return jsonify({"error": "Path required"}), 400
+            
+            robot_dir = get_robot_directory()
+            target_path = safe_path(robot_dir, path_str)
+            
+            if not target_path.exists():
+                return jsonify({"error": "Not found"}), 404
+            
+            if target_path.is_dir():
+                import shutil
+                shutil.rmtree(target_path)
             else:
-                path.unlink()
+                target_path.unlink()
             
             return jsonify({
                 "success": True,
-                "message": "Deleted successfully"
+                "message": "Deleted"
             })
-        except PermissionError:
-            return jsonify({"error": "Permission denied - check file/directory permissions"}), 403
-        except OSError as e:
-            return jsonify({"error": f"System error: {str(e)}"}), 500
+            
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/files/rename", methods=["POST"])
     def api_files_rename():
         """Rename file or directory."""
-        data = request.get_json(silent=True) or {}
-        old_path_str = data.get("old_path", "")
-        new_name = data.get("new_name", "")
-        
-        if not new_name:
-            return jsonify({"error": "New name is required"}), 400
-        
-        old_path = normalize_path(old_path_str)
-        
-        if not old_path.exists():
-            return jsonify({"error": "Path does not exist"}), 404
-        
-        new_path = old_path.parent / new_name
-        
-        if new_path.exists():
-            return jsonify({"error": "Target already exists"}), 409
-        
         try:
+            data = request.get_json(silent=True) or {}
+            old_path_str = data.get("old_path", "")
+            new_name = data.get("new_name", "")
+            
+            if not old_path_str or not new_name:
+                return jsonify({"error": "Path and name required"}), 400
+            
+            robot_dir = get_robot_directory()
+            old_path = safe_path(robot_dir, old_path_str)
+            
+            if not old_path.exists():
+                return jsonify({"error": "Not found"}), 404
+            
+            new_path = old_path.parent / new_name
+            
+            if new_path.exists():
+                return jsonify({"error": "Target exists"}), 409
+            
             old_path.rename(new_path)
             
             return jsonify({
                 "success": True,
-                "message": "Renamed successfully",
+                "message": "Renamed",
                 "new_path": str(new_path).replace("\\", "/")
             })
-        except PermissionError:
-            return jsonify({"error": "Permission denied - check file/directory permissions"}), 403
-        except OSError as e:
-            return jsonify({"error": f"System error: {str(e)}"}), 500
+            
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/files/upload", methods=["POST"])
     def api_files_upload():
-        """Upload multiple files."""
-        path_str = request.form.get("path", "/")
-        parent_path = normalize_path(path_str)
-        
-        if not parent_path.exists():
-            return jsonify({"error": "Target directory does not exist"}), 404
-        
-        files = request.files.getlist("files")
-        if not files:
-            return jsonify({"error": "No files provided"}), 400
-        
-        uploaded_count = 0
-        errors = []
-        
-        for file in files:
-            if file.filename == "":
-                continue
+        """Upload files."""
+        try:
+            path_str = request.form.get("path", "")
+            robot_dir = get_robot_directory()
+            target_dir = safe_path(robot_dir, path_str) if path_str else robot_dir
             
-            try:
-                filename = file.filename
-                file_path = parent_path / filename
-                
-                # Ensure parent directory exists
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                # Save file
-                file.save(str(file_path))
-                uploaded_count += 1
-                
-            except PermissionError:
-                errors.append(f"{file.filename}: Permission denied")
-            except OSError as e:
-                errors.append(f"{file.filename}: System error - {str(e)}")
-            except Exception as e:
-                errors.append(f"{file.filename}: Unexpected error - {str(e)}")
-        
-        response_data = {
-            "success": uploaded_count > 0,
-            "uploaded_count": uploaded_count,
-            "total_files": len([f for f in files if f.filename != ""])
-        }
-        
-        if errors:
-            response_data["errors"] = errors
-        
-        return jsonify(response_data)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            files = request.files.getlist("files")
+            uploaded = 0
+            
+            for file in files:
+                if file and file.filename:
+                    file_path = target_dir / file.filename
+                    file.save(str(file_path))
+                    uploaded += 1
+            
+            return jsonify({
+                "success": uploaded > 0,
+                "uploaded_count": uploaded
+            })
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/files/download", methods=["GET"])
     def api_files_download():
         """Download file."""
-        path_str = request.args.get("path", "")
-        path = normalize_path(path_str)
-        
-        if not path.exists() or not path.is_file():
-            return jsonify({"error": "File not found"}), 404
-        
         try:
-            # Determine MIME type
-            mime_type, _ = mimetypes.guess_type(str(path))
+            path_str = request.args.get("path", "")
+            
+            if not path_str:
+                return jsonify({"error": "Path required"}), 400
+            
+            robot_dir = get_robot_directory()
+            target_file = safe_path(robot_dir, path_str)
+            
+            if not target_file.exists() or not target_file.is_file():
+                return jsonify({"error": "File not found"}), 404
+            
+            mime_type, _ = mimetypes.guess_type(str(target_file))
             if mime_type is None:
                 mime_type = 'application/octet-stream'
             
             return send_file(
-                str(path),
+                str(target_file),
                 as_attachment=True,
-                download_name=path.name,
+                download_name=target_file.name,
                 mimetype=mime_type
             )
-        except PermissionError:
-            return jsonify({"error": "Permission denied - check file permissions"}), 403
-        except OSError as e:
-            return jsonify({"error": f"System error: {str(e)}"}), 500
+            
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+            return jsonify({"error": str(e)}), 500
 
     
     return app
