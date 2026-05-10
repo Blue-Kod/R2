@@ -15,6 +15,7 @@ import psutil
 
 from robov_core.camera import StereoCamera
 from robov_core.servo import ServoController
+from robov_core.config import AppConfig
 
 try:
     from robov_core.eyes_display import EyeDisplay, optimize_for_arm
@@ -298,7 +299,8 @@ def _display_worker():
         optimize_for_arm()
 
     with _display_lock:
-        _display = EyeDisplay()
+        config = AppConfig()
+        _display = EyeDisplay(scale_factor=config.eyes_scale_factor)
 
     _eye_api = _display.api
 
