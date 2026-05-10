@@ -104,10 +104,11 @@ class StereoCamera:
     def initialize_camera(self):
         """Initialize the camera capture with optimized settings."""
         self.cap = cv2.VideoCapture(self.camera_source)
-        # Set camera to native stereo resolution
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)  # Full stereo frame width
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)   # Native height
-        self.cap.set(cv2.CAP_PROP_FPS, 15)             # Target 15 FPS
+        # Set camera to optimal mode: 1280x720 @ 30 FPS MJPG
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)   # Optimized width
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)    # Optimized height
+        self.cap.set(cv2.CAP_PROP_FPS, 30)             # Target 30 FPS
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # Use MJPG for better performance
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Reduce buffer for lower latency
         return self.cap.isOpened()
         
