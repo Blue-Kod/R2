@@ -1,0 +1,1382 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>R2 — Файловый менеджер | Управление роботом</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg: #0a0a0a;
+            --panel: #121212;
+            --panel-2: #151515;
+            --text: #f0f0f0;
+            --muted: #9c9c9c;
+            --line: #2a2a2a;
+            --accent: #44944a;
+        }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+        }
+
+        body {
+            overflow: hidden;
+            color: var(--text);
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            font-size: 13px;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0a0a0a;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #444;
+        }
+
+        .layout {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow: hidden;
+            padding: 16px;
+        }
+
+        .topbar {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-links a {
+            color: var(--text);
+            text-decoration: none;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: 0.2s;
+        }
+
+        .nav-links a:hover {
+            background: #1f1f1f;
+            border-color: #3a3a3a;
+        }
+
+        .stats {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .stats div {
+            font-size: 12px;
+            color: var(--muted);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 6px 12px;
+            background: var(--panel);
+        }
+
+        .stats span {
+            color: var(--text);
+            font-weight: 600;
+            margin-left: 4px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            background: var(--panel);
+            border-radius: 20px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .panel-title {
+            font-size: 11px;
+            letter-spacing: 1.2px;
+            color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .btn {
+            background: var(--panel-2);
+            color: var(--text);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 8px 14px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .btn:hover {
+            background: #1f1f1f;
+            border-color: #3a3a3a;
+        }
+
+        .btn-primary {
+            background: #44944a;
+            border-color: #44944a;
+        }
+
+        .btn-primary:hover {
+            background: #55a55a;
+        }
+
+        .btn-danger {
+            background: #8b0000;
+            border-color: #8b0000;
+        }
+
+        .btn-danger:hover {
+            background: #a50000;
+        }
+
+        .path-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .path-bar input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text);
+            font-family: inherit;
+            font-size: inherit;
+            outline: none;
+        }
+
+        .file-list {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid var(--line);
+            background: #0d0d0d;
+            border-radius: 14px;
+            padding: 16px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 16px;
+            align-content: start;
+        }
+
+        .file-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 8px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+            text-align: center;
+            min-height: 100px;
+        }
+
+        .file-item:hover {
+            background: var(--panel-2);
+            transform: translateY(-2px);
+        }
+
+        .file-item.selected {
+            background: #1e4a76;
+            box-shadow: 0 4px 8px rgba(30, 74, 118, 0.3);
+        }
+
+        .file-icon {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+        }
+
+        .file-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+
+        .file-name {
+            font-weight: 500;
+            font-size: 12px;
+            word-break: break-word;
+            line-height: 1.2;
+            margin-bottom: 4px;
+        }
+
+        .file-meta {
+            font-size: 10px;
+            color: var(--muted);
+            font-family: 'JetBrains Mono', monospace;
+            text-align: center;
+            line-height: 1.1;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            padding: 20px;
+            width: 95vw;
+            height: 95vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .modal-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .modal-close:hover {
+            color: var(--text);
+        }
+
+        .editor-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 400px;
+        }
+
+        .editor-info {
+            font-size: 11px;
+            color: var(--muted);
+            margin-bottom: 8px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .editor-textarea {
+            flex: 1;
+            background: #0d0d0d;
+            border: 1px solid var(--line);
+            color: var(--text);
+            border-radius: 12px;
+            padding: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            resize: none;
+            outline: none;
+        }
+
+        .editor-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            justify-content: flex-end;
+        }
+
+        .upload-area {
+            border: 2px dashed var(--line);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 12px;
+            transition: 0.2s;
+        }
+
+        .upload-area.dragover {
+            border-color: var(--accent);
+            background: rgba(68, 148, 74, 0.1);
+        }
+
+        .upload-input {
+            display: none;
+        }
+
+        .context-menu {
+            position: fixed;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 4px;
+            display: none;
+            z-index: 1001;
+            min-width: 150px;
+        }
+
+        .context-menu.active {
+            display: block;
+        }
+
+        .context-menu-item {
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: 0.2s;
+        }
+
+        .context-menu-item:hover {
+            background: var(--panel-2);
+        }
+
+        .context-menu-item.danger {
+            color: #ff6b6b;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Image Viewer Styles */
+        .image-viewer-content {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            width: 98vw;
+            height: 98vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .image-viewer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--line);
+            background: var(--panel-2);
+        }
+
+        .image-viewer-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .image-viewer-info {
+            font-size: 12px;
+            color: var(--muted);
+            margin-left: 12px;
+        }
+
+        .image-viewer-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .image-viewer-body {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+            background: #0a0a0a;
+        }
+
+        .image-viewer-img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: transform 0.2s ease;
+            cursor: grab;
+        }
+
+        .image-viewer-img:active {
+            cursor: grabbing;
+        }
+
+        .image-viewer-img.zoomed {
+            max-width: none;
+            max-height: none;
+        }
+
+        .image-nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid var(--line);
+            color: var(--text);
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.2s;
+            z-index: 10;
+        }
+
+        .image-nav-btn:hover {
+            background: rgba(68, 148, 74, 0.8);
+            border-color: var(--accent);
+        }
+
+        .image-nav-btn.prev {
+            left: 20px;
+        }
+
+        .image-nav-btn.next {
+            right: 20px;
+        }
+
+        .image-nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .image-toolbar {
+            display: flex;
+            gap: 8px;
+            padding: 12px 20px;
+            border-top: 1px solid var(--line);
+            background: var(--panel-2);
+            justify-content: center;
+            align-items: center;
+        }
+
+        .image-counter {
+            font-size: 12px;
+            color: var(--muted);
+            margin-right: 16px;
+        }
+
+        @media (max-width: 768px) {
+            .layout {
+                padding: 8px;
+            }
+            
+            .toolbar {
+                gap: 4px;
+            }
+            
+            .btn {
+                padding: 6px 10px;
+                font-size: 11px;
+            }
+            
+            .image-nav-btn {
+                width: 40px;
+                height: 40px;
+                font-size: 16px;
+            }
+            
+            .image-nav-btn.prev {
+                left: 10px;
+            }
+            
+            .image-nav-btn.next {
+                right: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <header class="topbar">
+        <div class="nav-links">
+            <a href="/">Главная</a>
+            <a href="/file_manager">Файлы</a>
+        </div>
+        <div class="stats">
+            <div>Файлов: <span id="fileCount">0</span></div>
+            <div>Папок: <span id="folderCount">0</span></div>
+            <div>Размер: <span id="totalSize">0 B</span></div>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="panel">
+            <div class="panel-title">Файловый менеджер</div>
+            
+            <div class="toolbar">
+                <button class="btn" onclick="navigateUp()">↑ Наверх</button>
+                <button class="btn" onclick="refreshFiles()">↻ Обновить</button>
+                <button class="btn btn-primary" onclick="showUploadModal()">⬆ Загрузить</button>
+                <button class="btn" onclick="createFolder()">📁 Новая папка</button>
+                <button class="btn" onclick="createFile()">📄 Новый файл</button>
+                <button class="btn btn-danger" onclick="deleteSelected()">🗑 Удалить</button>
+            </div>
+
+            <div class="path-bar">
+                <span>📍</span>
+                <input type="text" id="currentPath" value="/" readonly>
+                <button class="btn" onclick="changePath()">Перейти</button>
+            </div>
+
+            <div class="file-list" id="fileList">
+                <!-- Файлы будут загружены через JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно загрузки файлов -->
+<div class="modal" id="uploadModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-title">Загрузка файлов</div>
+            <button class="modal-close" onclick="closeUploadModal()">×</button>
+        </div>
+        <div class="upload-area" id="uploadArea">
+            <div>📁 Перетащите файлы сюда или нажмите для выбора</div>
+            <input type="file" id="fileInput" class="upload-input" multiple>
+        </div>
+        <div class="editor-actions">
+            <button class="btn" onclick="closeUploadModal()">Отмена</button>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно текстового редактора -->
+<div class="modal" id="editorModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-title" id="editorTitle">Редактор файла</div>
+            <button class="modal-close" onclick="closeEditorModal()">×</button>
+        </div>
+        <div class="editor-container">
+            <div class="editor-info" id="editorInfo">Путь: /path/to/file</div>
+            <textarea class="editor-textarea" id="editorTextarea" placeholder="Содержимое файла..."></textarea>
+            <div class="editor-actions">
+                <button class="btn" onclick="closeEditorModal()">Отмена</button>
+                <button class="btn btn-danger" onclick="resetEditor()">Сбросить</button>
+                <button class="btn btn-primary" onclick="saveFile()">💾 Сохранить</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно просмотра изображений -->
+<div class="modal" id="imageViewerModal">
+    <div class="image-viewer-content">
+        <div class="image-viewer-header">
+            <div style="display: flex; align-items: center;">
+                <div class="image-viewer-title" id="imageViewerTitle">image.jpg</div>
+                <div class="image-viewer-info" id="imageViewerInfo">1920x1080 • 2.5 MB</div>
+            </div>
+            <div class="image-viewer-actions">
+                <button class="btn" onclick="zoomOut()">🔍-</button>
+                <button class="btn" onclick="zoomIn()">🔍+</button>
+                <button class="btn" onclick="resetZoom()">↺ Сброс</button>
+                <button class="btn" onclick="downloadCurrentImage()">⬇️ Скачать</button>
+                <button class="modal-close" onclick="closeImageViewer()">×</button>
+            </div>
+        </div>
+        <div class="image-viewer-body">
+            <button class="image-nav-btn prev" id="prevImageBtn" onclick="showPrevImage()">◀</button>
+            <img class="image-viewer-img" id="imageViewerImg" src="" alt="Image">
+            <button class="image-nav-btn next" id="nextImageBtn" onclick="showNextImage()">▶</button>
+        </div>
+        <div class="image-toolbar">
+            <span class="image-counter" id="imageCounter">1 / 10</span>
+            <button class="btn" onclick="showPrevImage()">◀ Предыдущая</button>
+            <button class="btn" onclick="showNextImage()">Следующая ▶</button>
+        </div>
+    </div>
+</div>
+
+<!-- Контекстное меню -->
+<div class="context-menu" id="contextMenu">
+    <div class="context-menu-item" id="ctxOpen" onclick="openFile()">📂 Открыть</div>
+    <div class="context-menu-item" id="ctxView" onclick="viewImage()">🖼️ Просмотр</div>
+    <div class="context-menu-item" id="ctxEdit" onclick="editFile()">✏️ Изменить</div>
+    <div class="context-menu-item" onclick="downloadFile()">⬇️ Скачать</div>
+    <div class="context-menu-item" onclick="renameFile()">🏷️ Переименовать</div>
+    <div class="context-menu-item danger" onclick="deleteFile()">🗑️ Удалить</div>
+</div>
+
+<script>
+// ===================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====================
+let currentPath = '';
+let selectedFile = null;
+let originalContent = '';
+
+// ===================== ИНИЦИАЛИЗАЦИЯ =====================
+document.addEventListener('DOMContentLoaded', function() {
+    // Start with empty path - backend will choose appropriate default
+    currentPath = '';
+    loadFiles();
+    setupEventListeners();
+});
+
+function setupEventListeners() {
+    // Upload area drag and drop
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    
+    uploadArea.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', handleFileSelect);
+    
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('dragover');
+    });
+    
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.classList.remove('dragover');
+    });
+    
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        handleFiles(e.dataTransfer.files);
+    });
+    
+    // Context menu
+    document.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+    });
+    
+    document.addEventListener('click', () => {
+        document.getElementById('contextMenu').classList.remove('active');
+    });
+    
+    // Editor textarea shortcuts
+    const editorTextarea = document.getElementById('editorTextarea');
+    editorTextarea.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 's') {
+            e.preventDefault();
+            saveFile();
+        }
+        if (e.key === 'Escape') {
+            closeEditorModal();
+        }
+    });
+}
+
+// ===================== API ФУНКЦИИ =====================
+async function apiCall(endpoint, method = 'GET', data = null) {
+    const options = {
+        method: method,
+        headers: {}
+    };
+    
+    if (data) {
+        if (data instanceof FormData) {
+            options.body = data;
+        } else {
+            options.headers['Content-Type'] = 'application/json';
+            options.body = JSON.stringify(data);
+        }
+    }
+    
+    try {
+        const response = await fetch(`/api/files${endpoint}`, options);
+        const result = await response.json();
+        
+        if (!response.ok) {
+            // Server returned an error with JSON message
+            const errorMsg = result.error || `HTTP ${response.status}: ${response.statusText}`;
+            throw new Error(errorMsg);
+        }
+        
+        // Check if result contains error field (some 200 responses may have errors)
+        if (result.error) {
+            throw new Error(result.error);
+        }
+        
+        return result;
+    } catch (error) {
+        console.error('API Error:', error);
+        alert(`Ошибка: ${error.message}`);
+        return null;
+    }
+}
+
+// ===================== ФАЙЛОВЫЕ ОПЕРАЦИИ =====================
+async function loadFiles() {
+    const data = await apiCall(`?path=${encodeURIComponent(currentPath)}`);
+    if (!data) {
+        const fileList = document.getElementById('fileList');
+        fileList.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--muted);">Ошибка загрузки каталога</div>';
+        return;
+    }
+    
+    const fileList = document.getElementById('fileList');
+    fileList.innerHTML = '';
+    
+    // Сортировка: сначала папки, потом файлы
+    const folders = data.items.filter(item => item.type === 'directory');
+    const files = data.items.filter(item => item.type === 'file');
+    
+    // Отображение папок
+    folders.forEach(item => {
+        const element = createFileElement(item);
+        fileList.appendChild(element);
+    });
+    
+    // Отображение файлов
+    files.forEach(item => {
+        const element = createFileElement(item);
+        fileList.appendChild(element);
+    });
+    
+    // Обновление статистики
+    updateStats(data.items);
+    
+    // Обновление пути - используем путь от сервера или текущий
+    currentPath = data.path || currentPath;
+    document.getElementById('currentPath').value = currentPath;
+}
+
+function createFileElement(item) {
+    const div = document.createElement('div');
+    div.className = 'file-item';
+    div.dataset.name = item.name;
+    div.dataset.type = item.type;
+    div.dataset.path = item.path;
+    
+    const icon = item.type === 'directory' ? '📁' : getFileIcon(item.name);
+    const size = item.type === 'directory' ? '' : formatFileSize(item.size);
+    const modified = new Date(item.modified).toLocaleDateString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit'
+    });
+    
+    div.innerHTML = `
+        <div class="file-icon">${icon}</div>
+        <div class="file-info">
+            <div class="file-name">${item.name}</div>
+            <div class="file-meta">${size}<br>${modified}</div>
+        </div>
+    `;
+    
+    div.addEventListener('click', () => selectFile(item));
+    div.addEventListener('dblclick', () => openItem(item));
+    div.addEventListener('contextmenu', (e) => showContextMenu(e, item));
+    
+    return div;
+}
+
+function getFileIcon(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const iconMap = {
+        'py': '🐍',
+        'js': '📜',
+        'html': '🌐',
+        'css': '🎨',
+        'json': '📋',
+        'txt': '📄',
+        'md': '📝',
+        'jpg': '🖼️',
+        'jpeg': '🖼️',
+        'png': '🖼️',
+        'gif': '🖼️',
+        'bmp': '🖼️',
+        'webp': '🖼️',
+        'svg': '🎨',
+        'ico': '🖼️',
+        'mp4': '🎬',
+        'avi': '🎬',
+        'mkv': '🎬',
+        'mov': '🎬',
+        'mp3': '🎵',
+        'wav': '🎵',
+        'flac': '🎵',
+        'zip': '📦',
+        'rar': '📦',
+        'tar': '📦',
+        'gz': '📦',
+        '7z': '📦',
+        'pdf': '📕',
+        'doc': '📘',
+        'docx': '📘',
+        'xls': '📗',
+        'xlsx': '📗',
+        'ppt': '📙',
+        'pptx': '📙'
+    };
+    return iconMap[ext] || '📄';
+}
+
+function selectFile(item) {
+    document.querySelectorAll('.file-item').forEach(el => {
+        el.classList.remove('selected');
+    });
+    
+    const element = document.querySelector(`[data-name="${item.name}"]`);
+    if (element) {
+        element.classList.add('selected');
+        selectedFile = item;
+    }
+}
+
+function isImageFile(filename) {
+    const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico'];
+    const ext = filename.split('.').pop().toLowerCase();
+    return imageExtensions.includes(ext);
+}
+
+async function openItem(item) {
+    if (item.type === 'directory') {
+        currentPath = item.path;
+        await loadFiles();
+    } else if (isImageFile(item.name)) {
+        await viewImage(item);
+    } else {
+        await editFile();
+    }
+}
+
+// ===================== НАВИГАЦИЯ =====================
+async function navigateUp() {
+    let path = currentPath.replace(/\\/g, '/');
+    
+    // Handle empty path (backend default)
+    if (!path || path === '') {
+        await loadFiles();
+        return;
+    }
+    
+    // Handle Windows drive roots (like C:/) and Unix root
+    if (path === '/' || /^[A-Za-z]:\/$/.test(path)) {
+        // Already at root
+        await loadFiles();
+        return;
+    }
+    
+    // Remove trailing slash if present
+    if (path.endsWith('/')) {
+        path = path.slice(0, -1);
+    }
+    
+    // Find the last slash
+    const lastSlashIndex = path.lastIndexOf('/');
+    
+    if (lastSlashIndex === -1) {
+        // No slash found - shouldn't happen, but go to root
+        currentPath = '/';
+        await loadFiles();
+        return;
+    }
+    
+    // Get parent path
+    const parentPath = path.substring(0, lastSlashIndex);
+    
+    // If parent is empty or just drive letter (like "D:"), make it root
+    if (parentPath === '' || /^[A-Za-z]:$/.test(parentPath)) {
+        currentPath = parentPath + '/';
+    } else {
+        currentPath = parentPath;
+    }
+    
+    await loadFiles();
+}
+
+async function refreshFiles() {
+    await loadFiles();
+}
+
+async function changePath() {
+    const input = document.getElementById('currentPath');
+    const newPath = input.value.trim();
+    
+    if (!newPath) return;
+    
+    // Проверка существования пути
+    const data = await apiCall(`?path=${encodeURIComponent(newPath)}`);
+    if (data) {
+        currentPath = newPath;
+        await loadFiles();
+    }
+}
+
+// ===================== ОПЕРАЦИИ С ФАЙЛАМИ =====================
+async function createFolder() {
+    const name = prompt('Введите имя новой папки:');
+    if (!name) return;
+    
+    const result = await apiCall('/create', 'POST', {
+        path: currentPath,
+        name: name,
+        type: 'directory'
+    });
+    
+    if (result) {
+        await loadFiles();
+    }
+}
+
+async function createFile() {
+    const name = prompt('Введите имя нового файла:');
+    if (!name) return;
+    
+    const result = await apiCall('/create', 'POST', {
+        path: currentPath,
+        name: name,
+        type: 'file'
+    });
+    
+    if (result) {
+        await loadFiles();
+        // Открыть редактор для нового файла
+        const newItem = { name, type: 'file', path: `${currentPath}/${name}`.replace('//', '/') };
+        await editFile(newItem);
+    }
+}
+
+async function deleteSelected() {
+    if (!selectedFile) {
+        alert('Файл не выбран');
+        return;
+    }
+    
+    if (!confirm(`Удалить "${selectedFile.name}"?`)) return;
+    
+    const result = await apiCall('/delete', 'POST', {
+        path: selectedFile.path
+    });
+    
+    if (result) {
+        selectedFile = null;
+        await loadFiles();
+    }
+}
+
+async function editFile(item = null) {
+    const fileToEdit = item || selectedFile;
+    if (!fileToEdit || fileToEdit.type === 'directory') {
+        alert('Выберите текстовый файл для редактирования');
+        return;
+    }
+    
+    const data = await apiCall(`/read?path=${encodeURIComponent(fileToEdit.path)}`);
+    if (!data) return;
+    
+    originalContent = data.content || '';
+    
+    document.getElementById('editorTitle').textContent = `Редактор: ${fileToEdit.name}`;
+    document.getElementById('editorInfo').textContent = `Путь: ${fileToEdit.path}`;
+    document.getElementById('editorTextarea').value = originalContent;
+    
+    document.getElementById('editorModal').classList.add('active');
+    document.getElementById('editorTextarea').focus();
+}
+
+async function saveFile() {
+    if (!selectedFile) return;
+    
+    const content = document.getElementById('editorTextarea').value;
+    
+    const result = await apiCall('/write', 'POST', {
+        path: selectedFile.path,
+        content: content
+    });
+    
+    if (result) {
+        originalContent = content;
+        alert('Файл сохранен');
+    }
+}
+
+function resetEditor() {
+    if (confirm('Сбросить все изменения?')) {
+        document.getElementById('editorTextarea').value = originalContent;
+    }
+}
+
+async function downloadFile() {
+    if (!selectedFile || selectedFile.type === 'directory') return;
+    
+    window.open(`/api/files/download?path=${encodeURIComponent(selectedFile.path)}`);
+}
+
+async function renameFile() {
+    if (!selectedFile) return;
+    
+    const newName = prompt(`Переименовать "${selectedFile.name}":`, selectedFile.name);
+    if (!newName || newName === selectedFile.name) return;
+    
+    const result = await apiCall('/rename', 'POST', {
+        old_path: selectedFile.path,
+        new_name: newName
+    });
+    
+    if (result) {
+        await loadFiles();
+    }
+}
+
+async function deleteFile() {
+    if (!selectedFile) return;
+    
+    if (!confirm(`Удалить "${selectedFile.name}"?`)) return;
+    
+    const result = await apiCall('/delete', 'POST', {
+        path: selectedFile.path
+    });
+    
+    if (result) {
+        selectedFile = null;
+        await loadFiles();
+    }
+}
+
+// ===================== ПРОСМОТР ИЗОБРАЖЕНИЙ =====================
+let currentImageIndex = 0;
+let imagesInFolder = [];
+let currentZoom = 1;
+
+async function viewImage(item = null) {
+    const fileToView = item || selectedFile;
+    if (!fileToView || !isImageFile(fileToView.name)) {
+        alert('Выберите изображение для просмотра');
+        return;
+    }
+    
+    // Get all images in current folder
+    const data = await apiCall(`?path=${encodeURIComponent(currentPath)}`);
+    if (!data) return;
+    
+    imagesInFolder = data.items.filter(f => f.type === 'file' && isImageFile(f.name));
+    currentImageIndex = imagesInFolder.findIndex(img => img.path === fileToView.path);
+    
+    if (currentImageIndex === -1) {
+        currentImageIndex = 0;
+    }
+    
+    await displayCurrentImage();
+    document.getElementById('imageViewerModal').classList.add('active');
+    
+    // Setup keyboard navigation
+    document.addEventListener('keydown', handleImageViewerKeys);
+}
+
+async function displayCurrentImage() {
+    if (imagesInFolder.length === 0) return;
+    
+    const image = imagesInFolder[currentImageIndex];
+    const imgElement = document.getElementById('imageViewerImg');
+    const titleElement = document.getElementById('imageViewerTitle');
+    const infoElement = document.getElementById('imageViewerInfo');
+    const counterElement = document.getElementById('imageCounter');
+    
+    // Update counter
+    counterElement.textContent = `${currentImageIndex + 1} / ${imagesInFolder.length}`;
+    
+    // Update navigation buttons
+    document.getElementById('prevImageBtn').disabled = currentImageIndex === 0;
+    document.getElementById('nextImageBtn').disabled = currentImageIndex === imagesInFolder.length - 1;
+    
+    // Load image
+    imgElement.src = `/api/files/download?path=${encodeURIComponent(image.path)}`;
+    titleElement.textContent = image.name;
+    
+    // Get image dimensions
+    imgElement.onload = function() {
+        const width = imgElement.naturalWidth;
+        const height = imgElement.naturalHeight;
+        const sizeStr = formatFileSize(image.size);
+        infoElement.textContent = `${width}x${height} • ${sizeStr}`;
+        resetZoom();
+    };
+    
+    selectedFile = image;
+}
+
+function showPrevImage() {
+    if (currentImageIndex > 0) {
+        currentImageIndex--;
+        displayCurrentImage();
+    }
+}
+
+function showNextImage() {
+    if (currentImageIndex < imagesInFolder.length - 1) {
+        currentImageIndex++;
+        displayCurrentImage();
+    }
+}
+
+function zoomIn() {
+    currentZoom = Math.min(currentZoom + 0.25, 4);
+    applyZoom();
+}
+
+function zoomOut() {
+    currentZoom = Math.max(currentZoom - 0.25, 0.25);
+    applyZoom();
+}
+
+function resetZoom() {
+    currentZoom = 1;
+    applyZoom();
+}
+
+function applyZoom() {
+    const img = document.getElementById('imageViewerImg');
+    img.style.transform = `scale(${currentZoom})`;
+    if (currentZoom !== 1) {
+        img.classList.add('zoomed');
+    } else {
+        img.classList.remove('zoomed');
+    }
+}
+
+function downloadCurrentImage() {
+    if (imagesInFolder.length === 0 || currentImageIndex >= imagesInFolder.length) return;
+    const image = imagesInFolder[currentImageIndex];
+    window.open(`/api/files/download?path=${encodeURIComponent(image.path)}`);
+}
+
+function closeImageViewer() {
+    document.getElementById('imageViewerModal').classList.remove('active');
+    document.getElementById('imageViewerImg').src = '';
+    document.removeEventListener('keydown', handleImageViewerKeys);
+    resetZoom();
+}
+
+function handleImageViewerKeys(e) {
+    if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        showPrevImage();
+    } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        showNextImage();
+    } else if (e.key === 'Escape') {
+        closeImageViewer();
+    } else if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        zoomIn();
+    } else if (e.key === '-') {
+        e.preventDefault();
+        zoomOut();
+    } else if (e.key === '0') {
+        e.preventDefault();
+        resetZoom();
+    }
+}
+
+// ===================== ЗАГРУЗКА ФАЙЛОВ =====================
+function showUploadModal() {
+    document.getElementById('uploadModal').classList.add('active');
+}
+
+function closeUploadModal() {
+    document.getElementById('uploadModal').classList.remove('active');
+    document.getElementById('fileInput').value = '';
+}
+
+function handleFileSelect(e) {
+    handleFiles(e.target.files);
+}
+
+async function handleFiles(files) {
+    if (files.length === 0) return;
+    
+    const formData = new FormData();
+    formData.append('path', currentPath);
+    
+    for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i]);
+    }
+    
+    const options = {
+        method: 'POST',
+        body: formData
+    };
+    
+    try {
+        const response = await fetch('/api/files/upload', options);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        if (result.success) {
+            closeUploadModal();
+            await loadFiles();
+            alert(`Загружено файлов: ${result.uploaded_count}`);
+        } else {
+            alert('Ошибка загрузки: ' + (result.error || 'Неизвестная ошибка'));
+        }
+    } catch (error) {
+        console.error('Upload Error:', error);
+        alert(`Ошибка загрузки: ${error.message}`);
+    }
+}
+
+// ===================== КОНТЕКСТНОЕ МЕНЮ =====================
+function showContextMenu(e, item) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    selectFile(item);
+    
+    const menu = document.getElementById('contextMenu');
+    const ctxOpen = document.getElementById('ctxOpen');
+    const ctxView = document.getElementById('ctxView');
+    const ctxEdit = document.getElementById('ctxEdit');
+    
+    // Show/hide menu items based on file type
+    if (item.type === 'directory') {
+        ctxOpen.style.display = 'block';
+        ctxView.style.display = 'none';
+        ctxEdit.style.display = 'none';
+    } else if (isImageFile(item.name)) {
+        ctxOpen.style.display = 'none';
+        ctxView.style.display = 'block';
+        ctxEdit.style.display = 'none';
+    } else {
+        ctxOpen.style.display = 'none';
+        ctxView.style.display = 'none';
+        ctxEdit.style.display = 'block';
+    }
+    
+    menu.style.left = e.pageX + 'px';
+    menu.style.top = e.pageY + 'px';
+    menu.classList.add('active');
+}
+
+// ===================== МОДАЛЬНЫЕ ОКНА =====================
+function closeEditorModal() {
+    const currentContent = document.getElementById('editorTextarea').value;
+    if (currentContent !== originalContent) {
+        if (!confirm('Есть несохраненные изменения. Закрыть без сохранения?')) {
+            return;
+        }
+    }
+    
+    document.getElementById('editorModal').classList.remove('active');
+}
+
+// ===================== ВСПомогательные ФУНКЦИИ =====================
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function updateStats(items) {
+    const files = items.filter(item => item.type === 'file');
+    const folders = items.filter(item => item.type === 'directory');
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    
+    document.getElementById('fileCount').textContent = files.length;
+    document.getElementById('folderCount').textContent = folders.length;
+    document.getElementById('totalSize').textContent = formatFileSize(totalSize);
+}
+
+// ===================== ГОРЯЧИЕ КЛАВИШИ =====================
+document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'r') {
+        e.preventDefault();
+        refreshFiles();
+    }
+    if (e.key === 'Delete' && selectedFile) {
+        deleteSelected();
+    }
+    if (e.key === 'F5') {
+        e.preventDefault();
+        refreshFiles();
+    }
+    if (e.key === 'Escape') {
+        document.querySelectorAll('.modal.active').forEach(modal => {
+            modal.classList.remove('active');
+        });
+    }
+});
+</script>
+</body>
+</html>
