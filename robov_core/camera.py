@@ -166,6 +166,9 @@ class StereoCamera:
         grayL = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
         grayR = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
         
+        # Store original size for upsampling
+        orig_h, orig_w = grayL.shape
+        
         # Downsample for faster processing if depth is not critical
         if not self.depth_enabled:
             grayL = cv2.resize(grayL, (0, 0), fx=0.5, fy=0.5)
@@ -184,7 +187,7 @@ class StereoCamera:
         
         # Upsample back if we downsampled
         if not self.depth_enabled:
-            filtered_disp = cv2.resize(filtered_disp, (left_frame.shape[1], left_frame.shape[0]))
+            filtered_disp = cv2.resize(filtered_disp, (orig_w, orig_h))
         
         # Add to buffer for averaging (only if depth is enabled)
         if self.depth_enabled:
@@ -304,8 +307,8 @@ class StereoCamera:
         """
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
-            # Return black frame if camera failed
-            frame = np.zeros((self.img_size[1], self.img_size[0], 3), dtype=np.uint8)
+            # Return black frame if camera failed - use camera's actual resolution
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Match camera resolution
             cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
             return frame
         return left_frame if left else right_frame
