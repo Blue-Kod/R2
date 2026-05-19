@@ -366,6 +366,8 @@
                 <div class="servo-row"><label>(05) Пов. лев.:</label><input type="range" id="servo5" min="0" max="270" value="45"><span id="servo5_val">45°</span></div>
                 <div class="servo-row"><label>(06) Пр. локоть:</label><input type="range" id="servo6" min="0" max="270" value="135"><span id="servo6_val">135°</span></div>
                 <div class="servo-row"><label>(07) Лев. локоть:</label><input type="range" id="servo7" min="0" max="270" value="135"><span id="servo7_val">135°</span></div>
+                <div class="servo-row"><label>(08) Пр. захват:</label><input type="range" id="servo8" min="0" max="180" value="90"><span id="servo8_val">90°</span></div>
+                <div class="servo-row"><label>(09) Лев. захват:</label><input type="range" id="servo9" min="0" max="180" value="90"><span id="servo9_val">90°</span></div>
             </div>
         </aside>
 
@@ -540,7 +542,7 @@ async function setServo(ch, angle) {
     try { await fetch(`/api/servo/${ch}/${angle}`, {method:'POST'}); } catch(e) {}
 }
 
-for (let i=0; i<=7; i++) {
+for (let i=0; i<=9; i++) {
     const slider = document.getElementById(`servo${i}`);
     if (slider) {
         slider.addEventListener('input', () => updateServoVal(i, slider.value));
