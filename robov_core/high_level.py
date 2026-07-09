@@ -371,7 +371,8 @@ def start_desktop() -> bool:
         return True
     try:
         import mss
-        _desktop_capture = mss.mss()
+        _mss_cls = getattr(mss, 'MSS', mss.mss)
+        _desktop_capture = _mss_cls()
         _desktop_active = True
         _desktop_thread = threading.Thread(target=_desktop_capture_loop, daemon=True, name="r2-desktop-thread")
         _desktop_thread.start()
