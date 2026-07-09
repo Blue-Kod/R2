@@ -308,6 +308,10 @@ function ansiToHtml(text) {
         '93': 'color:#f0c040', '94': 'color:#5b9bd5', '95': 'color:#b080c0',
         '96': 'color:#50c0c0', '97': 'color:#fff',
     };
+    // strip OSC sequences (ESC ] ... BEL|ST)
+    text = text.replace(/\x1b\].*?(?:\x07|\x1b\\)/g, '');
+    // strip non-SGR CSI sequences (ESC [ ... letter, but not ending in m)
+    text = text.replace(/\x1b\[[0-9;?]*[a-ln-zA-LN-Z]/g, '');
     let html = text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
     let openCount = 0;
     html = html.replace(/\x1b\[([0-9;]*)m/g, (_, codes) => {
