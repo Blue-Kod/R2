@@ -30,15 +30,17 @@ class StereoCamera:
         self.img_size: Tuple[int, int] = (640, 360)
         self.low_size: Tuple[int, int] = (160, 120)
         self.depth_enabled: bool = False
+        self.hud_enabled: bool = False
         self.alpha_depth: float = 0.3
         self.show_left: bool = True
         self.num_disp: int = 5
-        self.wls_enabled: bool = True
+        self.wls_enabled: bool = False
         self.fps: float = 30.0
         self._tick: int = 0
         self._last_frame_time: float = time.time()
         self._frame_count: int = 0
 
+        self.camera_fov: int = 120
         self.window_size: int = 11
         self.min_disp: int = 0
         self.num_disp: int = 128
@@ -276,6 +278,8 @@ class StereoCamera:
             for key, value in kwargs.items():
                 if value is not None and hasattr(self, key):
                     setattr(self, key, value)
+            if "wls_enabled" in kwargs:
+                self._setup_stereo_matchers()
 
     # --- Shared frame buffer ---
 
@@ -283,7 +287,7 @@ class StereoCamera:
         raw = cv2.rotate(raw, cv2.ROTATE_180)
         half_w = raw.shape[1] // 2
 
-        if self.depth_enabled:
+        if self.depth_enabled or self.hud_enabled:
             imgL = cv2.remap(raw[:, :half_w], self.lMapX, self.lMapY, self._remap_flags)
             imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, self._remap_flags)
             frame = imgL if self.show_left else imgR
@@ -292,22 +296,25 @@ class StereoCamera:
             grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
             grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
             h, w = grayL.shape
-            grayL = cv2.resize(grayL, (0, 0), fx=0.5, fy=0.5)
-            grayR = cv2.resize(grayR, (0, 0), fx=0.5, fy=0.5)
-            displ = self.left_matcher.compute(grayL, grayR)
+            grayL_s = cv2.resize(grayL, (0, 0), fx=0.5, fy=0.5)
+            grayR_s = cv2.resize(grayR, (0, 0), fx=0.5, fy=0.5)
+            displ = self.left_matcher.compute(grayL_s, grayR_s)
             if self.wls_enabled and self.right_matcher and self.wls_filter:
-                dispr = self.right_matcher.compute(grayR, grayL)
-                filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
+                dispr = self.right_matcher.compute(grayR_s, grayL_s)
+                disp_out = self.wls_filter.filter(displ, grayL_s, disparity_map_right=dispr)
             else:
-                filtered_disp = displ
-            filtered_disp[filtered_disp < 0] = 0
-            filtered_disp = cv2.resize(filtered_disp, (w, h))
+                disp_out = displ
+            disp_out[disp_out < 0] = 0
+            disp_out = cv2.resize(disp_out, (w, h))
 
-            depth_vis = cv2.normalize(filtered_disp, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+            depth_vis = cv2.normalize(disp_out, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
             depth_vis = cv2.morphologyEx(depth_vis, cv2.MORPH_OPEN, self.kernel)
             depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
             depth_resized = cv2.resize(depth_vis, self.img_size)
             cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
+
+            if self.hud_enabled:
+                frame = self._render_hud(frame, cv2.resize(disp_out, self.img_size))
         else:
             rawL = raw[:, :half_w]
             rawR = raw[:, half_w:]
@@ -315,6 +322,53 @@ class StereoCamera:
             frame = cv2.resize(side, self.img_size)
 
         return frame
+
+    def _render_hud(self, frame: np.ndarray, disp_map: np.ndarray) -> np.ndarray:
+        h, w = frame.shape[:2]
+        result = frame.copy()
+
+        points_3d = cv2.reprojectImageTo3D(disp_map.astype(np.float32) / 16.0, self.Q)
+        cx, cy = w // 2, h // 2
+
+        center_z = abs(points_3d[cy, cx, 2])
+
+        center_col_z = abs(points_3d[:, cx, 2])
+        valid = np.where((center_col_z > 0) & (center_col_z < 10000))[0]
+        if len(valid) > 0:
+            nearest_idx = valid[np.argmin(center_col_z[valid])]
+            nearest_z = center_col_z[nearest_idx]
+        else:
+            nearest_z = 0.0
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        def draw_text_box(img, lines, x, y, font_scale=0.45, pad=6):
+            line_h = 18
+            max_w = max(cv2.getTextSize(l, font, font_scale, 1)[0][0] for l in lines)
+            box_h = len(lines) * line_h + pad * 2
+            x1 = x
+            y1 = y
+            x2 = x1 + max_w + pad * 2
+            y2 = y1 + box_h
+            cv2.rectangle(img, (x1, y1), (x2, y2), (10, 10, 10), -1)
+            cv2.rectangle(img, (x1, y1), (x2, y2), (42, 42, 42), 1)
+            for i, line in enumerate(lines):
+                ty = y1 + pad + i * line_h + 12
+                cv2.putText(img, line, (x1 + pad, ty), font, font_scale, (240, 240, 240), 1)
+
+        depth_label = f"Depth: {center_z:.0f} mm" if center_z < 5000 else "Depth: Out of range"
+        nearest_label = f"Nearest: {nearest_z:.0f} mm" if nearest_z > 0 else "Nearest: --"
+        draw_text_box(result, [depth_label, nearest_label], 12, h - 56)
+
+        fov = self.camera_fov
+        for deg in range(0, fov + 1, 20):
+            x = int(deg / fov * w)
+            cv2.putText(result, f"{deg}°", (x - 8, 16), font, 0.4, (0, 255, 0), 1)
+
+        if nearest_z > 0:
+            cv2.circle(result, (cx, nearest_idx), 4, (0, 255, 255), -1)
+
+        return result
 
     def _capture_loop(self) -> None:
         while self._capture_running:

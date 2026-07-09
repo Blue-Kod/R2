@@ -246,6 +246,7 @@ class RobotFace:
 
     def _run(self):
         pygame.init()
+        pygame.mixer.quit()
         pygame.display.init()
 
         info = pygame.display.Info()

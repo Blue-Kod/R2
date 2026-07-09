@@ -127,8 +127,9 @@
                     <input type="range" id="depthAlpha" min="0" max="100" value="30" style="width:100px;">
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center;">
-                    <label>Глубина:</label>
-                    <input type="checkbox" id="depthEnabled">
+                    <label><input type="checkbox" id="depthEnabled"> Глубина</label>
+                    <label><input type="checkbox" id="hudEnabled"> HUD</label>
+                    <label><input type="checkbox" id="wlsEnabled"> WLS</label>
                 </div>
             </div>
         </main>
@@ -179,6 +180,8 @@ const eyeLeft = document.getElementById('eyeLeft');
 const eyeRight = document.getElementById('eyeRight');
 const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
+const hudEnabledChk = document.getElementById('hudEnabled');
+const wlsEnabledChk = document.getElementById('wlsEnabled');
 const terminalOutputDiv = document.getElementById('terminal-output');
 const terminalInput = document.getElementById('terminal-command');
 const logsOutput = document.getElementById('logs-output');
@@ -196,6 +199,8 @@ function restoreState() {
     if (serverData.camera_params) {
         const cp = serverData.camera_params;
         depthEnabledChk.checked = cp.depth_enabled || false;
+        hudEnabledChk.checked = cp.hud_enabled || false;
+        wlsEnabledChk.checked = cp.wls_enabled || false;
         depthAlphaSlider.value = (cp.alpha_depth || 0.3) * 100;
         eyeLeft.checked = cp.show_left !== false;
         eyeRight.checked = !eyeLeft.checked;
@@ -239,7 +244,11 @@ for (let i=0; i<=9; i++) {
 // ===================== CAMERA =====================
 async function sendCameraParams() {
     try {
-        await fetch('/api/camera/params', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({depth_enabled: depthEnabledChk.checked})});
+        await fetch('/api/camera/params', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+            depth_enabled: depthEnabledChk.checked,
+            hud_enabled: hudEnabledChk.checked,
+            wls_enabled: wlsEnabledChk.checked,
+        })});
     } catch(e) {}
 }
 
@@ -316,6 +325,8 @@ function attachEvents() {
     eyeRight.onchange = updateRenderParams;
     depthAlphaSlider.oninput = updateRenderParams;
     depthEnabledChk.onchange = sendCameraParams;
+    hudEnabledChk.onchange = sendCameraParams;
+    wlsEnabledChk.onchange = sendCameraParams;
 
     terminalInput.onkeydown = (e) => {
         if (e.key==='Enter') { sendTerminalCommand(terminalInput.value.trim()); terminalInput.value = ''; }

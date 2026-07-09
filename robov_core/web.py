@@ -104,6 +104,8 @@ def create_app() -> Flask:
             with camera.lock:
                 camera_params = {
                     "depth_enabled": getattr(camera, 'depth_enabled', False),
+                    "hud_enabled": getattr(camera, 'hud_enabled', False),
+                    "wls_enabled": getattr(camera, 'wls_enabled', False),
                     "alpha_depth": getattr(camera, 'alpha_depth', 0.3),
                     "show_left": getattr(camera, 'show_left', True),
                     "num_disp": getattr(camera, 'num_disp', 128),
@@ -259,6 +261,8 @@ def create_app() -> Flask:
             with camera.lock:
                 return jsonify({
                     "depth_enabled": camera.depth_enabled,
+                    "hud_enabled": camera.hud_enabled,
+                    "wls_enabled": camera.wls_enabled,
                     "alpha_depth": camera.alpha_depth,
                     "show_left": camera.show_left,
                     "num_disp": camera.num_disp,
@@ -266,6 +270,8 @@ def create_app() -> Flask:
         data = request.get_json(silent=True) or {}
         camera.update_params(
             depth_enabled=data.get("depth_enabled"),
+            hud_enabled=data.get("hud_enabled"),
+            wls_enabled=data.get("wls_enabled"),
             alpha_depth=data.get("alpha_depth"),
             show_left=data.get("show_left"),
             num_disp=data.get("num_disp"),
