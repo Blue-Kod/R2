@@ -29,6 +29,21 @@ from robov_core.high_level import (
 )
 
 
+_mjpeg_counter: int = 0
+_mjpeg_fps: int = 0
+_mjpeg_lock: threading.Lock = threading.Lock()
+
+def _mjpeg_fps_worker() -> None:
+    global _mjpeg_fps
+    while True:
+        time.sleep(1.0)
+        with _mjpeg_lock:
+            _mjpeg_fps = _mjpeg_counter
+            _mjpeg_counter = 0
+
+threading.Thread(target=_mjpeg_fps_worker, daemon=True, name="mjpeg-fps").start()
+
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
     app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -122,6 +137,10 @@ def create_app() -> Flask:
         payload = health_snapshot()
         camera = get_stereo_camera()
         payload["fps"] = round(camera.fps, 1) if camera else 0.0
+        payload["cam_w"] = camera.actual_width if camera else 0
+        payload["cam_h"] = camera.actual_height if camera else 0
+        with _mjpeg_lock:
+            payload["stream_fps"] = _mjpeg_fps
         payload["logs"] = get_logs(500)
         return jsonify(payload)
 
@@ -183,6 +202,7 @@ def create_app() -> Flask:
     @require_auth
     def video_feed():
         def stream():
+            global _mjpeg_counter
             while True:
                 camera = get_stereo_camera()
                 frame = camera.get_latest_frame() if camera else None
@@ -191,6 +211,10 @@ def create_app() -> Flask:
                     cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
                 _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+
+                with _mjpeg_lock:
+                    _mjpeg_counter += 1
+
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")

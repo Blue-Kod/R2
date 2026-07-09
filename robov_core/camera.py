@@ -44,6 +44,8 @@ class StereoCamera:
         self.num_disp: int = 128
         self._remap_flags: int = cv2.INTER_NEAREST
 
+        self.actual_width: int = 0
+        self.actual_height: int = 0
         self._latest_frame: Optional[np.ndarray] = None
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
@@ -110,7 +112,11 @@ class StereoCamera:
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            return self.cap.isOpened()
+            if self.cap.isOpened():
+                self.actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                self.actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                return True
+            return False
         except Exception as e:
             raise CameraInitError(f"Failed to open camera: {e}") from e
 
@@ -276,13 +282,13 @@ class StereoCamera:
     def _process_raw_frame(self, raw: np.ndarray) -> np.ndarray:
         raw = cv2.rotate(raw, cv2.ROTATE_180)
         half_w = raw.shape[1] // 2
-        imgL = cv2.remap(raw[:, :half_w], self.lMapX, self.lMapY, self._remap_flags)
-        imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, self._remap_flags)
-
-        frame = imgL if self.show_left else imgR
-        frame = cv2.resize(frame, self.img_size)
 
         if self.depth_enabled:
+            imgL = cv2.remap(raw[:, :half_w], self.lMapX, self.lMapY, self._remap_flags)
+            imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, self._remap_flags)
+            frame = imgL if self.show_left else imgR
+            frame = cv2.resize(frame, self.img_size)
+
             grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
             grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
             h, w = grayL.shape
@@ -302,6 +308,11 @@ class StereoCamera:
             depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
             depth_resized = cv2.resize(depth_vis, self.img_size)
             cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
+        else:
+            rawL = raw[:, :half_w]
+            rawR = raw[:, half_w:]
+            side = rawL if self.show_left else rawR
+            frame = cv2.resize(side, self.img_size)
 
         return frame
 
