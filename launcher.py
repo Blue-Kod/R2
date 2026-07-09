@@ -28,15 +28,12 @@ import pwd
 import socket
 import json
 import shlex
-import signal
-import atexit
 from pathlib import Path
 
 # Constants
 REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
-PID_FILE = "launcher.pid"
 
 # Complete APT dependencies for Orange Pi 4 Pro / Debian Bullseye
 REQUIREMENTS_APT = [
@@ -563,32 +560,6 @@ def start_main():
         log_message(f"[!] Error starting {MAIN_SCRIPT}: {e}")
         return False
 
-def check_pid_file(script_dir):
-    pid_path = os.path.join(script_dir, PID_FILE)
-    if os.path.exists(pid_path):
-        try:
-            with open(pid_path, "r") as f:
-                old_pid = int(f.read().strip())
-            os.kill(old_pid, 0)
-            log_message(f"[L] Killing previous instance (PID {old_pid})...")
-            os.kill(old_pid, signal.SIGTERM)
-            time.sleep(1)
-        except (OSError, ValueError):
-            pass
-    with open(pid_path, "w") as f:
-        f.write(str(os.getpid()))
-
-def remove_pid_file(script_dir):
-    pid_path = os.path.join(script_dir, PID_FILE)
-    try:
-        if os.path.exists(pid_path):
-            with open(pid_path, "r") as f:
-                stored_pid = int(f.read().strip())
-            if stored_pid == os.getpid():
-                os.unlink(pid_path)
-    except (OSError, ValueError):
-        pass
-
 def main():
     check_root()
 
@@ -629,9 +600,6 @@ def main():
     script_name = os.path.basename(__file__)
     os.chdir(script_dir)
     log_message(f"[L] Working directory: {script_dir}")
-
-    check_pid_file(script_dir)
-    atexit.register(lambda: remove_pid_file(script_dir))
 
     # FIRST-RUN SETUP CHECK
     if not is_setup_complete():

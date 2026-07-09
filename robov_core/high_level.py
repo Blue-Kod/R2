@@ -367,13 +367,7 @@ def start_background() -> None:
     web_thread.start()
     _all_threads.append(web_thread)
 
-    try:
-        from robov_core.ws_server import start_thread as start_ws
-        _ws_thread = start_ws(HTTP_HOST, 8765)
-        _all_threads.append(_ws_thread)
-        log("Terminal WebSocket server started on port 8765")
-    except Exception as exc:
-        log(f"Failed to start WS terminal server: {exc}")
+    # WebSocket terminal server disabled — terminal uses polling via REST API
 
     if _HAS_DISPLAY:
         global _display_thread

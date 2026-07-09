@@ -87,7 +87,6 @@
         }
     </style>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.10/marked.min.js"></script>
 </head>
 <body>
@@ -158,24 +157,16 @@
                 <button id="tabHelp">Помощь</button>
             </div>
             <div id="terminal-pane" style="display:flex; flex-direction:column; flex:1; min-height:0;">
-                <div style="display:flex; gap:6px; margin-bottom:6px; align-items:center; flex-shrink:0;">
-                    <button id="termLocalBtn" class="term-mode-btn" style="flex:1; cursor:pointer; border:none; border-radius:30px; padding:5px 12px; font-size:12px; font-weight:500; background:#44944a; color:white;">Локальный</button>
-                    <button id="termSshBtn" class="term-mode-btn" style="flex:1; cursor:pointer; border:none; border-radius:30px; padding:5px 12px; font-size:12px; font-weight:500; background:transparent; color:var(--muted);">SSH</button>
-                    <div style="flex:1;"></div>
-                    <span id="termStatus" style="font-size:11px; color:var(--muted); white-space:nowrap;">○ Откл</span>
+                <div id="terminal-output" class="terminal-box"></div>
+                <div style="display:flex; margin-top:8px; gap:8px; align-items:center; flex-shrink:0;">
+                    <span style="color:#44944a; font-family: monospace;">❯</span>
+                    <input type="text" id="terminal-command" placeholder="Введите команду..." style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:12px; padding:8px 12px; font-family:monospace; outline:none; font-size:13px;">
                 </div>
-                <div id="termSshForm" class="hidden" style="display:flex; flex-direction:column; gap:5px; margin-bottom:6px; flex-shrink:0;">
-                    <div style="display:flex; gap:5px;">
-                        <input type="text" id="sshHost" placeholder="Хост" style="flex:2; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
-                        <input type="number" id="sshPort" placeholder="22" value="22" style="flex:0 0 60px; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
-                    </div>
-                    <div style="display:flex; gap:5px;">
-                        <input type="text" id="sshUser" placeholder="Пользователь" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
-                        <input type="password" id="sshPass" placeholder="Пароль" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
-                        <button id="sshConnectBtn" style="background:#44944a; color:white; border:none; border-radius:8px; padding:5px 12px; cursor:pointer; font-size:12px; font-weight:500;">→</button>
-                    </div>
+                <div id="ssh-info" style="margin-top:6px; padding:7px 12px; border:1px solid var(--line); border-radius:12px; background:#0d0d0d; font-size:12px; color:var(--muted); display:flex; gap:16px; align-items:center; flex-shrink:0;">
+                    <span>🔒 SSH: <strong style="color:#fff;">orangepi@<span id="sshHostDisplay">--</span></strong></span>
+                    <span>пароль: <strong style="color:#fff;">orangepi</strong></span>
+                    <span style="font-size:11px; color:#555;">(порт 22)</span>
                 </div>
-                <div id="terminal-container" style="flex:1; border-radius:14px; border:1px solid var(--line); overflow:hidden;"></div>
             </div>
             <div id="logs-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0;">
                 <div id="logs-output" class="terminal-box">📡 Логи загрузятся автоматически...</div>
@@ -218,7 +209,9 @@ const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
 const hudEnabledChk = document.getElementById('hudEnabled');
 const wlsEnabledChk = document.getElementById('wlsEnabled');
-const terminalContainer = document.getElementById('terminal-container');
+const terminalOutputDiv = document.getElementById('terminal-output');
+const terminalInput = document.getElementById('terminal-command');
+const sshHostDisplay = document.getElementById('sshHostDisplay');
 const logsOutput = document.getElementById('logs-output');
 const tabTerminal = document.getElementById('tabTerminal');
 const tabLogs = document.getElementById('tabLogs');
@@ -297,102 +290,70 @@ async function updateRenderParams() {
     } catch(e) {}
 }
 
-// ===================== TERMINAL (xterm.js + WebSocket) =====================
-const term = new Terminal({
-    cursorBlink: true,
-    cursorStyle: 'block',
-    fontSize: 13,
-    fontFamily: "'JetBrains Mono', Consolas, monospace",
-    theme: { background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#44944a', selectionBackground: '#44944a40' },
-    cols: 80, rows: 24,
-    allowTransparency: false,
-    scrollback: 10000,
-});
-let termWs = null;
-let termMode = 'local';
-let termConnected = false;
+// ===================== TERMINAL =====================
+let lastTerminalOutput = '', fetchingTerminal = false, sendingCmd = false;
+let cmdHistory = [];
+let historyIdx = -1;
 
-function termOpen() {
-    const container = document.getElementById('terminal-container');
-    if (container && !term.element) {
-        term.open(container);
-        term.focus();
-        term.onData(data => {
-            if (termWs && termWs.readyState === WebSocket.OPEN) {
-                termWs.send(JSON.stringify({type: 'input', data}));
-            }
-        });
-        term.onResize(({cols, rows}) => {
-            if (termWs && termWs.readyState === WebSocket.OPEN) {
-                termWs.send(JSON.stringify({type: 'resize', cols, rows}));
-            }
-        });
-    }
-}
-
-function termConnect(mode, sshOpts) {
-    if (termWs) { termWs.close(); termWs = null; }
-    termConnected = false;
-    document.getElementById('termStatus').textContent = '○ Подкл...';
-
-    termWs = new WebSocket(`ws://${location.hostname}:8765/`);
-    termWs.onopen = () => {
-        const msg = {type: 'connect', mode};
-        if (mode === 'ssh') {
-            Object.assign(msg, sshOpts);
+function ansiToHtml(text) {
+    const styles = {
+        '0': '',
+        '1': 'font-weight:bold',
+        '3': 'font-style:italic',
+        '4': 'text-decoration:underline',
+        '30': 'color:#000', '31': 'color:#e06c75', '32': 'color:#98c379',
+        '33': 'color:#d19a66', '34': 'color:#61afef', '35': 'color:#c678dd',
+        '36': 'color:#56b6c2', '37': 'color:#e0e0e0',
+        '90': 'color:#666', '91': 'color:#ff6b6b', '92': 'color:#5cb85c',
+        '93': 'color:#f0c040', '94': 'color:#5b9bd5', '95': 'color:#b080c0',
+        '96': 'color:#50c0c0', '97': 'color:#fff',
+    };
+    let html = text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    let openCount = 0;
+    html = html.replace(/\x1b\[([0-9;]*)m/g, (_, codes) => {
+        if (!codes || codes === '0' || codes === '') {
+            const out = '</span>'.repeat(openCount);
+            openCount = 0;
+            return out;
         }
-        termWs.send(JSON.stringify(msg));
-    };
-    termWs.onmessage = (e) => {
-        try {
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'connected') {
-                termConnected = true;
-                document.getElementById('termStatus').textContent = '● ' + (mode === 'ssh' ? sshOpts.host : 'Локальный');
-                term.clear();
-            } else if (msg.type === 'output') {
-                term.write(msg.data);
-            }
-        } catch(_) {
-            term.write(e.data);
+        const parts = codes.split(';');
+        let style = '';
+        for (const c of parts) {
+            if (styles[c]) style += styles[c] + ';';
         }
-    };
-    termWs.onclose = () => {
-        termConnected = false;
-        document.getElementById('termStatus').textContent = '○ Откл';
-        if (termWs) { termWs = null; }
-        term.write('\r\n\x1b[33m[Соединение закрыто]\x1b[0m\r\n');
-    };
-    termWs.onerror = () => {
-        termConnected = false;
-        document.getElementById('termStatus').textContent = '✕ Ошибка';
-    };
-}
-
-function termDisconnect() {
-    if (termWs) {
-        termWs.send(JSON.stringify({type: 'disconnect'}));
-        termWs.close();
-        termWs = null;
-    }
-    termConnected = false;
-    document.getElementById('termStatus').textContent = '○ Откл';
-}
-
-function termSetMode(mode) {
-    termMode = mode;
-    termDisconnect();
-    document.querySelectorAll('.term-mode-btn').forEach(b => {
-        b.style.background = 'transparent';
-        b.style.color = 'var(--muted)';
+        if (style) {
+            openCount++;
+            return `<span style="${style}">`;
+        }
+        return '';
     });
-    const btn = mode === 'local' ? document.getElementById('termLocalBtn') : document.getElementById('termSshBtn');
-    btn.style.background = '#44944a';
-    btn.style.color = 'white';
-    document.getElementById('termSshForm').classList.toggle('hidden', mode !== 'ssh');
-    if (mode === 'local') {
-        termConnect('local');
-    }
+    html += '</span>'.repeat(openCount);
+    return html;
+}
+
+async function fetchTerminalOutput() {
+    if (fetchingTerminal) return;
+    fetchingTerminal = true;
+    try {
+        const r = await fetch('/api/cmd/output');
+        const d = await r.json();
+        if (d.output !== lastTerminalOutput) {
+            terminalOutputDiv.innerHTML = ansiToHtml(d.output);
+            terminalOutputDiv.scrollTop = terminalOutputDiv.scrollHeight;
+            lastTerminalOutput = d.output;
+        }
+    } catch(e) {} finally { fetchingTerminal = false; }
+}
+
+async function sendTerminalCommand(cmd) {
+    if (sendingCmd || !cmd.trim()) return;
+    sendingCmd = true;
+    cmdHistory.push(cmd.trim());
+    historyIdx = cmdHistory.length;
+    try {
+        await fetch('/api/cmd/send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd})});
+        await fetchTerminalOutput();
+    } catch(e) {} finally { sendingCmd = false; }
 }
 
 // ===================== STATS =====================
@@ -501,25 +462,32 @@ function attachEvents() {
     hudEnabledChk.onchange = sendCameraParams;
     wlsEnabledChk.onchange = sendCameraParams;
 
-    document.getElementById('termLocalBtn').onclick = () => termSetMode('local');
-    document.getElementById('termSshBtn').onclick = () => termSetMode('ssh');
-    document.getElementById('sshConnectBtn').onclick = () => {
-        const host = document.getElementById('sshHost').value.trim();
-        if (!host) return;
-        termConnect('ssh', {
-            host,
-            port: parseInt(document.getElementById('sshPort').value) || 22,
-            user: document.getElementById('sshUser').value.trim() || 'root',
-            password: document.getElementById('sshPass').value,
-        });
+    terminalInput.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+            sendTerminalCommand(terminalInput.value);
+            terminalInput.value = '';
+        } else if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = terminalInput.selectionStart;
+            terminalInput.value = terminalInput.value.slice(0, start) + '\t' + terminalInput.value.slice(terminalInput.selectionEnd);
+            terminalInput.selectionStart = terminalInput.selectionEnd = start + 1;
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (cmdHistory.length && historyIdx > 0) {
+                historyIdx--;
+                terminalInput.value = cmdHistory[historyIdx];
+            }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (historyIdx < cmdHistory.length - 1) {
+                historyIdx++;
+                terminalInput.value = cmdHistory[historyIdx];
+            } else {
+                historyIdx = cmdHistory.length;
+                terminalInput.value = '';
+            }
+        }
     };
-    // Enter in SSH password field also connects
-    document.getElementById('sshPass').onkeydown = (e) => {
-        if (e.key === 'Enter') document.getElementById('sshConnectBtn').click();
-    };
-
-    // Ensure terminal container exists and open xterm
-    setTimeout(termOpen, 100);
 
     // Python exec
     document.getElementById('run-python-btn').onclick = async () => {
@@ -586,8 +554,13 @@ async function init() {
     attachEvents();
     restoreState();
     await updateRenderParams();
+    // Set SSH host from window location
+    sshHostDisplay.textContent = location.hostname;
+
     fetchSystemStats();
+    fetchTerminalOutput();
     setInterval(fetchSystemStats, 2200);
+    setInterval(fetchTerminalOutput, 400);
 }
 init();
 </script>
