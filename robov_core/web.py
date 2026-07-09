@@ -24,8 +24,6 @@ from robov_core.high_level import (
     set_eyes_position, get_eyes_position, get_logs,
     get_servo_angles, get_servo_angles_physical, get_servo_offsets,
     set_servo_physical, log, cleanup,
-    start_desktop, stop_desktop, get_desktop_frame,
-    is_desktop_active, stop_desktop_safe,
 )
 
 
@@ -565,46 +563,5 @@ def create_app() -> Flask:
             return jsonify({"error": "Permission denied"}), 403
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
-    # --- Desktop remote ---
-
-    @app.route("/desktop")
-    @require_auth
-    def desktop_page():
-        return render_template("desktop.html")
-
-    @app.route("/api/desktop/start", methods=["POST"])
-    @require_auth
-    def api_desktop_start():
-        if start_desktop():
-            return jsonify({"status": "ok"})
-        return jsonify({"error": "Failed to start desktop capture"}), 500
-
-    @app.route("/api/desktop/stop", methods=["POST"])
-    @require_auth
-    def api_desktop_stop():
-        stop_desktop_safe()
-        return jsonify({"status": "ok"})
-
-    @app.route("/api/desktop/status", methods=["GET"])
-    @require_auth
-    def api_desktop_status():
-        return jsonify({"active": is_desktop_active()})
-
-    @app.route("/desktop_feed")
-    @require_auth
-    def desktop_feed():
-        def stream():
-            while True:
-                frame = get_desktop_frame()
-                if frame is None:
-                    frame = np.zeros((360, 640, 3), dtype=np.uint8)
-                    cv2.putText(frame, "Desktop inactive", (150, 180),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
-                time.sleep(0.066)
-
-        return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
     return app

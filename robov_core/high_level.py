@@ -96,14 +96,6 @@ _supported_emotes: List[str] = [os.path.splitext(f)[0] for f in os.listdir(_emot
 _display_thread: Optional[threading.Thread] = None
 _all_threads: List[threading.Thread] = []
 
-# --- Desktop remote ---
-_desktop_active: bool = False
-_desktop_capture = None
-_desktop_last_frame: Optional[np.ndarray] = None
-_desktop_lock: threading.Lock = threading.Lock()
-_desktop_thread: Optional[threading.Thread] = None
-
-
 def log(message: str) -> None:
     print(message)
 
@@ -349,72 +341,7 @@ def start_display() -> None:
     _all_threads.append(t)
 
 
-# --- Desktop remote ---
-
-def _desktop_capture_loop() -> None:
-    global _desktop_last_frame
-    while _desktop_active:
-        try:
-            with _desktop_lock:
-                if _desktop_capture:
-                    monitor = _desktop_capture.monitors[1]
-                    img = _desktop_capture.grab(monitor)
-                    _desktop_last_frame = cv2.cvtColor(np.array(img), cv2.COLOR_BGRA2BGR)
-        except Exception:
-            pass
-        time.sleep(0.066)
-
-
-def start_desktop() -> bool:
-    global _desktop_active, _desktop_capture, _desktop_thread
-    if _desktop_active:
-        return True
-    try:
-        import mss
-        _mss_cls = getattr(mss, 'MSS', mss.mss)
-        _desktop_capture = _mss_cls()
-        _desktop_active = True
-        _desktop_thread = threading.Thread(target=_desktop_capture_loop, daemon=True, name="r2-desktop-thread")
-        _desktop_thread.start()
-        stop_display()
-        log("Desktop remote started")
-        return True
-    except Exception as e:
-        log(f"Failed to start desktop: {e}")
-        _desktop_active = False
-        _desktop_capture = None
-        return False
-
-
-def stop_desktop() -> None:
-    global _desktop_active, _desktop_capture, _desktop_last_frame, _desktop_thread
-    _desktop_active = False
-    if _desktop_capture:
-        try:
-            _desktop_capture.close()
-        except Exception:
-            pass
-        _desktop_capture = None
-    _desktop_last_frame = None
-    _desktop_thread = None
-    start_display()
-    log("Desktop remote stopped")
-
-
-def get_desktop_frame() -> Optional[np.ndarray]:
-    with _desktop_lock:
-        return _desktop_last_frame
-
-
-def is_desktop_active() -> bool:
-    return _desktop_active
-
-
-def stop_desktop_safe() -> None:
-    try:
-        stop_desktop()
-    except Exception:
-        pass
+# --- Shell ---
 
 
 def start_background() -> None:
@@ -458,8 +385,6 @@ def cleanup() -> None:
     log("Starting clean shutdown...")
     _shutdown_requested = True
     _shell_running = False
-
-    stop_desktop_safe()
 
     if _camera:
         _camera.stop_continuous_capture()

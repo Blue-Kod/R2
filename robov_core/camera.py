@@ -295,23 +295,20 @@ class StereoCamera:
 
             grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
             grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
-            h, w = grayL.shape
-            grayL_s = cv2.resize(grayL, (0, 0), fx=0.5, fy=0.5)
-            grayR_s = cv2.resize(grayR, (0, 0), fx=0.5, fy=0.5)
-            displ = self.left_matcher.compute(grayL_s, grayR_s)
+            displ = self.left_matcher.compute(grayL, grayR)
             if self.wls_enabled and self.right_matcher and self.wls_filter:
-                dispr = self.right_matcher.compute(grayR_s, grayL_s)
-                disp_out = self.wls_filter.filter(displ, grayL_s, disparity_map_right=dispr)
+                dispr = self.right_matcher.compute(grayR, grayL)
+                disp_out = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
             else:
                 disp_out = displ
             disp_out[disp_out < 0] = 0
-            disp_out = cv2.resize(disp_out, (w, h))
 
-            depth_vis = cv2.normalize(disp_out, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-            depth_vis = cv2.morphologyEx(depth_vis, cv2.MORPH_OPEN, self.kernel)
-            depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
-            depth_resized = cv2.resize(depth_vis, self.img_size)
-            cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
+            if self.depth_enabled:
+                depth_vis = cv2.normalize(disp_out, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+                depth_vis = cv2.morphologyEx(depth_vis, cv2.MORPH_OPEN, self.kernel)
+                depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
+                depth_resized = cv2.resize(depth_vis, self.img_size)
+                cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
 
             if self.hud_enabled:
                 frame = self._render_hud(frame, disp_out)
