@@ -86,7 +86,6 @@
             .nav-links a { padding: 6px 10px; font-size: 11px; }
         }
     </style>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.10/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/theme/monokai.min.css">
@@ -178,9 +177,9 @@
                 <div id="logs-output" class="terminal-box">📡 Логи загрузятся автоматически...</div>
             </div>
             <div id="python-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0; gap: 8px;">
-                <div id="python-editor-wrap" style="flex:1; border:1px solid #2a2a2a; border-radius:12px; overflow:hidden;">        <textarea id="python-code" style="display:none;">print("Hello, World!")
+                <div id="python-editor-wrap" style="flex:1; border:1px solid #2a2a2a; border-radius:12px; overflow:hidden;"><textarea id="python-code" style="display:none;">print("Hello, World!")
 set_emote("happy")
-speak("Привет, я робот R2!")</div>
+speak("Привет, я робот R2!")</textarea></div>
                 <div style="display: flex; gap: 8px;">
                     <button id="run-python-btn" style="flex:1; background: #44944a; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;"><span class="loading-spinner hidden" id="python-spinner"></span>▶ Запустить</button>
                     <button id="clear-python-btn" style="background: #333; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;">Очистить</button>
