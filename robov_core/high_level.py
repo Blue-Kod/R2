@@ -111,11 +111,13 @@ def speak(text: str) -> None:
     try:
         import os, tempfile, subprocess
         pcm = _tts.synthesize(text, play=False)
+        pad_silence = b'\x00' * 2000
+        pcm = pad_silence + pcm + pad_silence
         wav = _tts.pcm_to_wav(pcm)
         path = os.path.join(tempfile.gettempdir(), "r2_tts.wav")
         with open(path, "wb") as f:
             f.write(wav)
-        subprocess.run(["aplay", "-D", "plughw:1,0", path], check=True, capture_output=True, timeout=30)
+        subprocess.run(["aplay", "-D", "plughw:1,0", path], check=True, capture_output=True)
         os.unlink(path)
     except Exception as e:
         log(f"TTS error: {e}")
@@ -144,6 +146,19 @@ def _init_hardware() -> None:
     if platform.system() == "Windows":
         log("Mock servo mode on Windows")
     else:
+        try:
+            subprocess.run(
+                ["amixer", "-c", "1", "cset", "numid=18", "152"],
+                capture_output=True, timeout=5
+            )
+            subprocess.run(
+                ["amixer", "-c", "1", "cset", "numid=19", "152"],
+                capture_output=True, timeout=5
+            )
+            log("Audio volume set to 60% (DACL/DACR = 152)")
+        except Exception as exc:
+            log(f"Volume set failed: {exc}")
+
         try:
             _servo = ServoController(bus=0, address=0x40, freq=50)
             log("Servo controller initialized")

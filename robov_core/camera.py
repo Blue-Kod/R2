@@ -298,8 +298,10 @@ class StereoCamera:
             displ = self.left_matcher.compute(grayL, grayR)
             displ[displ < 0] = 0
 
+            wls_active = self.wls_enabled and self.right_matcher and self.wls_filter
+
             if self.depth_enabled and not self.hud_enabled:
-                if self.wls_enabled and self.right_matcher and self.wls_filter:
+                if wls_active:
                     dispr = self.right_matcher.compute(grayR, grayL)
                     disp_wls = self.wls_filter.filter(displ.copy(), grayL, disparity_map_right=dispr)
                     disp_wls[disp_wls < 0] = 0
@@ -313,7 +315,13 @@ class StereoCamera:
                 cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
 
             if self.hud_enabled:
-                frame = self._render_hud(frame, displ)
+                if wls_active:
+                    dispr = self.right_matcher.compute(grayR, grayL)
+                    disp_wls = self.wls_filter.filter(displ.copy(), grayL, disparity_map_right=dispr)
+                    disp_wls[disp_wls < 0] = 0
+                    frame = self._render_hud(frame, disp_wls, center_only=True)
+                else:
+                    frame = self._render_hud(frame, displ, center_only=False)
         else:
             rawL = raw[:, :half_w]
             rawR = raw[:, half_w:]
@@ -322,7 +330,7 @@ class StereoCamera:
 
         return frame
 
-    def _render_hud(self, frame: np.ndarray, disp_raw: np.ndarray) -> np.ndarray:
+    def _render_hud(self, frame: np.ndarray, disp_raw: np.ndarray, center_only: bool = False) -> np.ndarray:
         h, w = frame.shape[:2]
         dh, dw = disp_raw.shape[:2]
         result = frame.copy()
@@ -339,16 +347,28 @@ class StereoCamera:
         else:
             center_z = 0.0
 
-        col_z = np.abs(points_3d[:, fx, 2])
-        col_d = d16[:, fx]
-        valid = np.where((col_d > 0.5) & (col_z > 0) & (col_z < 50000))[0]
-        if len(valid) > 0:
-            nearest_idx_full = valid[np.argmin(col_z[valid])]
-            nearest_z = float(col_z[nearest_idx_full])
-            nearest_idx = int(nearest_idx_full * h / dh)
+        if center_only:
+            nearest_z = center_z
+            nearest_idx = h // 2
         else:
-            nearest_z = 0.0
-            nearest_idx = -1
+            box_hw = dw // 8
+            box_hh = dh // 8
+            x1 = max(0, fx - box_hw)
+            x2 = min(dw, fx + box_hw)
+            y1 = max(0, fy - box_hh)
+            y2 = min(dh, fy + box_hh)
+
+            region_z = np.abs(points_3d[y1:y2, x1:x2, 2])
+            region_d = d16[y1:y2, x1:x2]
+            valid = (region_d > 0.5) & (region_z > 0) & (region_z < 50000)
+            if np.any(valid):
+                nearest_z = float(np.min(region_z[valid]))
+                min_idx_flat = np.argmin(np.where(valid, region_z, np.inf))
+                min_idx = np.unravel_index(min_idx_flat, region_z.shape)
+                nearest_idx = int((y1 + min_idx[0]) * h / dh)
+            else:
+                nearest_z = 0.0
+                nearest_idx = -1
 
         font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -375,11 +395,19 @@ class StereoCamera:
 
         draw_text_box(result, [f"Center: {fmt(center_z)}", f"Near: {fmt(nearest_z)}"], 12, h - 56)
 
+        overlay = result.copy()
         half_fov = self.camera_fov // 2
         for offset in range(-half_fov, half_fov + 1, 20):
             x = int((offset + half_fov) / self.camera_fov * w)
             text = "0" if offset == 0 else str(offset)
-            cv2.putText(result, text, (x - 6, 16), font, 0.4, (0, 255, 0), 1)
+            cv2.putText(overlay, text, (x - 6, 16), font, 0.4, (0, 255, 0), 1)
+            cv2.line(overlay, (x, 24), (x, h), (0, 255, 0), 1)
+
+        for i in range(1, 4):
+            y = int(h * i / 4)
+            cv2.line(overlay, (0, y), (w, y), (0, 255, 0), 1)
+
+        cv2.addWeighted(overlay, 0.35, result, 0.65, 0, dst=result)
 
         if nearest_z > 0 and nearest_idx >= 0:
             cv2.circle(result, (w // 2, nearest_idx), 4, (0, 255, 255), -1)
