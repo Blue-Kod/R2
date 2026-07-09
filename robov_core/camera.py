@@ -34,7 +34,7 @@ class StereoCamera:
         self.alpha_depth: float = 0.3
         self.show_left: bool = True
         self.num_disp: int = 5
-        self.wls_enabled: bool = False
+        self.wls_enabled: bool = True
         self.fps: float = 30.0
         self._tick: int = 0
         self._last_frame_time: float = time.time()
@@ -314,7 +314,7 @@ class StereoCamera:
             cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
 
             if self.hud_enabled:
-                frame = self._render_hud(frame, cv2.resize(disp_out, self.img_size))
+                frame = self._render_hud(frame, disp_out)
         else:
             rawL = raw[:, :half_w]
             rawR = raw[:, half_w:]
@@ -323,22 +323,26 @@ class StereoCamera:
 
         return frame
 
-    def _render_hud(self, frame: np.ndarray, disp_map: np.ndarray) -> np.ndarray:
+    def _render_hud(self, frame: np.ndarray, disp_full: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
+        dh, dw = disp_full.shape[:2]
         result = frame.copy()
 
-        points_3d = cv2.reprojectImageTo3D(disp_map.astype(np.float32) / 16.0, self.Q)
-        cx, cy = w // 2, h // 2
+        points_3d = cv2.reprojectImageTo3D(disp_full.astype(np.float32) / 16.0, self.Q)
 
-        center_z = abs(points_3d[cy, cx, 2])
+        fx = int(w / 2 * dw / w)
+        fy = int(h / 2 * dh / h)
+        center_z = abs(points_3d[fy, fx, 2])
 
-        center_col_z = abs(points_3d[:, cx, 2])
+        center_col_z = abs(points_3d[:, fx, 2])
         valid = np.where((center_col_z > 0) & (center_col_z < 10000))[0]
         if len(valid) > 0:
-            nearest_idx = valid[np.argmin(center_col_z[valid])]
-            nearest_z = center_col_z[nearest_idx]
+            nearest_idx_full = valid[np.argmin(center_col_z[valid])]
+            nearest_z = center_col_z[nearest_idx_full]
+            nearest_idx = int(nearest_idx_full * h / dh)
         else:
             nearest_z = 0.0
+            nearest_idx = -1
 
         font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -356,17 +360,18 @@ class StereoCamera:
                 ty = y1 + pad + i * line_h + 12
                 cv2.putText(img, line, (x1 + pad, ty), font, font_scale, (240, 240, 240), 1)
 
-        depth_label = f"Depth: {center_z:.0f} mm" if center_z < 5000 else "Depth: Out of range"
-        nearest_label = f"Nearest: {nearest_z:.0f} mm" if nearest_z > 0 else "Nearest: --"
+        depth_label = f"Center: {center_z:.0f} mm" if center_z < 5000 else "Center: --"
+        nearest_label = f"Near: {nearest_z:.0f} mm" if nearest_z > 0 else "Near: --"
         draw_text_box(result, [depth_label, nearest_label], 12, h - 56)
 
-        fov = self.camera_fov
-        for deg in range(0, fov + 1, 20):
-            x = int(deg / fov * w)
-            cv2.putText(result, f"{deg}°", (x - 8, 16), font, 0.4, (0, 255, 0), 1)
+        half_fov = self.camera_fov // 2
+        for offset in range(-half_fov, half_fov + 1, 20):
+            x = int((offset + half_fov) / self.camera_fov * w)
+            text = "0" if offset == 0 else str(offset)
+            cv2.putText(result, text, (x - 6, 16), font, 0.4, (0, 255, 0), 1)
 
-        if nearest_z > 0:
-            cv2.circle(result, (cx, nearest_idx), 4, (0, 255, 255), -1)
+        if nearest_z > 0 and nearest_idx >= 0:
+            cv2.circle(result, (w // 2, nearest_idx), 4, (0, 255, 255), -1)
 
         return result
 
