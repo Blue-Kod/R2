@@ -7,7 +7,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple
+from typing import Any, Optional, Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -95,6 +95,30 @@ _supported_emotes: List[str] = [os.path.splitext(f)[0] for f in os.listdir(_emot
 
 _display_thread: Optional[threading.Thread] = None
 _all_threads: List[threading.Thread] = []
+
+_tts: Any = None
+
+
+def speak(text: str) -> None:
+    global _tts
+    if _tts is None:
+        try:
+            import retro_ru_tts as _m
+            _tts = _m
+        except ImportError:
+            log("TTS unavailable: retro_ru_tts not installed")
+            return
+    try:
+        import os, tempfile, subprocess
+        pcm = _tts.synthesize(text, play=False)
+        wav = _tts.pcm_to_wav(pcm)
+        path = os.path.join(tempfile.gettempdir(), "r2_tts.wav")
+        with open(path, "wb") as f:
+            f.write(wav)
+        subprocess.run(["aplay", "-D", "plughw:1,0", path], check=True, capture_output=True, timeout=30)
+        os.unlink(path)
+    except Exception as e:
+        log(f"TTS error: {e}")
 
 def log(message: str) -> None:
     print(message)

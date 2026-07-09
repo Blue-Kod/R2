@@ -88,6 +88,12 @@
     </style>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.10/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/theme/monokai.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/python/python.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/edit/matchbrackets.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/edit/closebrackets.min.js"></script>
 </head>
 <body>
 <div class="layout">
@@ -172,7 +178,9 @@
                 <div id="logs-output" class="terminal-box">📡 Логи загрузятся автоматически...</div>
             </div>
             <div id="python-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0; gap: 8px;">
-                <textarea id="python-code" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius: 12px; padding: 12px; font-family: monospace; resize: none; outline: none;" placeholder="Введите Python код...">print("Hello from Python tab!")</textarea>
+                <div id="python-editor-wrap" style="flex:1; border:1px solid #2a2a2a; border-radius:12px; overflow:hidden;">        <textarea id="python-code" style="display:none;">print("Hello, World!")
+set_emote("happy")
+speak("Привет, я робот R2!")</div>
                 <div style="display: flex; gap: 8px;">
                     <button id="run-python-btn" style="flex:1; background: #44944a; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;"><span class="loading-spinner hidden" id="python-spinner"></span>▶ Запустить</button>
                     <button id="clear-python-btn" style="background: #333; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;">Очистить</button>
@@ -212,6 +220,7 @@ const wlsEnabledChk = document.getElementById('wlsEnabled');
 const terminalOutputDiv = document.getElementById('terminal-output');
 const terminalInput = document.getElementById('terminal-command');
 const sshHostDisplay = document.getElementById('sshHostDisplay');
+const pythonEditorWrap = document.getElementById('python-editor-wrap');
 const logsOutput = document.getElementById('logs-output');
 const tabTerminal = document.getElementById('tabTerminal');
 const tabLogs = document.getElementById('tabLogs');
@@ -395,6 +404,7 @@ function attachEvents() {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabPython.classList.add('active');
         pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); helpPane.classList.add('hidden');
+        if (!pythonEditor) initPythonEditor();
     };
     tabHelp.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
@@ -493,9 +503,28 @@ function attachEvents() {
         }
     };
 
+    // Init CodeMirror
+    let pythonEditor = null;
+    function initPythonEditor() {
+        const ta = document.getElementById('python-code');
+        if (!ta || pythonEditor) return;
+        pythonEditor = CodeMirror.fromTextArea(ta, {
+            mode: 'python',
+            theme: 'monokai',
+            lineNumbers: true,
+            indentUnit: 4,
+            tabSize: 4,
+            indentWithTabs: false,
+            matchBrackets: true,
+            autoCloseBrackets: true,
+            viewportMargin: Infinity,
+        });
+        pythonEditor.setSize(null, '100%');
+    }
+
     // Python exec
     document.getElementById('run-python-btn').onclick = async () => {
-        const code = document.getElementById('python-code').value;
+        const code = pythonEditor ? pythonEditor.getValue() : document.getElementById('python-code').value;
         if (!code.trim()) return;
         const btn = document.getElementById('run-python-btn');
         const spinner = document.getElementById('python-spinner');
@@ -505,13 +534,14 @@ function attachEvents() {
         try {
             const r = await fetch('/api/python/exec', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code})});
             const d = await r.json();
-            out.textContent = (d.stdout||'') + ((d.stderr)?'\n--- ОШИБКИ ---\n'+d.stderr:'') || '✓ Успешно';
+            out.innerHTML = ((d.stdout||'') + ((d.stderr)?'\n--- ОШИБКИ ---\n'+d.stderr:'')).replace(/\n/g,'<br>') || '✓ Успешно';
             out.scrollTop = out.scrollHeight;
         } catch(e) { out.textContent = 'Ошибка: ' + e.message; }
         finally { btn.disabled = false; spinner.classList.add('hidden'); }
     };
     document.getElementById('clear-python-btn').onclick = () => {
-        document.getElementById('python-code').value = '';
+        if (pythonEditor) pythonEditor.setValue('');
+        else document.getElementById('python-code').value = '';
         document.getElementById('python-output').textContent = '';
     };
 
