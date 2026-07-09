@@ -294,7 +294,7 @@ async function sendCameraParams() {
 
 async function updateRenderParams() {
     try {
-        await fetch('/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({alpha_depth: parseInt(depthAlphaSlider.value), show_left: eyeLeft.checked, num_disp: 5})});
+        await fetch('/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({alpha_depth: parseInt(depthAlphaSlider.value), show_left: eyeLeft.checked})});
     } catch(e) {}
 }
 

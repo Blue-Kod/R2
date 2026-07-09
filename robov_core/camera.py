@@ -33,7 +33,7 @@ class StereoCamera:
         self.hud_enabled: bool = False
         self.alpha_depth: float = 0.3
         self.show_left: bool = True
-        self.num_disp: int = 5
+        self.num_disp: int = 256
         self.wls_enabled: bool = True
         self.fps: float = 30.0
         self._tick: int = 0
@@ -43,7 +43,7 @@ class StereoCamera:
         self.camera_fov: int = 120
         self.window_size: int = 11
         self.min_disp: int = 0
-        self.num_disp: int = 128
+        self.num_disp: int = 256
         self._remap_flags: int = cv2.INTER_NEAREST
 
         self.actual_width: int = 0
@@ -54,6 +54,8 @@ class StereoCamera:
 
         self._load_camera_parameters()
         self._setup_rectification()
+        self.focal_length = self.P1[0, 0]
+        self.baseline = abs(float(self.T[0]))
         self._setup_stereo_matchers()
 
     def _load_camera_parameters(self) -> None:
@@ -278,7 +280,8 @@ class StereoCamera:
             for key, value in kwargs.items():
                 if value is not None and hasattr(self, key):
                     setattr(self, key, value)
-            if "wls_enabled" in kwargs:
+            matcher_keys = {"wls_enabled", "num_disp", "window_size", "min_disp"}
+            if matcher_keys & kwargs.keys():
                 self._setup_stereo_matchers()
 
     # --- Shared frame buffer ---
@@ -336,16 +339,13 @@ class StereoCamera:
         result = frame.copy()
 
         d16 = disp_raw.astype(np.float32) / 16.0
-        points_3d = cv2.reprojectImageTo3D(d16, self.Q)
+        Z = np.where(d16 > 1.0, self.focal_length * self.baseline / d16, 0.0)
+        Z = np.clip(Z, 0, 50000)
 
         fx = dw // 2
         fy = dh // 2
 
-        d_center = float(d16[fy, fx])
-        if d_center > 0.5:
-            center_z = float(abs(points_3d[fy, fx, 2]))
-        else:
-            center_z = 0.0
+        center_z = float(Z[fy, fx])
 
         if center_only:
             nearest_z = center_z
@@ -358,13 +358,11 @@ class StereoCamera:
             y1 = max(0, fy - box_hh)
             y2 = min(dh, fy + box_hh)
 
-            region_z = np.abs(points_3d[y1:y2, x1:x2, 2])
-            region_d = d16[y1:y2, x1:x2]
-            valid = (region_d > 0.5) & (region_z > 0) & (region_z < 50000)
+            region = Z[y1:y2, x1:x2]
+            valid = region > 0
             if np.any(valid):
-                nearest_z = float(np.min(region_z[valid]))
-                min_idx_flat = np.argmin(np.where(valid, region_z, np.inf))
-                min_idx = np.unravel_index(min_idx_flat, region_z.shape)
+                nearest_z = float(np.min(region[valid]))
+                min_idx = np.unravel_index(np.argmin(np.where(valid, region, np.inf)), region.shape)
                 nearest_idx = int((y1 + min_idx[0]) * h / dh)
             else:
                 nearest_z = 0.0
