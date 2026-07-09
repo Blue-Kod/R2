@@ -85,7 +85,8 @@
             <div>CPU: <span id="cpuStat">0</span>%</div>
             <div>RAM: <span id="ramStat">0</span>%</div>
             <div>Темп: <span id="tempStat">--</span></div>
-            <div>FPS: <span id="fpsStat">0</span></div>
+            <div title="Сервер: захват+обработка">Серв: <span id="fpsStat">0</span></div>
+            <div title="Клиент: приём+декодирование">Клиент: <span id="clientFpsStat">0</span></div>
             <button id="updateBtn" class="update-btn">↻</button>
             <button id="exitBtn" class="exit-btn">⏻</button>
         </div>
@@ -210,6 +211,7 @@ function restoreState() {
         document.getElementById('ramStat').textContent = Math.round(sd.ram || 0);
         document.getElementById('tempStat').textContent = sd.temp || '--';
         document.getElementById('fpsStat').textContent = (sd.fps || 0).toFixed(1);
+        document.getElementById('clientFpsStat').textContent = '0';
     }
 }
 
@@ -271,6 +273,19 @@ async function sendTerminalCommand(cmd) {
     } catch(e) {} finally { sendingCmd = false; }
 }
 
+// ===================== CLIENT FPS =====================
+let clientFrameCount = 0;
+let clientFpsValue = 0;
+let clientFpsInterval = setInterval(() => {
+    clientFpsValue = clientFrameCount;
+    document.getElementById('clientFpsStat').textContent = clientFpsValue;
+    clientFrameCount = 0;
+}, 1000);
+
+videoFeed.addEventListener('load', () => {
+    clientFrameCount++;
+});
+
 // ===================== STATS =====================
 async function fetchSystemStats() {
     try {
@@ -279,7 +294,7 @@ async function fetchSystemStats() {
         document.getElementById('cpuStat').textContent = d.cpu ?? 0;
         document.getElementById('ramStat').textContent = d.ram ?? 0;
         document.getElementById('tempStat').textContent = d.temp ?? '--';
-        document.getElementById('fpsStat').textContent = d.fps ?? 0;
+        document.getElementById('fpsStat').textContent = (d.fps ?? 0).toFixed(1);
         if (!logsPane.classList.contains('hidden')) {
             logsOutput.textContent = (d.logs || []).join('\n');
             logsOutput.scrollTop = logsOutput.scrollHeight;

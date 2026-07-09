@@ -216,10 +216,7 @@ class StereoCamera:
                 cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
                 return frame
 
-        for _ in range(3):
-            if not self.cap.grab():
-                break
-        ret, raw = self.cap.retrieve()
+        ret, raw = self.cap.read()
         if not ret:
             self.cap.release()
             self.cap = None
@@ -316,10 +313,7 @@ class StereoCamera:
                         time.sleep(0.5)
                         continue
 
-                for _ in range(3):
-                    if not self.cap.grab():
-                        break
-                ret, raw = self.cap.retrieve()
+                ret, raw = self.cap.read()
                 if not ret:
                     self.cap.release()
                     self.cap = None
