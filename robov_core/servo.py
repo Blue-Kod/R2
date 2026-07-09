@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import time
 import threading
+import time
+from typing import Dict, List, Optional, Set, Tuple
 
 # ----------------------------------------------------------------------
 # Пользовательская калибровка — РЕДАКТИРУЙТЕ ЗДЕСЬ
@@ -10,17 +11,9 @@ import threading
 # Положительное значение — физический угол больше команды,
 # отрицательное — меньше.
 # ----------------------------------------------------------------------
-DEFAULT_OFFSETS = {
-    0: 0.0,    # Шея
-    1: -14.0,    # Правое плечо
-    2: 10.0,    # Левое плечо
-    3: 0.0,    # Наклон головы
-    4: -7.0,    # Поворот правого плеча
-    5: -9.0,    # Поворот левого плеча
-    6: 0.0,    # Правый локоть
-    7: 22.0,    # Левый локоть
-    8: 0.0,
-    9: 0.0
+DEFAULT_OFFSETS: Dict[int, float] = {
+    0: 0.0, 1: -14.0, 2: 10.0, 3: 0.0, 4: -7.0,
+    5: -9.0, 6: 0.0, 7: 22.0, 8: 0.0, 9: 0.0
 }
 
 # ----------------------------------------------------------------------
@@ -28,46 +21,53 @@ DEFAULT_OFFSETS = {
 # Если канал в этом множестве, угол пересчитывается как max_angle - angle.
 # Для стандартной конфигурации (0..270) это даёт зеркальное отражение.
 # ----------------------------------------------------------------------
-INVERTED_CHANNELS = {1, 4, 6, 8}   # правое плечо, поворот правого плеча, правый локоть
+INVERTED_CHANNELS: Set[int] = {1, 4, 6, 8}
 # ----------------------------------------------------------------------
 
+ChannelConfig = Tuple[int, int, int, int]
+
+
+class ServoError(Exception):
+    pass
+
+
 class ServoController:
-    def __init__(self, bus=0, address=0x40, freq=50, channel_configs=None):
-        self.bus = bus
-        self.address = address
-        self.freq = freq
+    def __init__(
+        self,
+        bus: int = 0,
+        address: int = 0x40,
+        freq: int = 50,
+        channel_configs: Optional[Dict[int, ChannelConfig]] = None
+    ) -> None:
+        self.bus: int = bus
+        self.address: int = address
+        self.freq: int = freq
         self.pwm = None
-        self.initialized = False
+        self.initialized: bool = False
 
-        # Текущие углы (чистые, без offset и инверсии – логические)
-        self.current_angles = {0: 90, 1: 135, 2: 135, 3: 90, 4: 45, 5: 45, 6: 135, 7: 135, 8: 90, 9: 90}
-        self.lock = threading.Lock()
+        self.current_angles: Dict[int, int] = {
+            0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
+            5: 45, 6: 135, 7: 135, 8: 90, 9: 90
+        }
+        self.lock: threading.Lock = threading.Lock()
 
-        self.offsets = {}
-        self.inverted_channels = set(INVERTED_CHANNELS)   # копия множества
+        self.offsets: Dict[int, float] = {}
+        self.inverted_channels: Set[int] = set(INVERTED_CHANNELS)
 
-        # Конфигурация каналов по умолчанию (8 каналов)
         if channel_configs is None:
-            self.channel_configs = {
-                0: (0, 180, 120, 520),   # Шея (180°)
-                1: (0, 270, 102, 512),   # Правое плечо (270°)
-                2: (0, 270, 102, 512),   # Левое плечо (270°)
-                3: (0, 180, 120, 520),   # Наклон головы (180°)
-                4: (0, 270, 102, 512),   # Поворот правого плеча (270°)
-                5: (0, 270, 102, 512),   # Поворот левого плеча (270°)
-                6: (0, 270, 102, 512),   # Правый локоть (270°)
-                7: (0, 270, 102, 512),    # Левый локоть (270°)
-                8: (0, 180, 120, 520),   # Правый захват (180°)
-                9: (0, 180, 120, 520),   # Левый захват (180°)
+            self.channel_configs: Dict[int, ChannelConfig] = {
+                0: (0, 180, 120, 520), 1: (0, 270, 102, 512),
+                2: (0, 270, 102, 512), 3: (0, 180, 120, 520),
+                4: (0, 270, 102, 512), 5: (0, 270, 102, 512),
+                6: (0, 270, 102, 512), 7: (0, 270, 102, 512),
+                8: (0, 180, 120, 520), 9: (0, 180, 120, 520),
             }
         else:
             self.channel_configs = channel_configs
 
-        # Заполняем offsets из DEFAULT_OFFSETS
         for ch in self.channel_configs:
             self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
 
-        # Попытка подключения к PCA9685
         try:
             from PCA9685_smbus2 import PCA9685
             self.pwm = PCA9685.PCA9685(interface=self.bus, address=self.address)
@@ -93,7 +93,7 @@ class ServoController:
         with self.lock:
             return self.offsets.get(channel, 0.0)
 
-    def reset_offsets_to_default(self):
+    def reset_offsets_to_default(self) -> None:
         with self.lock:
             for ch in self.channel_configs:
                 self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
@@ -120,9 +120,9 @@ class ServoController:
     # ------------------------------------------------------------------
     # Преобразование угла в импульс
     # ------------------------------------------------------------------
-    def angle_to_pulse(self, angle, channel):
+    def angle_to_pulse(self, angle: float, channel: int) -> int:
         if channel not in self.channel_configs:
-            raise ValueError(f"Канал {channel} не сконфигурирован")
+            raise ServoError(f"Канал {channel} не сконфигурирован")
         min_angle, max_angle, min_pulse, max_pulse = self.channel_configs[channel]
         if angle < min_angle:
             angle = min_angle
@@ -134,7 +134,7 @@ class ServoController:
     # ------------------------------------------------------------------
     # Управление сервоприводом
     # ------------------------------------------------------------------
-    def set_servo(self, channel, angle, smooth=True, step_delay=0.01, step_angle=2):
+    def set_servo(self, channel: int, angle: int, smooth: bool = True, step_delay: float = 0.01, step_angle: int = 2) -> bool:
         if not self.initialized or self.pwm is None:
             print(f"PCA9685 не инициализирована, канал {channel} не установлен")
             return False
@@ -161,7 +161,7 @@ class ServoController:
         self._set_servo_immediate(channel, target_command + offset, target_command)
         return True
 
-    def _set_servo_immediate(self, channel, physical_angle, command_angle=None):
+    def _set_servo_immediate(self, channel: int, physical_angle: float, command_angle: Optional[int] = None) -> bool:
         try:
             pulse = self.angle_to_pulse(physical_angle, channel)
             self.pwm.set_pwm(channel, 0, pulse)
@@ -176,7 +176,7 @@ class ServoController:
     # ------------------------------------------------------------------
     # Тест и калибровка
     # ------------------------------------------------------------------
-    def test_cycle(self, channels=None, delay=1):
+    def test_cycle(self, channels: Optional[List[int]] = None, delay: int = 1) -> None:
         if channels is None:
             channels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         if not self.initialized:
@@ -192,10 +192,10 @@ class ServoController:
                 time.sleep(delay)
             time.sleep(1)
 
-    def calibrate_channel(self, channel, min_pulse=None, max_pulse=None):
+    def calibrate_channel(self, channel: int, min_pulse: Optional[int] = None, max_pulse: Optional[int] = None) -> Optional[Tuple[int, int]]:
         if channel not in self.channel_configs:
             print(f"Канал {channel} не найден")
-            return
+            return None
         min_angle, max_angle, old_min, old_max = self.channel_configs[channel]
         if min_pulse is not None:
             old_min = int(min_pulse)

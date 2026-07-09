@@ -5,334 +5,71 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>R2 — Главная | Управление роботом</title>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         :root {
-            --bg: #0a0a0a;
-            --panel: #121212;
-            --panel-2: #151515;
-            --text: #f0f0f0;
-            --muted: #9c9c9c;
-            --line: #2a2a2a;
-            --accent: #44944a;
-            --cam-w: 960px;
-            --cam-h: 540px;
+            --bg: #0a0a0a; --panel: #121212; --panel-2: #151515;
+            --text: #f0f0f0; --muted: #9c9c9c; --line: #2a2a2a;
+            --accent: #44944a; --danger: #8b0000; --cam-w: 960px; --cam-h: 540px;
         }
-
-        html, body {
-            height: 100%;
-            background: var(--bg);
-        }
-
-        body {
-            overflow: hidden;
-            color: var(--text);
-            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-            font-size: 13px;
-        }
-
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #0a0a0a;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #333;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #444;
-        }
-
-        .layout {
-            width: 100%;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            overflow: hidden;
-            padding: 16px;
-        }
-
-        .topbar {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 10px;
-            align-items: center;
-            flex-shrink: 0;
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 8px;
-        }
-
-        .nav-links a {
-            color: var(--text);
-            text-decoration: none;
-            border: 1px solid var(--line);
-            background: var(--panel);
-            padding: 8px 14px;
-            border-radius: 10px;
-            font-size: 13px;
-            font-weight: 500;
-            transition: 0.2s;
-        }
-
-        .nav-links a:hover {
-            background: #1f1f1f;
-            border-color: #3a3a3a;
-        }
-
-        .stats {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-        }
-
-        .stats div {
-            font-size: 12px;
-            color: var(--muted);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 6px 12px;
-            background: var(--panel);
-        }
-
-        .stats span {
-            color: var(--text);
-            font-weight: 600;
-            margin-left: 4px;
-        }
-
-        .container {
-            display: grid;
-            grid-template-columns: 260px minmax(0, var(--cam-w)) 1fr;
-            gap: 14px;
-            flex: 1;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .panel {
-            border: 1px solid var(--line);
-            background: var(--panel);
-            border-radius: 20px;
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .panel-title {
-            font-size: 11px;
-            letter-spacing: 1.2px;
-            color: var(--muted);
-            text-transform: uppercase;
-            margin-bottom: 12px;
-            font-weight: 500;
-        }
-
-        .terminal-box {
-            flex: 1;
-            border-radius: 14px;
-            border: 1px solid var(--line);
-            background: #0d0d0d;
-            padding: 12px;
-            overflow-y: auto;
-            font-size: 12px;
-            line-height: 1.45;
-            white-space: pre-wrap;
-            font-family: 'JetBrains Mono', Consolas, monospace;
-            color: #e0e0e0;
-        }
-
-        .tabs {
-            display: flex;
-            gap: 6px;
-            margin-bottom: 10px;
-            padding: 4px;
-            border-radius: 40px;
-            background: rgba(20, 20, 20, 0.8);
-            border: 1px solid var(--line);
-            width: 100%;
-        }
-
-        .tabs button {
-            cursor: pointer;
-            border: none;
-            border-radius: 30px;
-            padding: 6px 14px;
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--muted);
-            background: transparent;
-            transition: 0.2s;
-            flex: 1;
-            text-align: center;
-        }
-
-        .tabs button.active {
-            color: white;
-            background: #44944a;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-        }
-
-        #video-container {
-            width: 100%;
-            height: var(--cam-h);
-            position: relative;
-            border-radius: 16px;
-            border: 1px solid var(--line);
-            background: #070707;
-            overflow: hidden;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        #video-feed {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .depth-tooltip {
-            position: absolute;
-            background: #111;
-            color: white;
-            border: 1px solid #3a3a3a;
-            border-radius: 12px;
-            padding: 5px 10px;
-            font-size: 12px;
-            font-weight: 500;
-            pointer-events: none;
-            z-index: 1000;
-        }
-
-        
-        .hidden {
-            display: none !important;
-        }
-
-        .servo-controls {
-            overflow-y: auto;
-            flex: 1;
-            padding-right: 6px;
-        }
-
-        .servo-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 12px;
-        }
-
-        .servo-row label {
-            width: 100px;
-            font-size: 11.5px;
-            color: var(--muted);
-        }
-
-        .servo-row input[type="range"] {
-            flex: 1;
-            accent-color: #44944a;
-        }
-
-        .servo-row span {
-            width: 45px;
-            text-align: right;
-            font-size: 11px;
-            font-weight: 500;
-            color: #ddd;
-        }
-
-        .control-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 0px;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-        }
-
-        .control-row label {
-            font-size: 12px;
-            color: var(--muted);
-        }
-
-        input[type="checkbox"], input[type="radio"] {
-            accent-color: #44944a;
-            width: 16px;
-            height: 16px;
-            margin-right: 6px;
-        }
-
-        select, input[type="range"] {
-            background: #1e1e1e;
-            border: 1px solid var(--line);
-            color: white;
-            border-radius: 8px;
-            padding: 6px 8px;
-            accent-color: #44944a;
-        }
-
-        .ai-live-block {
-            background: #1a1a1a;
-            border-radius: 16px;
-            padding: 20px;
-            margin-top: 12px;
-            min-height: 180px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            font-size: 16px;
-            line-height: 1.5;
-            transition: box-shadow 0.15s;
-            font-family: 'JetBrains Mono', monospace;
-            white-space: pre-wrap;
-            word-break: break-word;
-            border: 1px solid var(--line);
-            overflow-y: auto;
-        }
-
-        .flash-green {
-            box-shadow: 0 0 0 4px #44944a, 0 0 0 8px rgba(68, 148, 74, 0.4);
-            transition: box-shadow 0.2s;
-        }
-
+        html, body { height: 100%; background: var(--bg); }
+        body { overflow: hidden; color: var(--text); font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0a0a0a; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #444; }
+        .layout { width: 100%; height: 100vh; display: flex; flex-direction: column; gap: 12px; overflow: hidden; padding: 16px; }
+        .topbar { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; flex-shrink: 0; }
+        .nav-links { display: flex; gap: 8px; }
+        .nav-links a { color: var(--text); text-decoration: none; border: 1px solid var(--line); background: var(--panel); padding: 8px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; transition: 0.2s; }
+        .nav-links a:hover { background: #1f1f1f; border-color: #3a3a3a; }
+        .stats { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+        .stats div { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 12px; padding: 6px 12px; background: var(--panel); }
+        .stats span { color: var(--text); font-weight: 600; margin-left: 4px; }
+        .container { display: grid; grid-template-columns: 260px minmax(0, var(--cam-w)) 1fr; gap: 14px; flex: 1; min-height: 0; overflow: hidden; }
+        .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 20px; padding: 14px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+        .panel-title { font-size: 11px; letter-spacing: 1.2px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; font-weight: 500; }
+        .terminal-box { flex: 1; border-radius: 14px; border: 1px solid var(--line); background: #0d0d0d; padding: 12px; overflow-y: auto; font-size: 12px; line-height: 1.45; white-space: pre-wrap; font-family: 'JetBrains Mono', Consolas, monospace; color: #e0e0e0; }
+        .tabs { display: flex; gap: 6px; margin-bottom: 10px; padding: 4px; border-radius: 40px; background: rgba(20, 20, 20, 0.8); border: 1px solid var(--line); width: 100%; }
+        .tabs button { cursor: pointer; border: none; border-radius: 30px; padding: 6px 14px; font-size: 12px; font-weight: 500; color: var(--muted); background: transparent; transition: 0.2s; flex: 1; text-align: center; }
+        .tabs button.active { color: white; background: #44944a; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+        #video-container { width: 100%; height: var(--cam-h); position: relative; border-radius: 16px; border: 1px solid var(--line); background: #070707; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+        #video-feed { width: 100%; height: 100%; object-fit: cover; }
+        .depth-tooltip { position: absolute; background: #111; color: white; border: 1px solid #3a3a3a; border-radius: 12px; padding: 5px 10px; font-size: 12px; font-weight: 500; pointer-events: none; z-index: 1000; }
+        .hidden { display: none !important; }
+        .servo-controls { overflow-y: auto; flex: 1; padding-right: 6px; }
+        .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+        .servo-row label { width: 100px; font-size: 11.5px; color: var(--muted); }
+        .servo-row input[type="range"] { flex: 1; accent-color: #44944a; }
+        .servo-row span { width: 45px; text-align: right; font-size: 11px; font-weight: 500; color: #ddd; }
+        .control-row { display: flex; justify-content: space-between; align-items: center; gap: 0px; margin-bottom: 12px; flex-wrap: wrap; }
+        .control-row label { font-size: 12px; color: var(--muted); }
+        input[type="checkbox"], input[type="radio"] { accent-color: #44944a; width: 16px; height: 16px; margin-right: 6px; }
+        select, input[type="range"] { background: #1e1e1e; border: 1px solid var(--line); color: white; border-radius: 8px; padding: 6px 8px; accent-color: #44944a; }
+        .exit-btn { background: var(--danger); color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: 0.2s; }
+        .exit-btn.confirming { background: #cc0000; animation: pulse 0.5s infinite alternate; }
+        .exit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.05); } }
+        .update-btn { background: #1e4a76; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: 0.2s; }
+        .update-btn:hover { background: #2c6b9e; }
+        .update-btn:disabled, .exit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .loading-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
         @media (max-width: 1280px) {
-            .container {
-                grid-template-columns: 1fr;
-                overflow: auto;
-            }
+            .container { grid-template-columns: 1fr; overflow: auto; }
             body { overflow: auto; }
-            .layout { height: auto; }
-            #video-container { width: 100%; }
+            .layout { height: auto; min-height: 100vh; }
+            #video-container { width: 100%; height: auto; aspect-ratio: 16/9; }
+            :root { --cam-h: auto; --cam-w: 100%; }
+            .stats { justify-content: flex-start; }
+            .topbar { grid-template-columns: 1fr; }
         }
-
-        .update-btn {
-            background: #1e4a76;
-            color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 8px 16px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-        }
-        .update-btn:hover {
-            background: #2c6b9e;
+        @media (max-width: 480px) {
+            .layout { padding: 8px; gap: 8px; }
+            .servo-row label { width: 70px; font-size: 10px; }
+            .servo-row { gap: 4px; }
+            .stats div { font-size: 10px; padding: 4px 8px; }
+            .panel { padding: 10px; border-radius: 14px; }
+            .nav-links a { padding: 6px 10px; font-size: 11px; }
         }
     </style>
 </head>
@@ -349,12 +86,11 @@
             <div>Темп: <span id="tempStat">--</span></div>
             <div>FPS: <span id="fpsStat">0</span></div>
             <button id="updateBtn" class="update-btn">↻</button>
-            <button id="exitBtn" style="background:#8b0000; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;">⏻</button>
+            <button id="exitBtn" class="exit-btn">⏻</button>
         </div>
     </header>
 
     <div class="container">
-        <!-- Левая панель: сервоприводы -->
         <aside class="panel">
             <div class="panel-title">Сервоприводы</div>
             <div class="servo-controls">
@@ -371,53 +107,29 @@
             </div>
         </aside>
 
-        <!-- Центральная панель -->
         <main class="panel" style="display: flex; flex-direction: column; align-items: center;">
             <div id="video-container">
                 <img id="video-feed" src="/video_feed" alt="Video Stream" crossorigin="anonymous">
+                <div class="depth-tooltip hidden" id="depthTooltip">Загрузка...</div>
             </div>
 
-            <div class="tabs" id="controlsTabs" style="margin-top: 12px;">
-                <button id="tabAIControls">Команды AI</button>
-                <button id="tabCameraControls" class="active">Параметры камеры</button>
-            </div>
-
-            <div id="camera-controls" style="width: 100%;">
-                <div class="control-row" style="display: flex; justify-content: space-between; align-items: center;">
+            <div class="control-row" style="width:100%; margin-top: 12px;">
+                <div style="display: flex; gap: 12px; align-items: center;">
                     <label>Основной глаз:</label>
-                    <div style="display: flex; gap: 12px;">
-                        <label><input type="radio" name="mainEye" id="eyeLeft" checked> Левый</label>
-                        <label><input type="radio" name="mainEye" id="eyeRight"> Правый</label>
-                    </div>
+                    <label><input type="radio" name="mainEye" id="eyeLeft" checked> Левый</label>
+                    <label><input type="radio" name="mainEye" id="eyeRight"> Правый</label>
                 </div>
-                <div class="control-row" style="display: flex; justify-content: space-between; align-items: center;">
-                    <label>Прозрачность глубины:</label>
-                    <input type="range" id="depthAlpha" min="0" max="100" value="30" style="flex: 1; margin-left: 12px;">
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <label>Прозрачность:</label>
+                    <input type="range" id="depthAlpha" min="0" max="100" value="30" style="width:100px;">
                 </div>
-                <div class="control-group">
-                    <div class="control-row" style="display: flex; justify-content: space-between; align-items: center;">
-                        <label>Глубина (вычисления):</label>
-                        <input type="checkbox" id="depthEnabled">
-                    </div>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <label>Глубина:</label>
+                    <input type="checkbox" id="depthEnabled">
                 </div>
-            </div>
-
-            <div id="ai-controls" class="hidden" style="display:flex; flex-direction:column; gap: 12px; width: 100%;">
-                <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
-                    <label style="display: flex; align-items: center; gap: 6px; white-space: nowrap;">
-                        <span style="font-size: 12px; color: var(--muted);">Звук</span>
-                        <input type="checkbox" id="aiAudioEnabled" checked>
-                    </label>
-                    <span style="color:#44944a; font-family: monospace;">  >>></span>
-                    <input type="text" id="ai-command-input" placeholder="Введите команду для ИИ..." style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius: 12px; padding: 8px 12px; font-family: monospace; outline: none;">
-                    <button id="ai-send-btn" style="background: #44944a; color: white; border: none; border-radius: 12px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;">▶ Отправить</button>
-                </div>
-                <div class="panel-title"></div>
-                <div id="ai-live-response" class="ai-live-block">...</div>
             </div>
         </main>
 
-        <!-- Правая панель -->
         <aside class="panel">
             <div class="tabs" id="rightTabs">
                 <button id="tabTerminal" class="active">Терминал</button>
@@ -437,7 +149,7 @@
             <div id="python-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0; gap: 8px;">
                 <textarea id="python-code" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius: 12px; padding: 12px; font-family: monospace; resize: none; outline: none;" placeholder="Введите Python код...">print("Hello from Python tab!")</textarea>
                 <div style="display: flex; gap: 8px;">
-                    <button id="run-python-btn" style="flex:1; background: #44944a; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;">▶ Запустить</button>
+                    <button id="run-python-btn" style="flex:1; background: #44944a; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;"><span class="loading-spinner hidden" id="python-spinner"></span>▶ Запустить</button>
                     <button id="clear-python-btn" style="background: #333; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;">Очистить</button>
                 </div>
                 <div id="python-output" class="terminal-box" style="flex:1;"></div>
@@ -447,8 +159,6 @@
 </div>
 
 <script>
-// ===================== ЗАГРУЗКА НАСТРОЕК С СЕРВЕРА =====================
-// Данные передаются с сервера через Jinja2 шаблон
 const serverData = {
     camera_params: {{ camera_params | tojson }},
     servo_angles: {{ servo_angles | tojson }},
@@ -459,62 +169,13 @@ const serverData = {
     system_data: {{ system_data | tojson }}
 };
 
-function loadSettingsFromServer() {
-    console.log('Loading settings from server:', serverData);
-    
-    // Восстанавливаем настройки камеры
-    if (serverData.camera_params) {
-        const cp = serverData.camera_params;
-        depthEnabledChk.checked = cp.depth_enabled || false;
-        depthAlphaSlider.value = (cp.alpha_depth || 0.3) * 100;
-        eyeLeft.checked = cp.show_left !== false; // по умолчанию левый
-        eyeRight.checked = !eyeLeft.checked;
-        console.log('Camera params restored:', cp);
-    }
-    
-    // Восстанавливаем углы сервоприводов
-    if (serverData.servo_angles) {
-        Object.keys(serverData.servo_angles).forEach(ch => {
-            const slider = document.getElementById(`servo${ch}`);
-            if (slider) {
-                slider.value = serverData.servo_angles[ch];
-                updateServoVal(ch, slider.value);
-            }
-        });
-        console.log('Servo angles restored:', serverData.servo_angles);
-    }
-    
-    // Восстанавливаем системные данные
-    if (serverData.system_data) {
-        const sd = serverData.system_data;
-        document.getElementById('cpuStat').textContent = Math.round(sd.cpu || 0);
-        document.getElementById('ramStat').textContent = Math.round(sd.ram || 0);
-        document.getElementById('tempStat').textContent = sd.temp || '--';
-        document.getElementById('fpsStat').textContent = (sd.fps || 0).toFixed(1);
-        console.log('System data restored:', sd);
-    }
-}
-
-// ===================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====================
-
-// DOM элементы
-const videoContainer = document.getElementById('video-container');
-const depthTooltip = document.getElementById('depth-tooltip');
+// ===================== DOM =====================
 const videoFeed = document.getElementById('video-feed');
-
-// AI панель
-const aiAudioEnabledChk = document.getElementById('aiAudioEnabled');
-const aiCommandInput = document.getElementById('ai-command-input');
-const aiSendBtn = document.getElementById('ai-send-btn');
-const aiLiveResponse = document.getElementById('ai-live-response');
-
-// Параметры камеры
+const depthTooltip = document.getElementById('depthTooltip');
 const eyeLeft = document.getElementById('eyeLeft');
 const eyeRight = document.getElementById('eyeRight');
 const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
-
-// Терминал и вкладки
 const terminalOutputDiv = document.getElementById('terminal-output');
 const terminalInput = document.getElementById('terminal-command');
 const logsOutput = document.getElementById('logs-output');
@@ -524,15 +185,34 @@ const tabPython = document.getElementById('tabPython');
 const terminalPane = document.getElementById('terminal-pane');
 const logsPane = document.getElementById('logs-pane');
 const pythonPane = document.getElementById('python-pane');
+const exitBtn = document.getElementById('exitBtn');
+const updateBtn = document.getElementById('updateBtn');
 
-// ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ UI =====================
-function setActiveTab(activeBtn, allBtns) {
-    allBtns.forEach(b => b.classList.remove('active'));
-    activeBtn.classList.add('active');
+// ===================== STATE RESTORE =====================
+function restoreState() {
+    if (serverData.camera_params) {
+        const cp = serverData.camera_params;
+        depthEnabledChk.checked = cp.depth_enabled || false;
+        depthAlphaSlider.value = (cp.alpha_depth || 0.3) * 100;
+        eyeLeft.checked = cp.show_left !== false;
+        eyeRight.checked = !eyeLeft.checked;
+    }
+    if (serverData.servo_angles) {
+        Object.keys(serverData.servo_angles).forEach(ch => {
+            const slider = document.getElementById(`servo${ch}`);
+            if (slider) { slider.value = serverData.servo_angles[ch]; updateServoVal(ch, slider.value); }
+        });
+    }
+    if (serverData.system_data) {
+        const sd = serverData.system_data;
+        document.getElementById('cpuStat').textContent = Math.round(sd.cpu || 0);
+        document.getElementById('ramStat').textContent = Math.round(sd.ram || 0);
+        document.getElementById('tempStat').textContent = sd.temp || '--';
+        document.getElementById('fpsStat').textContent = (sd.fps || 0).toFixed(1);
+    }
 }
 
-
-// ===================== СЕРВОПРИВОДЫ =====================
+// ===================== SERVO =====================
 function updateServoVal(ch, val) {
     const s = document.getElementById(`servo${ch}_val`);
     if (s) s.textContent = val + '°';
@@ -551,39 +231,20 @@ for (let i=0; i<=9; i++) {
     }
 }
 
-// ===================== ПАРАМЕТРЫ КАМЕРЫ =====================
+// ===================== CAMERA =====================
 async function sendCameraParams() {
     try {
-        await fetch('/api/camera/params', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({
-                depth_enabled: depthEnabledChk.checked
-            })
-        });
+        await fetch('/api/camera/params', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({depth_enabled: depthEnabledChk.checked})});
     } catch(e) {}
 }
 
 async function updateRenderParams() {
     try {
-        await fetch('/update', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ alpha_depth: parseInt(depthAlphaSlider.value), show_left: eyeLeft.checked, num_disp: 5 })
-        });
+        await fetch('/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({alpha_depth: parseInt(depthAlphaSlider.value), show_left: eyeLeft.checked, num_disp: 5})});
     } catch(e) {}
 }
 
-async function loadCameraParams() {
-    try {
-        const r = await fetch('/api/camera/params');
-        const p = await r.json();
-        depthEnabledChk.checked = p.depth_enabled || false;
-        console.log('Depth enabled loaded:', depthEnabledChk.checked);
-    } catch(e) {
-        console.log('Failed to load camera params:', e);
-    }
-}
-
-// ===================== ТЕРМИНАЛ =====================
+// ===================== TERMINAL =====================
 let lastTerminalOutput = '', fetchingTerminal = false, sendingCmd = false;
 
 async function fetchTerminalOutput() {
@@ -609,47 +270,7 @@ async function sendTerminalCommand(cmd) {
     } catch(e) {} finally { sendingCmd = false; }
 }
 
-// ===================== AI =====================
-let lastResponseText = '', pollingInterval = null;
-
-function startPollingAI() {
-    if (pollingInterval) clearInterval(pollingInterval);
-    pollingInterval = setInterval(async () => {
-        try {
-            const r = await fetch('/api/ai/get_current_response');
-            const d = await r.json();
-            const txt = d.response || '';
-            if (txt !== lastResponseText) {
-                lastResponseText = txt;
-                aiLiveResponse.textContent = txt || '✨ Ожидание ответа...';
-                aiLiveResponse.scrollTop = aiLiveResponse.scrollHeight;
-                aiLiveResponse.classList.add('flash-green');
-                setTimeout(() => aiLiveResponse.classList.remove('flash-green'), 300);
-            }
-        } catch(e) {}
-    }, 200);
-}
-
-async function sendAICommand() {
-    const cmd = aiCommandInput.value.trim();
-    if (!cmd) return;
-    lastResponseText = '';
-    aiLiveResponse.textContent = '🤖 Генерация...';
-    aiLiveResponse.classList.add('flash-green');
-    setTimeout(() => aiLiveResponse.classList.remove('flash-green'), 300);
-    aiCommandInput.value = '';
-    try {
-        const r = await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd})});
-        const d = await r.json();
-        if (d.error) aiLiveResponse.textContent = 'Ошибка: ' + d.error;
-    } catch(e) { aiLiveResponse.textContent = 'Ошибка отправки'; }
-}
-
-// ===================== КООРДИНАТЫ =====================
-// Метод get_real_coords доступен через API /api/real_coords
-// Можно вызывать из Python вкладки или других скриптов
-
-// ===================== СТАТИСТИКА =====================
+// ===================== STATS =====================
 async function fetchSystemStats() {
     try {
         const r = await fetch('/api/data');
@@ -665,35 +286,22 @@ async function fetchSystemStats() {
     } catch(e) {}
 }
 
-// ===================== ОБРАБОТЧИКИ СОБЫТИЙ =====================
+// ===================== EVENTS =====================
 function attachEvents() {
-    const tabAIControls = document.getElementById('tabAIControls');
-    const tabCameraControls = document.getElementById('tabCameraControls');
-    const aiControlsDiv = document.getElementById('ai-controls');
-    const cameraControlsDiv = document.getElementById('camera-controls');
-
-    tabCameraControls.onclick = () => {
-        setActiveTab(tabCameraControls, [tabAIControls, tabCameraControls]);
-        cameraControlsDiv.classList.remove('hidden');
-        aiControlsDiv.classList.add('hidden');
-    };
-    tabAIControls.onclick = () => {
-        setActiveTab(tabAIControls, [tabAIControls, tabCameraControls]);
-        aiControlsDiv.classList.remove('hidden');
-        cameraControlsDiv.classList.add('hidden');
-    };
-
     tabTerminal.onclick = () => {
-        setActiveTab(tabTerminal, [tabTerminal, tabLogs, tabPython]);
+        document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
+        tabTerminal.classList.add('active');
         terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden');
     };
     tabLogs.onclick = () => {
-        setActiveTab(tabLogs, [tabTerminal, tabLogs, tabPython]);
+        document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
+        tabLogs.classList.add('active');
         logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden');
         fetchSystemStats();
     };
     tabPython.onclick = () => {
-        setActiveTab(tabPython, [tabTerminal, tabLogs, tabPython]);
+        document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
+        tabPython.classList.add('active');
         pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden');
     };
 
@@ -702,17 +310,18 @@ function attachEvents() {
     depthAlphaSlider.oninput = updateRenderParams;
     depthEnabledChk.onchange = sendCameraParams;
 
-    terminalInput.onkeydown = (e) => { if (e.key==='Enter') { sendTerminalCommand(terminalInput.value.trim()); terminalInput.value = ''; } };
-    aiSendBtn.onclick = sendAICommand;
-    aiCommandInput.onkeydown = (e) => { if (e.key==='Enter') sendAICommand(); };
-    aiAudioEnabledChk.onchange = async () => {
-        try { await fetch('/api/ai/audio', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:aiAudioEnabledChk.checked})}); } catch(e) {}
+    terminalInput.onkeydown = (e) => {
+        if (e.key==='Enter') { sendTerminalCommand(terminalInput.value.trim()); terminalInput.value = ''; }
     };
 
+    // Python exec
     document.getElementById('run-python-btn').onclick = async () => {
         const code = document.getElementById('python-code').value;
         if (!code.trim()) return;
+        const btn = document.getElementById('run-python-btn');
+        const spinner = document.getElementById('python-spinner');
         const out = document.getElementById('python-output');
+        btn.disabled = true; spinner.classList.remove('hidden');
         out.textContent = 'Выполнение...';
         try {
             const r = await fetch('/api/python/exec', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code})});
@@ -720,39 +329,58 @@ function attachEvents() {
             out.textContent = (d.stdout||'') + ((d.stderr)?'\n--- ОШИБКИ ---\n'+d.stderr:'') || '✓ Успешно';
             out.scrollTop = out.scrollHeight;
         } catch(e) { out.textContent = 'Ошибка: ' + e.message; }
+        finally { btn.disabled = false; spinner.classList.add('hidden'); }
     };
     document.getElementById('clear-python-btn').onclick = () => {
         document.getElementById('python-code').value = '';
         document.getElementById('python-output').textContent = '';
     };
 
-    document.getElementById('updateBtn').onclick = async () => {
-        const btn = document.getElementById('updateBtn');
-        btn.disabled = true; btn.textContent = 'Обновление...';
+    // Shutdown confirmation
+    let shutdownTimer = null;
+    exitBtn.onclick = () => {
+        if (shutdownTimer) {
+            clearTimeout(shutdownTimer);
+            shutdownTimer = null;
+            performShutdown();
+            return;
+        }
+        exitBtn.textContent = '⏻ Подтвердить';
+        exitBtn.classList.add('confirming');
+        shutdownTimer = setTimeout(() => {
+            exitBtn.textContent = '⏻';
+            exitBtn.classList.remove('confirming');
+            shutdownTimer = null;
+        }, 3000);
+    };
+
+    async function performShutdown() {
+        exitBtn.disabled = true; exitBtn.textContent = '<span class="loading-spinner"></span> Выключение...';
+        try {
+            const r = await fetch('/api/shutdown', {method:'POST'});
+            const d = await r.json();
+            exitBtn.textContent = d.message || 'Выключение...';
+        } catch(e) { alert('Ошибка при завершении'); exitBtn.disabled = false; exitBtn.textContent = '⏻'; exitBtn.classList.remove('confirming'); }
+    }
+
+    // Update
+    updateBtn.onclick = async () => {
+        updateBtn.disabled = true; updateBtn.innerHTML = '<span class="loading-spinner"></span> Обновление...';
         try {
             const r = await fetch('/api/update', {method:'POST'});
             const d = await r.json();
             alert(d.message || 'Обновление запущено.');
-        } catch(e) { alert('Ошибка: '+e.message); btn.disabled = false; btn.textContent = '↻'; }
-    };
-    document.getElementById('exitBtn').onclick = async () => {
-        try {
-            const r = await fetch('/api/shutdown', {method:'POST'});
-            alert((await r.json()).message || 'Завершение работы...');
-        } catch(e) { alert('Ошибка при завершении'); }
+        } catch(e) { alert('Ошибка: '+e.message); updateBtn.disabled = false; updateBtn.textContent = '↻'; }
     };
 }
 
-// ===================== ИНИЦИАЛИЗАЦИЯ =====================
+// ===================== INIT =====================
 async function init() {
     attachEvents();
-    // Сначала загружаем настройки с сервера
-    loadSettingsFromServer();
-    // Затем применяем их и запускаем обновления
+    restoreState();
     await updateRenderParams();
     fetchSystemStats();
     fetchTerminalOutput();
-    startPollingAI();
     setInterval(fetchSystemStats, 2200);
     setInterval(fetchTerminalOutput, 400);
 }

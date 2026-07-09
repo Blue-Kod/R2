@@ -4,10 +4,7 @@
 import argparse
 import time
 
-from robov_core.ai import command, send_frame
-from robov_core.high_level import start_background
-
-APP_VERSION = "0.2"
+from robov_core.high_level import start_background, APP_VERSION
 
 
 def parse_args():
@@ -22,7 +19,5 @@ if __name__ == "__main__":
         print(f"R2 Robot v{APP_VERSION}")
     else:
         start_background()
-        command("Система запущена. Скажи 'Здравствуйте. Я готов к работе.'")
         while True:
             time.sleep(1)
-            send_frame()

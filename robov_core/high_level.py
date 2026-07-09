@@ -1,4 +1,3 @@
-# high_level.py
 import os
 import platform
 import socket
@@ -7,7 +6,8 @@ import sys
 import threading
 import time
 from collections import deque
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -15,7 +15,6 @@ import psutil
 
 from robov_core.camera import StereoCamera
 from robov_core.servo import ServoController
-from robov_core.config import AppConfig
 
 try:
     from robov_core.eyes_display import EyeDisplay, optimize_for_arm
@@ -25,23 +24,41 @@ except ImportError:
     EyeDisplay = None
     optimize_for_arm = None
 
-# Global state
-_camera = None
-_servo = None
-_display = None
-_eye_api = None
-_lock = threading.Lock()
-_servo_lock = threading.Lock()
-_display_lock = threading.Lock()
+# --- Configuration ---
+APP_VERSION = "0.2"
+HTTP_HOST = "0.0.0.0"
+HTTP_PORT = 80
+CAMERA_SOURCE = 0
+CAMERA_PARAMS_FILE = "cam_params.json"
+LAUNCHER_SCRIPT = "launcher.py"
+EYES_SCALE_FACTOR = 1.3
+APP_PASSWORD = "admin."
 
-_logs_buffer = deque(maxlen=500)
+DEFAULT_SERVO_ANGLES: Dict[int, int] = {
+    0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
+    5: 45, 6: 135, 7: 135, 8: 90, 9: 90
+}
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# --- Global state ---
+_camera: Optional[StereoCamera] = None
+_servo: Optional[ServoController] = None
+_display: Optional[EyeDisplay] = None
+_eye_api = None
+_lock: threading.Lock = threading.Lock()
+_servo_lock: threading.Lock = threading.Lock()
+_display_lock: threading.Lock = threading.Lock()
+
+_logs_buffer: deque = deque(maxlen=500)
+
 
 class StdoutCapture:
-    def __init__(self):
+    def __init__(self) -> None:
         self._original_stdout = sys.stdout
-        self._lock = threading.Lock()
+        self._lock: threading.Lock = threading.Lock()
 
-    def write(self, message):
+    def write(self, message: str) -> None:
         if isinstance(message, bytes):
             message = message.decode('utf-8', errors='replace')
         self._original_stdout.write(message)
@@ -52,58 +69,61 @@ class StdoutCapture:
                     if line.strip():
                         _logs_buffer.append(line)
 
-    def flush(self):
+    def flush(self) -> None:
         self._original_stdout.flush()
 
-_stdout_capture = StdoutCapture()
-_stderr_capture = StdoutCapture()
 
-_hardware_initialized = False
-_shutdown_requested = False
+_stdout_capture = StdoutCapture()
+sys.stdout = _stdout_capture
+sys.stderr = _stdout_capture
+
+_hardware_initialized: bool = False
+_shutdown_requested: bool = False
 
 _shell_proc = None
-_shell_buffer = deque(maxlen=2000)
-_shell_running = False
-_shell_lock = threading.Lock()
-_shell_thread = None
+_shell_buffer: deque = deque(maxlen=2000)
+_shell_running: bool = False
+_shell_lock: threading.Lock = threading.Lock()
+_shell_thread: Optional[threading.Thread] = None
 
-_current_emote = "normal"
-_eyes_x = 0.0
-_eyes_y = 0.0
-_emote_lock = threading.Lock()
-_emotions_dir = os.path.join(os.path.dirname(__file__), "emotions")
-_supported_emotes = [os.path.splitext(f)[0] for f in os.listdir(_emotions_dir) if f.endswith(".png")]
+_current_emote: str = "normal"
+_eyes_x: float = 0.0
+_eyes_y: float = 0.0
+_emote_lock: threading.Lock = threading.Lock()
+_emotions_dir: str = os.path.join(os.path.dirname(__file__), "emotions")
+_supported_emotes: List[str] = [os.path.splitext(f)[0] for f in os.listdir(_emotions_dir) if f.endswith(".png")]
 
-_all_threads = []
+_all_threads: List[threading.Thread] = []
+
 
 def log(message: str) -> None:
     print(message)
 
-def _init_hardware():
+
+def _init_hardware() -> None:
     global _camera, _servo
-    from robov_core.config import AppConfig
-    config = AppConfig()
-    if config.camera_config_path.exists():
-        _camera = StereoCamera(str(config.camera_config_path), source=config.camera_source)
-        if _camera.initialize_camera():
-            log(f"Camera initialized on {platform.system()}")
-        else:
-            log(f"Camera capture failed on {platform.system()} - continuing with mock camera")
-            # Don't raise error, continue with failed camera that will show "CAMERA ERROR"
+
+    cam_path = ROOT_DIR / CAMERA_PARAMS_FILE
+    if cam_path.exists():
+        try:
+            _camera = StereoCamera(str(cam_path), source=CAMERA_SOURCE)
+            if _camera.initialize_camera():
+                _camera.start_continuous_capture()
+                log(f"Camera initialized on {platform.system()}")
+            else:
+                log("Camera capture failed - continuing with mock camera")
+        except Exception as exc:
+            log(f"Camera init error: {exc} - continuing with mock camera")
     else:
         log("Camera config not found - continuing with mock camera")
-        # Don't raise error, continue without camera
 
-    # Initialize servo controller (platform-specific)
     if platform.system() == "Windows":
         log("Mock servo mode on Windows")
     else:
         try:
             _servo = ServoController(bus=0, address=0x40, freq=50)
             log("Servo controller initialized")
-            from robov_core.config import AppConfig
-            config = AppConfig()
-            for channel, angle in config.default_servo_angles.items():
+            for channel, angle in DEFAULT_SERVO_ANGLES.items():
                 if channel in _servo.channel_configs:
                     _servo.set_servo(channel, angle, smooth=False)
         except Exception as exc:
@@ -111,7 +131,7 @@ def _init_hardware():
             log("Falling back to mock servo")
 
 
-def _shell_reader():
+def _shell_reader() -> None:
     global _shell_running
     try:
         while _shell_running:
@@ -142,7 +162,7 @@ def _decode_output(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def shell_start():
+def shell_start() -> None:
     global _shell_proc, _shell_running, _shell_thread
 
     if _shell_running:
@@ -206,21 +226,16 @@ def shell_onetime(command: str) -> str:
 
 def set_emote(emotion_name: str) -> bool:
     global _current_emote
-
     name = str(emotion_name or "").strip().lower()
     if name not in _supported_emotes:
         return False
-
     with _emote_lock:
         _current_emote = name
-
     if _eye_api:
         try:
             _eye_api.update_emote(name)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).debug(f"Failed to push emote to display: {e}")
-
+        except Exception:
+            pass
     return True
 
 
@@ -233,25 +248,22 @@ def set_eyes_position(x: float, y: float) -> None:
     global _eyes_x, _eyes_y
     x = max(-1.0, min(1.0, float(x)))
     y = max(-1.0, min(1.0, float(y)))
-
     with _emote_lock:
         _eyes_x = x
         _eyes_y = y
-
     if _eye_api:
         try:
             _eye_api.update_eyes_position(x, y)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).debug(f"Failed to push eyes position to display: {e}")
+        except Exception:
+            pass
 
 
-def get_eyes_position():
+def get_eyes_position() -> Tuple[float, float]:
     with _emote_lock:
         return _eyes_x, _eyes_y
 
 
-def supported_emotes():
+def supported_emotes() -> List[str]:
     return sorted(_supported_emotes)
 
 
@@ -275,7 +287,7 @@ def ip_address() -> str:
         sock.close()
 
 
-def get_logs(n: int = 500) -> list:
+def get_logs(n: int = 500) -> List[str]:
     with _lock:
         return list(_logs_buffer)[-n:]
 
@@ -288,48 +300,40 @@ def health_snapshot() -> dict:
     }
 
 
-def _display_worker():
+def _display_worker() -> None:
     global _display, _eye_api
 
     if not _HAS_DISPLAY:
-        print("[!] eyes_display.py not available, skipping pywebview display")
+        print("[!] eyes_display.py not available, skipping display")
         return
 
     if optimize_for_arm:
         optimize_for_arm()
 
     with _display_lock:
-        config = AppConfig()
-        _display = EyeDisplay(scale_factor=config.eyes_scale_factor)
+        _display = EyeDisplay(scale_factor=EYES_SCALE_FACTOR)
 
     _eye_api = _display.api
-
     _display.start()
 
 
-def start_background():
+def start_background() -> None:
     global _hardware_initialized, _all_threads
 
     if _hardware_initialized:
         return
 
-    sys.stdout = _stdout_capture
-    sys.stderr = _stderr_capture
-
-    log("R2 v2.0 - Starting...")
+    log(f"R2 v{APP_VERSION} - Starting...")
 
     _init_hardware()
-
     shell_start()
     if _shell_thread:
         _all_threads.append(_shell_thread)
 
     from robov_core.web import create_app
-    from robov_core.config import AppConfig
-    config = AppConfig()
     app = create_app()
     web_thread = threading.Thread(
-        target=lambda: app.run(host=config.host, port=config.http_port, debug=False, threaded=True, use_reloader=False),
+        target=lambda: app.run(host=HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True, use_reloader=False),
         daemon=True,
         name="r2-web-thread"
     )
@@ -344,8 +348,8 @@ def start_background():
     _hardware_initialized = True
 
 
-def cleanup():
-    global _shutdown_requested, _hardware_initialized
+def cleanup() -> None:
+    global _shutdown_requested, _hardware_initialized, _shell_running
 
     if not _hardware_initialized:
         return
@@ -354,6 +358,10 @@ def cleanup():
     _shutdown_requested = True
     _shell_running = False
 
+    if _camera:
+        _camera.stop_continuous_capture()
+        _camera.release_camera()
+
     if _shell_thread and _shell_thread.is_alive():
         _shell_thread.join(timeout=2.0)
 
@@ -361,25 +369,25 @@ def cleanup():
         try:
             _shell_proc.terminate()
             _shell_proc.wait(timeout=2.0)
-        except:
+        except Exception:
             pass
 
     for t in _all_threads:
         if t.is_alive() and t != threading.current_thread():
             try:
                 t.join(timeout=1.0)
-            except:
+            except Exception:
                 pass
 
     log("Cleanup complete.")
     _hardware_initialized = False
 
 
-def get_stereo_camera():
+def get_stereo_camera() -> Optional[StereoCamera]:
     return _camera
 
 
-def get_camera(left: bool):
+def get_camera(left: bool) -> Optional[np.ndarray]:
     camera = get_stereo_camera()
     if camera is None:
         return None
@@ -391,31 +399,21 @@ def get_camera(left: bool):
     return frame
 
 
-def get_raw_frame(left=True):
+def get_raw_frame(left: bool = True) -> Optional[np.ndarray]:
     camera = get_stereo_camera()
     if camera is not None:
         return camera.get_rectified_frame(left)
     return None
 
 
-def angle(servo: int, angle_value: int):
+def angle(servo: int, angle_value: int) -> bool:
     if _servo is None:
         return False
     return _servo.set_servo(servo, angle_value, smooth=True, step_delay=0.01, step_angle=2)
 
 
-def get_coords_stereo(stereo_image, x: int, y: int):
-    """Get real-world coordinates from stereo image at pixel position (x, y).
-    
-    Args:
-        stereo_image: Not used (kept for API compatibility)
-        x: X pixel coordinate
-        y: Y pixel coordinate
-        
-    Returns:
-        tuple: (x, y, z) in meters or None if failed
-    """
-    _ = stereo_image  # Kept for API compatibility
+def get_coords_stereo(stereo_image, x: int, y: int) -> Optional[Tuple[float, float, float]]:
+    _ = stereo_image
     camera = get_stereo_camera()
     if camera is None:
         return None
@@ -429,21 +427,19 @@ def get_coords_stereo(stereo_image, x: int, y: int):
         return None
 
 
-
-
-def emote(emotion_name: str):
+def emote(emotion_name: str) -> bool:
     return set_emote(emotion_name)
 
-def get_servo_offsets():
-    """Возвращает словарь {channel: offset} текущих оффсетов."""
+
+def get_servo_offsets() -> Dict[int, float]:
     servo = _servo
     if servo is None:
         return {}
     with servo.lock:
         return dict(servo.offsets)
 
-def get_servo_angles():
-    """Возвращает словарь {channel: angle} текущих углов сервоприводов."""
+
+def get_servo_angles() -> Dict[int, int]:
     servo = _servo
     if servo is None:
         return {}
@@ -454,8 +450,8 @@ def get_servo_angles():
         log(f"Error getting servo angles: {e}")
         return {}
 
-def get_servo_angles_physical():
-    """Возвращает словарь {channel: angle} физических углов (с инверсией)."""
+
+def get_servo_angles_physical() -> Dict[int, int]:
     servo = _servo
     if servo is None:
         return {}
@@ -474,8 +470,8 @@ def get_servo_angles_physical():
         log(f"Error getting physical servo angles: {e}")
         return {}
 
+
 def set_servo_physical(channel: int, physical_angle: int) -> bool:
-    """Устанавливает физический угол сервопривода (с учетом инверсии)."""
     servo = _servo
     if servo is None:
         return False
@@ -489,14 +485,9 @@ def set_servo_physical(channel: int, physical_angle: int) -> bool:
         logical_angle = physical_angle
     return servo.set_servo(channel, int(logical_angle), smooth=True, step_delay=0.01, step_angle=2)
 
-def set_servo_offset(channel: int, offset: float):
-    """Устанавливает оффсет сервоканала."""
+
+def set_servo_offset(channel: int, offset: float) -> bool:
     servo = _servo
     if servo is None:
         return False
     return servo.set_offset(channel, offset)
-
-def start():
-    start_background()
-    while True:
-        time.sleep(0.01)
