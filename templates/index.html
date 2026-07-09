@@ -63,6 +63,19 @@
             .stats { justify-content: flex-start; }
             .topbar { grid-template-columns: 1fr; }
         }
+        #help-content h1 { font-size:18px; color:#fff; margin-bottom:12px; }
+        #help-content h2 { font-size:15px; color:#44944a; margin:18px 0 8px; }
+        #help-content h3 { font-size:13px; color:#ddd; margin:14px 0 6px; }
+        #help-content p { margin:6px 0; line-height:1.6; }
+        #help-content code { background:#1a1a1a; color:#e6db74; padding:2px 5px; border-radius:4px; font-size:12px; }
+        #help-content pre { background:#0d0d0d; border:1px solid #2a2a2a; border-radius:10px; padding:12px; overflow-x:auto; margin:10px 0; }
+        #help-content pre code { background:none; color:#e0e0e0; padding:0; }
+        #help-content table { width:100%; border-collapse:collapse; margin:10px 0; }
+        #help-content th, #help-content td { border:1px solid #2a2a2a; padding:6px 10px; text-align:left; font-size:12px; }
+        #help-content th { background:#1a1a1a; color:#44944a; }
+        #help-content hr { border:none; border-top:1px solid #2a2a2a; margin:16px 0; }
+        #help-content blockquote { border-left:3px solid #44944a; padding:6px 12px; margin:10px 0; background:#0f0f0f; border-radius:0 8px 8px 0; color:#aaa; }
+        #help-content strong { color:#fff; }
         @media (max-width: 480px) {
             .layout { padding: 8px; gap: 8px; }
             .servo-row label { width: 70px; font-size: 10px; }
@@ -72,6 +85,8 @@
             .nav-links a { padding: 6px 10px; font-size: 11px; }
         }
     </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
 </head>
 <body>
 <div class="layout">
@@ -138,13 +153,27 @@
                 <button id="tabTerminal" class="active">Терминал</button>
                 <button id="tabLogs">Логи</button>
                 <button id="tabPython">Python</button>
+                <button id="tabHelp">Помощь</button>
             </div>
             <div id="terminal-pane" style="display:flex; flex-direction:column; flex:1; min-height:0;">
-                <div id="terminal-output" class="terminal-box">➜ Ожидание команд...</div>
-                <div id="terminal-input-line" style="display: flex; margin-top: 8px; gap: 8px; align-items: center;">
-                    <span style="color:#44944a; font-family: monospace;">❯</span>
-                    <input type="text" id="terminal-command" placeholder="Введите команду (help, ls, ...)" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius: 12px; padding: 8px 12px; font-family: monospace; outline: none;">
+                <div style="display:flex; gap:6px; margin-bottom:6px; align-items:center; flex-shrink:0;">
+                    <button id="termLocalBtn" class="term-mode-btn" style="flex:1; cursor:pointer; border:none; border-radius:30px; padding:5px 12px; font-size:12px; font-weight:500; background:#44944a; color:white;">Локальный</button>
+                    <button id="termSshBtn" class="term-mode-btn" style="flex:1; cursor:pointer; border:none; border-radius:30px; padding:5px 12px; font-size:12px; font-weight:500; background:transparent; color:var(--muted);">SSH</button>
+                    <div style="flex:1;"></div>
+                    <span id="termStatus" style="font-size:11px; color:var(--muted); white-space:nowrap;">○ Откл</span>
                 </div>
+                <div id="termSshForm" class="hidden" style="display:flex; flex-direction:column; gap:5px; margin-bottom:6px; flex-shrink:0;">
+                    <div style="display:flex; gap:5px;">
+                        <input type="text" id="sshHost" placeholder="Хост" style="flex:2; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
+                        <input type="number" id="sshPort" placeholder="22" value="22" style="flex:0 0 60px; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
+                    </div>
+                    <div style="display:flex; gap:5px;">
+                        <input type="text" id="sshUser" placeholder="Пользователь" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
+                        <input type="password" id="sshPass" placeholder="Пароль" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:8px; padding:5px 8px; font-family:monospace; outline:none; font-size:12px;">
+                        <button id="sshConnectBtn" style="background:#44944a; color:white; border:none; border-radius:8px; padding:5px 12px; cursor:pointer; font-size:12px; font-weight:500;">→</button>
+                    </div>
+                </div>
+                <div id="terminal-container" style="flex:1; border-radius:14px; border:1px solid var(--line); overflow:hidden;"></div>
             </div>
             <div id="logs-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0;">
                 <div id="logs-output" class="terminal-box">📡 Логи загрузятся автоматически...</div>
@@ -156,6 +185,9 @@
                     <button id="clear-python-btn" style="background: #333; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;">Очистить</button>
                 </div>
                 <div id="python-output" class="terminal-box" style="flex:1;"></div>
+            </div>
+            <div id="help-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0; gap:0;">
+                <div id="help-content" class="terminal-box" style="line-height:1.6; font-size:13px;"></div>
             </div>
         </aside>
     </div>
@@ -181,15 +213,17 @@ const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
 const hudEnabledChk = document.getElementById('hudEnabled');
 const wlsEnabledChk = document.getElementById('wlsEnabled');
-const terminalOutputDiv = document.getElementById('terminal-output');
-const terminalInput = document.getElementById('terminal-command');
+const terminalContainer = document.getElementById('terminal-container');
 const logsOutput = document.getElementById('logs-output');
 const tabTerminal = document.getElementById('tabTerminal');
 const tabLogs = document.getElementById('tabLogs');
 const tabPython = document.getElementById('tabPython');
+const tabHelp = document.getElementById('tabHelp');
 const terminalPane = document.getElementById('terminal-pane');
 const logsPane = document.getElementById('logs-pane');
 const pythonPane = document.getElementById('python-pane');
+const helpPane = document.getElementById('help-pane');
+const helpContent = document.getElementById('help-content');
 const exitBtn = document.getElementById('exitBtn');
 const updateBtn = document.getElementById('updateBtn');
 
@@ -257,30 +291,102 @@ async function updateRenderParams() {
     } catch(e) {}
 }
 
-// ===================== TERMINAL =====================
-let lastTerminalOutput = '', fetchingTerminal = false, sendingCmd = false;
+// ===================== TERMINAL (xterm.js + WebSocket) =====================
+const term = new Terminal({
+    cursorBlink: true,
+    cursorStyle: 'block',
+    fontSize: 13,
+    fontFamily: "'JetBrains Mono', Consolas, monospace",
+    theme: { background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#44944a', selectionBackground: '#44944a40' },
+    cols: 80, rows: 24,
+    allowTransparency: false,
+    scrollback: 10000,
+});
+let termWs = null;
+let termMode = 'local';
+let termConnected = false;
 
-async function fetchTerminalOutput() {
-    if (fetchingTerminal) return;
-    fetchingTerminal = true;
-    try {
-        const r = await fetch('/api/cmd/output');
-        const d = await r.json();
-        if (d.output !== lastTerminalOutput) {
-            terminalOutputDiv.textContent = d.output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'');
-            terminalOutputDiv.scrollTop = terminalOutputDiv.scrollHeight;
-            lastTerminalOutput = d.output;
-        }
-    } catch(e) {} finally { fetchingTerminal = false; }
+function termOpen() {
+    const container = document.getElementById('terminal-container');
+    if (container && !term.element) {
+        term.open(container);
+        term.focus();
+        term.onData(data => {
+            if (termWs && termWs.readyState === WebSocket.OPEN) {
+                termWs.send(JSON.stringify({type: 'input', data}));
+            }
+        });
+        term.onResize(({cols, rows}) => {
+            if (termWs && termWs.readyState === WebSocket.OPEN) {
+                termWs.send(JSON.stringify({type: 'resize', cols, rows}));
+            }
+        });
+    }
 }
 
-async function sendTerminalCommand(cmd) {
-    if (sendingCmd || !cmd.trim()) return;
-    sendingCmd = true;
-    try {
-        await fetch('/api/cmd/send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd})});
-        await fetchTerminalOutput();
-    } catch(e) {} finally { sendingCmd = false; }
+function termConnect(mode, sshOpts) {
+    if (termWs) { termWs.close(); termWs = null; }
+    termConnected = false;
+    document.getElementById('termStatus').textContent = '○ Подкл...';
+
+    termWs = new WebSocket(`ws://${location.hostname}:8765/`);
+    termWs.onopen = () => {
+        const msg = {type: 'connect', mode};
+        if (mode === 'ssh') {
+            Object.assign(msg, sshOpts);
+        }
+        termWs.send(JSON.stringify(msg));
+    };
+    termWs.onmessage = (e) => {
+        try {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'connected') {
+                termConnected = true;
+                document.getElementById('termStatus').textContent = '● ' + (mode === 'ssh' ? sshOpts.host : 'Локальный');
+                term.clear();
+            } else if (msg.type === 'output') {
+                term.write(msg.data);
+            }
+        } catch(_) {
+            term.write(e.data);
+        }
+    };
+    termWs.onclose = () => {
+        termConnected = false;
+        document.getElementById('termStatus').textContent = '○ Откл';
+        if (termWs) { termWs = null; }
+        term.write('\r\n\x1b[33m[Соединение закрыто]\x1b[0m\r\n');
+    };
+    termWs.onerror = () => {
+        termConnected = false;
+        document.getElementById('termStatus').textContent = '✕ Ошибка';
+    };
+}
+
+function termDisconnect() {
+    if (termWs) {
+        termWs.send(JSON.stringify({type: 'disconnect'}));
+        termWs.close();
+        termWs = null;
+    }
+    termConnected = false;
+    document.getElementById('termStatus').textContent = '○ Откл';
+}
+
+function termSetMode(mode) {
+    termMode = mode;
+    termDisconnect();
+    document.querySelectorAll('.term-mode-btn').forEach(b => {
+        b.style.background = 'transparent';
+        b.style.color = 'var(--muted)';
+    });
+    const btn = mode === 'local' ? document.getElementById('termLocalBtn') : document.getElementById('termSshBtn');
+    btn.style.background = '#44944a';
+    btn.style.color = 'white';
+    document.getElementById('termSshForm').classList.toggle('hidden', mode !== 'ssh');
+    if (mode === 'local') {
+        termConnect('local');
+    }
 }
 
 // ===================== STATS =====================
@@ -306,19 +412,39 @@ function attachEvents() {
     tabTerminal.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabTerminal.classList.add('active');
-        terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden');
+        terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
     };
     tabLogs.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabLogs.classList.add('active');
-        logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden');
+        logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
         fetchSystemStats();
     };
     tabPython.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabPython.classList.add('active');
-        pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden');
+        pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); helpPane.classList.add('hidden');
     };
+    tabHelp.onclick = () => {
+        document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
+        tabHelp.classList.add('active');
+        helpPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden');
+        loadHelpContent();
+    };
+
+    let helpLoaded = false;
+    async function loadHelpContent() {
+        if (helpLoaded) return;
+        helpContent.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);">Загрузка справки...</div>';
+        try {
+            const r = await fetch('/api/help');
+            helpContent.innerHTML = await r.text();
+            helpContent.scrollTop = 0;
+            helpLoaded = true;
+        } catch(e) {
+            helpContent.innerHTML = '<div style="text-align:center;padding:30px;color:var(--danger);">Ошибка загрузки справки: ' + e.message + '</div>';
+        }
+    }
 
     eyeLeft.onchange = updateRenderParams;
     eyeRight.onchange = updateRenderParams;
@@ -327,9 +453,25 @@ function attachEvents() {
     hudEnabledChk.onchange = sendCameraParams;
     wlsEnabledChk.onchange = sendCameraParams;
 
-    terminalInput.onkeydown = (e) => {
-        if (e.key==='Enter') { sendTerminalCommand(terminalInput.value.trim()); terminalInput.value = ''; }
+    document.getElementById('termLocalBtn').onclick = () => termSetMode('local');
+    document.getElementById('termSshBtn').onclick = () => termSetMode('ssh');
+    document.getElementById('sshConnectBtn').onclick = () => {
+        const host = document.getElementById('sshHost').value.trim();
+        if (!host) return;
+        termConnect('ssh', {
+            host,
+            port: parseInt(document.getElementById('sshPort').value) || 22,
+            user: document.getElementById('sshUser').value.trim() || 'root',
+            password: document.getElementById('sshPass').value,
+        });
     };
+    // Enter in SSH password field also connects
+    document.getElementById('sshPass').onkeydown = (e) => {
+        if (e.key === 'Enter') document.getElementById('sshConnectBtn').click();
+    };
+
+    // Ensure terminal container exists and open xterm
+    setTimeout(termOpen, 100);
 
     // Python exec
     document.getElementById('run-python-btn').onclick = async () => {
@@ -397,9 +539,7 @@ async function init() {
     restoreState();
     await updateRenderParams();
     fetchSystemStats();
-    fetchTerminalOutput();
     setInterval(fetchSystemStats, 2200);
-    setInterval(fetchTerminalOutput, 400);
 }
 init();
 </script>

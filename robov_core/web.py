@@ -32,7 +32,7 @@ _mjpeg_fps: int = 0
 _mjpeg_lock: threading.Lock = threading.Lock()
 
 def _mjpeg_fps_worker() -> None:
-    global _mjpeg_fps
+    global _mjpeg_fps, _mjpeg_counter
     while True:
         time.sleep(1.0)
         with _mjpeg_lock:
@@ -156,14 +156,13 @@ def create_app() -> Flask:
         if not launcher_path.exists():
             return jsonify({"status": "error", "message": "launcher.py not found"}), 404
         try:
-            subprocess.Popen([sys.executable, str(launcher_path)])
-            log("Update process started")
-
-            def shutdown():
-                time.sleep(1)
+            def restart():
+                cleanup()
+                subprocess.Popen([sys.executable, str(launcher_path)])
+                log("Update process started")
                 os._exit(0)
 
-            threading.Thread(target=shutdown, daemon=True).start()
+            threading.Thread(target=restart, daemon=True).start()
             return jsonify({"status": "ok", "message": "Update started"})
         except Exception as exc:
             return jsonify({"status": "error", "message": str(exc)}), 500
@@ -563,5 +562,17 @@ def create_app() -> Flask:
             return jsonify({"error": "Permission denied"}), 403
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/help")
+    @require_auth
+    def api_help():
+        help_path = ROOT_DIR / "docs" / "ssh_help.md"
+        try:
+            raw = help_path.read_text(encoding="utf-8")
+            import markdown as _md
+            html = _md.markdown(raw, extensions=["fenced_code", "tables"])
+            return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        except Exception as e:
+            return f"<p>Ошибка загрузки справки: {e}</p>", 500
 
     return app

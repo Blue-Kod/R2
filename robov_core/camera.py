@@ -296,22 +296,24 @@ class StereoCamera:
             grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
             grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
             displ = self.left_matcher.compute(grayL, grayR)
-            if self.wls_enabled and self.right_matcher and self.wls_filter:
-                dispr = self.right_matcher.compute(grayR, grayL)
-                disp_out = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
-            else:
-                disp_out = displ
-            disp_out[disp_out < 0] = 0
+            displ[displ < 0] = 0
 
-            if self.depth_enabled:
-                depth_vis = cv2.normalize(disp_out, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+            if self.depth_enabled and not self.hud_enabled:
+                if self.wls_enabled and self.right_matcher and self.wls_filter:
+                    dispr = self.right_matcher.compute(grayR, grayL)
+                    disp_wls = self.wls_filter.filter(displ.copy(), grayL, disparity_map_right=dispr)
+                    disp_wls[disp_wls < 0] = 0
+                    depth_src = disp_wls
+                else:
+                    depth_src = displ
+                depth_vis = cv2.normalize(depth_src, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
                 depth_vis = cv2.morphologyEx(depth_vis, cv2.MORPH_OPEN, self.kernel)
                 depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
                 depth_resized = cv2.resize(depth_vis, self.img_size)
                 cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
 
             if self.hud_enabled:
-                frame = self._render_hud(frame, disp_out)
+                frame = self._render_hud(frame, displ)
         else:
             rawL = raw[:, :half_w]
             rawR = raw[:, half_w:]
@@ -320,22 +322,29 @@ class StereoCamera:
 
         return frame
 
-    def _render_hud(self, frame: np.ndarray, disp_full: np.ndarray) -> np.ndarray:
+    def _render_hud(self, frame: np.ndarray, disp_raw: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
-        dh, dw = disp_full.shape[:2]
+        dh, dw = disp_raw.shape[:2]
         result = frame.copy()
 
-        points_3d = cv2.reprojectImageTo3D(disp_full.astype(np.float32) / 16.0, self.Q)
+        d16 = disp_raw.astype(np.float32) / 16.0
+        points_3d = cv2.reprojectImageTo3D(d16, self.Q)
 
-        fx = int(w / 2 * dw / w)
-        fy = int(h / 2 * dh / h)
-        center_z = abs(points_3d[fy, fx, 2])
+        fx = dw // 2
+        fy = dh // 2
 
-        center_col_z = abs(points_3d[:, fx, 2])
-        valid = np.where((center_col_z > 0) & (center_col_z < 10000))[0]
+        d_center = float(d16[fy, fx])
+        if d_center > 0.5:
+            center_z = float(abs(points_3d[fy, fx, 2]))
+        else:
+            center_z = 0.0
+
+        col_z = np.abs(points_3d[:, fx, 2])
+        col_d = d16[:, fx]
+        valid = np.where((col_d > 0.5) & (col_z > 0) & (col_z < 50000))[0]
         if len(valid) > 0:
-            nearest_idx_full = valid[np.argmin(center_col_z[valid])]
-            nearest_z = center_col_z[nearest_idx_full]
+            nearest_idx_full = valid[np.argmin(col_z[valid])]
+            nearest_z = float(col_z[nearest_idx_full])
             nearest_idx = int(nearest_idx_full * h / dh)
         else:
             nearest_z = 0.0
@@ -357,9 +366,14 @@ class StereoCamera:
                 ty = y1 + pad + i * line_h + 12
                 cv2.putText(img, line, (x1 + pad, ty), font, font_scale, (240, 240, 240), 1)
 
-        depth_label = f"Center: {center_z:.0f} mm" if center_z < 5000 else "Center: --"
-        nearest_label = f"Near: {nearest_z:.0f} mm" if nearest_z > 0 else "Near: --"
-        draw_text_box(result, [depth_label, nearest_label], 12, h - 56)
+        def fmt(d):
+            if d <= 0:
+                return "--"
+            if d >= 10000:
+                return f"{d/1000:.1f} m"
+            return f"{d:.0f} mm"
+
+        draw_text_box(result, [f"Center: {fmt(center_z)}", f"Near: {fmt(nearest_z)}"], 12, h - 56)
 
         half_fov = self.camera_fov // 2
         for offset in range(-half_fov, half_fov + 1, 20):
