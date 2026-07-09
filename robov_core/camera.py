@@ -42,6 +42,7 @@ class StereoCamera:
         self.window_size: int = 11
         self.min_disp: int = 0
         self.num_disp: int = 128
+        self._remap_flags: int = cv2.INTER_NEAREST
 
         self._latest_frame: Optional[np.ndarray] = None
         self._capture_thread: Optional[threading.Thread] = None
@@ -208,36 +209,35 @@ class StereoCamera:
     def clear_buffer(self) -> None:
         self.disp_buffer.clear()
 
-    def get_rectified_frame(self, left: bool = True) -> np.ndarray:
-        left_frame, right_frame = self.get_rectified_frames()
-        if left_frame is None:
-            frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    def get_frame(self) -> np.ndarray:
+        if not self.cap or not self.cap.isOpened():
+            if not self.initialize_camera():
+                frame = np.zeros((*self.img_size[::-1], 3), dtype=np.uint8)
+                cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
+                return frame
+
+        for _ in range(3):
+            if not self.cap.grab():
+                break
+        ret, raw = self.cap.retrieve()
+        if not ret:
+            self.cap.release()
+            self.cap = None
+            frame = np.zeros((*self.img_size[::-1], 3), dtype=np.uint8)
             cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
             return frame
-        frame = left_frame if left else right_frame
-        frame = cv2.resize(frame, (640, 360))
-        return frame
 
-    def get_frame(self) -> np.ndarray:
+        frame = self._process_raw_frame(raw)
+
         with self.lock:
-            current_time = time.time()
             self._frame_count += 1
-            if current_time - self._last_frame_time >= 1.0:
-                self.fps = self._frame_count / (current_time - self._last_frame_time)
+            now = time.time()
+            if now - self._last_frame_time >= 1.0:
+                self.fps = self._frame_count / (now - self._last_frame_time)
                 self._frame_count = 0
-                self._last_frame_time = current_time
+                self._last_frame_time = now
 
-            frame = self.get_rectified_frame(left=self.show_left)
-
-            if self.depth_enabled:
-                left_frame, right_frame = self.get_rectified_frames()
-                if left_frame is not None:
-                    disparity_map = self.compute_disparity(left_frame, right_frame)
-                    depth_vis = self.visualize_disparity(disparity_map)
-                    depth_resized = cv2.resize(depth_vis, (frame.shape[1], frame.shape[0]))
-                    frame = cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0)
-
-            return frame
+        return frame
 
     def get_depth_at(self, x: int, y: int) -> float:
         left_frame, right_frame = self.get_rectified_frames()
@@ -276,16 +276,68 @@ class StereoCamera:
 
     # --- Shared frame buffer ---
 
+    def _process_raw_frame(self, raw: np.ndarray) -> np.ndarray:
+        raw = cv2.rotate(raw, cv2.ROTATE_180)
+        half_w = raw.shape[1] // 2
+        imgL = cv2.remap(raw[:, :half_w], self.lMapX, self.lMapY, self._remap_flags)
+        imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, self._remap_flags)
+
+        frame = imgL if self.show_left else imgR
+        frame = cv2.resize(frame, self.img_size)
+
+        if self.depth_enabled:
+            grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
+            grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
+            h, w = grayL.shape
+            grayL = cv2.resize(grayL, (0, 0), fx=0.5, fy=0.5)
+            grayR = cv2.resize(grayR, (0, 0), fx=0.5, fy=0.5)
+            displ = self.left_matcher.compute(grayL, grayR)
+            if self.wls_enabled and self.right_matcher and self.wls_filter:
+                dispr = self.right_matcher.compute(grayR, grayL)
+                filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
+            else:
+                filtered_disp = displ
+            filtered_disp[filtered_disp < 0] = 0
+            filtered_disp = cv2.resize(filtered_disp, (w, h))
+
+            depth_vis = cv2.normalize(filtered_disp, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+            depth_vis = cv2.morphologyEx(depth_vis, cv2.MORPH_OPEN, self.kernel)
+            depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
+            depth_resized = cv2.resize(depth_vis, self.img_size)
+            cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
+
+        return frame
+
     def _capture_loop(self) -> None:
         while self._capture_running:
             try:
-                frame = self.get_frame()
-                if frame is not None:
-                    with self.lock:
-                        self._latest_frame = frame
+                if not self.cap or not self.cap.isOpened():
+                    if not self.initialize_camera():
+                        time.sleep(0.5)
+                        continue
+
+                for _ in range(3):
+                    if not self.cap.grab():
+                        break
+                ret, raw = self.cap.retrieve()
+                if not ret:
+                    self.cap.release()
+                    self.cap = None
+                    time.sleep(0.1)
+                    continue
+
+                frame = self._process_raw_frame(raw)
+
+                with self.lock:
+                    self._latest_frame = frame
+                    self._frame_count += 1
+                    now = time.time()
+                    if now - self._last_frame_time >= 1.0:
+                        self.fps = self._frame_count / (now - self._last_frame_time)
+                        self._frame_count = 0
+                        self._last_frame_time = now
             except Exception:
-                pass
-            time.sleep(0.033)
+                time.sleep(0.01)
 
     def start_continuous_capture(self) -> None:
         if self._capture_running:
@@ -304,4 +356,6 @@ class StereoCamera:
         with self.lock:
             if self._latest_frame is not None:
                 return self._latest_frame
-        return self.get_frame()
+        frame = np.zeros((*self.img_size[::-1], 3), dtype=np.uint8)
+        cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        return frame

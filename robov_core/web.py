@@ -185,17 +185,13 @@ def create_app() -> Flask:
         def stream():
             while True:
                 camera = get_stereo_camera()
-                if camera:
-                    frame = camera.get_latest_frame()
-                else:
-                    frame = None
+                frame = camera.get_latest_frame() if camera else None
                 if frame is None:
                     frame = np.zeros((360, 640, 3), dtype=np.uint8)
                     cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-                _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
-                time.sleep(0.066)
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
