@@ -650,13 +650,13 @@ def main():
 
     log_message("[L] Setup already complete, proceeding...")
 
-    # Autostart setup
+    # Autostart setup — always refresh to pick up any changes
     if platform.system() == "Linux" and not args.dont_install_autostart:
         if not is_autostart_installed(target_user):
             log_message("[L] Autostart not found. Installing...")
-            setup_autostart_linux(target_user)
         else:
-            log_message("[L] Autostart already installed.")
+            log_message("[L] Updating autostart...")
+        setup_autostart_linux(target_user)
 
     # Internet check and repo update
     internet_ok = wait_for_internet(max_wait=60)

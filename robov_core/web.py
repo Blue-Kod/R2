@@ -563,16 +563,36 @@ def create_app() -> Flask:
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    @app.route("/api/help/files")
+    @require_auth
+    def api_help_files():
+        docs_dir = ROOT_DIR / "docs"
+        files = []
+        try:
+            for f in sorted(docs_dir.iterdir()):
+                if f.suffix == ".md":
+                    content = f.read_text("utf-8")
+                    title = content.split("\n")[0].lstrip("# ").strip() if content else f.stem
+                    files.append({"path": f.name, "title": title})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        return jsonify(files)
+
     @app.route("/api/help")
     @require_auth
     def api_help():
-        help_path = ROOT_DIR / "docs" / "ssh_help.md"
+        path = request.args.get("path", "ssh_help.md")
+        help_path = ROOT_DIR / "docs" / path
+        # prevent path traversal
+        try:
+            help_path = help_path.resolve().relative_to((ROOT_DIR / "docs").resolve())
+            help_path = ROOT_DIR / "docs" / help_path
+        except ValueError:
+            return "Invalid path", 400
         try:
             raw = help_path.read_text(encoding="utf-8")
-            import markdown as _md
-            html = _md.markdown(raw, extensions=["fenced_code", "tables"])
-            return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+            return raw, 200, {"Content-Type": "text/plain; charset=utf-8"}
         except Exception as e:
-            return f"<p>Ошибка загрузки справки: {e}</p>", 500
+            return f"Ошибка загрузки справки: {e}", 500
 
     return app

@@ -54,6 +54,7 @@
         .update-btn:disabled, .exit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .loading-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
         @keyframes spin { to { transform: rotate(360deg); } }
+        #help-sidebar button.active { background:#44944a30; color:#44944a; }
         @media (max-width: 1280px) {
             .container { grid-template-columns: 1fr; overflow: auto; }
             body { overflow: auto; }
@@ -87,6 +88,7 @@
     </style>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.10/marked.min.js"></script>
 </head>
 <body>
 <div class="layout">
@@ -187,7 +189,10 @@
                 <div id="python-output" class="terminal-box" style="flex:1;"></div>
             </div>
             <div id="help-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0; gap:0;">
-                <div id="help-content" class="terminal-box" style="line-height:1.6; font-size:13px;"></div>
+                <div style="display:flex; gap:8px; flex:1; min-height:0;">
+                    <div id="help-sidebar" style="flex:0 0 140px; overflow-y:auto; border:1px solid var(--line); border-radius:14px; background:#0d0d0d; padding:6px 0;"></div>
+                    <div id="help-content" class="terminal-box" style="flex:1; line-height:1.6; font-size:13px; overflow-y:auto;"></div>
+                </div>
             </div>
         </aside>
     </div>
@@ -223,6 +228,7 @@ const terminalPane = document.getElementById('terminal-pane');
 const logsPane = document.getElementById('logs-pane');
 const pythonPane = document.getElementById('python-pane');
 const helpPane = document.getElementById('help-pane');
+const helpSidebar = document.getElementById('help-sidebar');
 const helpContent = document.getElementById('help-content');
 const exitBtn = document.getElementById('exitBtn');
 const updateBtn = document.getElementById('updateBtn');
@@ -429,20 +435,62 @@ function attachEvents() {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabHelp.classList.add('active');
         helpPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden');
-        loadHelpContent();
+        if (!helpSidebar.children.length) loadHelpFiles();
     };
 
-    let helpLoaded = false;
-    async function loadHelpContent() {
-        if (helpLoaded) return;
-        helpContent.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);">Загрузка справки...</div>';
+    let currentHelpFile = '';
+
+    async function loadHelpFiles() {
+        helpSidebar.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:11px;">Загрузка...</div>';
         try {
-            const r = await fetch('/api/help');
-            helpContent.innerHTML = await r.text();
-            helpContent.scrollTop = 0;
-            helpLoaded = true;
+            const r = await fetch('/api/help/files');
+            const files = await r.json();
+            helpSidebar.innerHTML = '';
+            files.forEach(f => {
+                const item = document.createElement('button');
+                item.textContent = f.title;
+                item.style = 'display:block; width:100%; background:none; border:none; color:var(--muted); text-align:left; padding:7px 10px; cursor:pointer; font-size:12px; border-radius:8px; transition:0.15s;';
+                item.onmouseenter = () => { item.style.background = '#1a1a1a'; };
+                item.onmouseleave = () => { if (currentHelpFile !== f.path) item.style.background = 'none'; };
+                item.dataset.path = f.path;
+                item.onclick = () => loadHelpDoc(f.path, item);
+                helpSidebar.appendChild(item);
+            });
+            // open first doc
+            if (files.length) {
+                const first = helpSidebar.querySelector('button');
+                loadHelpDoc(files[0].path, first);
+            }
         } catch(e) {
-            helpContent.innerHTML = '<div style="text-align:center;padding:30px;color:var(--danger);">Ошибка загрузки справки: ' + e.message + '</div>';
+            helpSidebar.innerHTML = '<div style="padding:10px;color:var(--danger);font-size:11px;">Ошибка: ' + e.message + '</div>';
+        }
+    }
+
+    async function loadHelpDoc(path, btn) {
+        helpContent.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);">Загрузка...</div>';
+        helpSidebar.querySelectorAll('button').forEach(b => { b.style.background = 'none'; b.style.color = 'var(--muted)'; });
+        if (btn) { btn.style.background = '#44944a30'; btn.style.color = '#44944a'; }
+        currentHelpFile = path;
+        try {
+            const r = await fetch('/api/help?path=' + encodeURIComponent(path));
+            const md = await r.text();
+            helpContent.innerHTML = marked.parse(md);
+            helpContent.scrollTop = 0;
+            // open external links in new tab
+            helpContent.querySelectorAll('a[href^="http"]').forEach(a => a.target = '_blank');
+            // rewrite internal .md links to open in help
+            helpContent.querySelectorAll('a[href$=".md"]').forEach(a => {
+                const href = a.getAttribute('href');
+                if (href && !href.startsWith('http')) {
+                    a.onclick = (e) => {
+                        e.preventDefault();
+                        const btn = helpSidebar.querySelector(`button[data-path="${href}"]`);
+                        loadHelpDoc(href, btn || helpSidebar.querySelector('button'));
+                    };
+                }
+            });
+        } catch(e) {
+            helpContent.innerHTML = '<div style="text-align:center;padding:30px;color:var(--danger);">Ошибка: ' + e.message + '</div>';
         }
     }
 
