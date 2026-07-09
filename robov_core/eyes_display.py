@@ -348,7 +348,6 @@ class RobotFace:
 
         log.info("Shutting down...")
         pygame.quit()
-        os._exit(0)
 
     def start(self):
         self._run()
