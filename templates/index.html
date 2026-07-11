@@ -624,122 +624,134 @@ function attachEvents() {
         } catch(e) { alert('Ошибка: '+e.message); updateBtn.disabled = false; updateBtn.textContent = '↻'; }
     };
 
-    // ===================== AI CHAT =====================
-    let aiSSE = null;
-    let aiThinkingEl = null;
-    let aiToolsEl = null;
-    let aiAnswerEl = null;
-    let aiHistory = [];
-    let aiHistoryIdx = -1;
+    aiSendBtn.onclick = () => { aiInput.focus(); };
+    aiStopBtn.onclick = () => {};
+}
 
-    function aiAddMsg(type, label, text) {
-        const div = document.createElement('div');
-        div.className = 'ai-msg ai-msg-' + type;
-        if (label) div.innerHTML = '<span class="ai-label">' + label + '</span><br>';
-        const content = document.createElement('span');
+// ===================== AI CHAT (outside attachEvents for scope) =====================
+let aiSSE = null;
+let aiThinkingEl = null;
+let aiToolsEl = null;
+let aiAnswerEl = null;
+let aiHistory = [];
+let aiHistoryIdx = -1;
+
+function aiAddMsg(type, label, text) {
+    const div = document.createElement('div');
+    div.className = 'ai-msg ai-msg-' + type;
+    if (label) div.innerHTML = '<span class="ai-label">' + label + '</span><br>';
+    const content = document.createElement('span');
+    content.textContent = text;
+    div.appendChild(content);
+    aiChatLog.appendChild(div);
+    aiChatLog.scrollTop = aiChatLog.scrollHeight;
+    return div;
+}
+
+function aiUpdateOrCreate(type, label, text, elRef) {
+    if (!elRef) {
+        elRef = aiAddMsg(type, label, text);
+    } else {
+        const content = elRef.querySelector('span:last-child') || elRef;
         content.textContent = text;
-        div.appendChild(content);
-        aiChatLog.appendChild(div);
         aiChatLog.scrollTop = aiChatLog.scrollHeight;
-        return div;
     }
+    return elRef;
+}
 
-    function aiUpdateOrCreate(type, label, text, elRef) {
-        if (!elRef) {
-            elRef = aiAddMsg(type, label, text);
-        } else {
-            const content = elRef.querySelector('span:last-child') || elRef;
-            content.textContent = text;
-            aiChatLog.scrollTop = aiChatLog.scrollHeight;
-        }
-        return elRef;
+function aiSetStatus(state, text) {
+    aiDot.className = 'dot' + (state === 'thinking' ? ' thinking' : state === 'speaking' ? ' speaking' : '');
+    aiStatusText.textContent = text || 'Ожидание...';
+    if (state === 'thinking' || state === 'speaking') {
+        aiSendBtn.style.display = 'none';
+        aiStopBtn.style.display = '';
+    } else {
+        aiSendBtn.style.display = '';
+        aiStopBtn.style.display = 'none';
     }
+}
 
-    function aiSetStatus(state, text) {
-        aiDot.className = 'dot' + (state === 'thinking' ? ' thinking' : state === 'speaking' ? ' speaking' : '');
-        aiStatusText.textContent = text || 'Ожидание...';
-        if (state === 'thinking' || state === 'speaking') {
-            aiSendBtn.style.display = 'none';
-            aiStopBtn.style.display = '';
-        } else {
-            aiSendBtn.style.display = '';
-            aiStopBtn.style.display = 'none';
-        }
-    }
-
-    function aiConnectSSE() {
-        if (aiSSE) aiSSE.close();
-        aiSSE = new EventSource('/api/ai/stream');
-        aiSSE.onmessage = (e) => {
-            try {
-                const d = JSON.parse(e.data);
-                if (d.is_idle && !d.is_thinking && !d.is_speaking) {
-                    aiSetStatus('idle', 'Ожидание...');
-                    aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
-                    return;
-                }
-                if (d.is_thinking) {
-                    aiSetStatus('thinking', 'Рассуждает...');
-                    if (d.reasoning_text) {
-                        aiThinkingEl = aiUpdateOrCreate('think', 'Рассуждение', d.reasoning_text, aiThinkingEl);
-                    }
-                }
-                if (d.tools_text) {
-                    aiToolsEl = aiUpdateOrCreate('tool', 'Инструменты', d.tools_text, aiToolsEl);
-                }
-                if (d.is_speaking) {
-                    aiSetStatus('speaking', 'Говорит...');
-                }
-                if (!d.is_thinking && !d.is_speaking && !d.is_idle) {
-                    aiSetStatus('thinking', 'Думаю...');
-                }
-            } catch(err) {}
-        };
-        aiSSE.onerror = () => {
-            setTimeout(aiConnectSSE, 3000);
-        };
-    }
-
-    async function aiSend(prompt) {
-        if (!prompt.trim()) return;
-        aiAddMsg('user', 'Вы', prompt);
-        aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
-        aiSetStatus('thinking', 'Отправляю...');
+function aiConnectSSE() {
+    if (aiSSE) aiSSE.close();
+    aiSSE = new EventSource('/api/ai/stream');
+    aiSSE.onmessage = (e) => {
         try {
-            const r = await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})});
-            const d = await r.json();
-            if (d.error) aiAddMsg('error', 'Ошибка', d.error);
-        } catch(e) { aiAddMsg('error', 'Ошибка', e.message); }
-    }
-
-    async function aiStop() {
-        try { await fetch('/api/ai/stop', {method:'POST'}); } catch(e) {}
-        aiSetStatus('idle', 'Остановлен');
-        aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
-    }
-
-    aiSendBtn.onclick = () => {
-        if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
-        aiSend(aiInput.value); aiInput.value = '';
+            const d = JSON.parse(e.data);
+            if (d.is_idle && !d.is_thinking && !d.is_speaking) {
+                aiSetStatus('idle', 'Ожидание...');
+                aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+                return;
+            }
+            if (d.is_thinking) {
+                aiSetStatus('thinking', 'Рассуждает...');
+                if (d.reasoning_text) {
+                    aiThinkingEl = aiUpdateOrCreate('think', 'Рассуждение', d.reasoning_text, aiThinkingEl);
+                }
+            }
+            if (d.tools_text) {
+                aiToolsEl = aiUpdateOrCreate('tool', 'Инструменты', d.tools_text, aiToolsEl);
+            }
+            if (d.is_speaking) {
+                aiSetStatus('speaking', 'Говорит...');
+                if (d.last_answer && !aiAnswerEl) {
+                    aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
+                }
+            }
+            if (d.last_answer && !d.is_thinking && !d.is_speaking && !d.is_idle) {
+                if (!aiAnswerEl || (d.last_answer_time && aiAnswerEl.dataset.ts !== String(d.last_answer_time))) {
+                    aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
+                    if (d.last_answer_time) aiAnswerEl.dataset.ts = String(d.last_answer_time);
+                }
+            }
+            if (!d.is_thinking && !d.is_speaking && !d.is_idle) {
+                aiSetStatus('thinking', 'Думаю...');
+            }
+        } catch(err) {}
     };
-    aiStopBtn.onclick = aiStop;
-
-    aiInput.onkeydown = (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
-            aiSend(aiInput.value);
-            aiInput.value = '';
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (aiHistory.length && aiHistoryIdx > 0) { aiHistoryIdx--; aiInput.value = aiHistory[aiHistoryIdx]; }
-        } else if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            if (aiHistoryIdx < aiHistory.length - 1) { aiHistoryIdx++; aiInput.value = aiHistory[aiHistoryIdx]; }
-            else { aiHistoryIdx = aiHistory.length; aiInput.value = ''; }
-        }
+    aiSSE.onerror = () => {
+        setTimeout(aiConnectSSE, 3000);
     };
 }
+
+async function aiSend(prompt) {
+    if (!prompt.trim()) return;
+    aiAddMsg('user', 'Вы', prompt);
+    aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+    aiSetStatus('thinking', 'Отправляю...');
+    try {
+        const r = await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})});
+        const d = await r.json();
+        if (d.error) aiAddMsg('error', 'Ошибка', d.error);
+    } catch(e) { aiAddMsg('error', 'Ошибка', e.message); }
+}
+
+async function aiStop() {
+    try { await fetch('/api/ai/stop', {method:'POST'}); } catch(e) {}
+    aiSetStatus('idle', 'Остановлен');
+    aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+}
+
+aiSendBtn.onclick = () => {
+    if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
+    aiSend(aiInput.value); aiInput.value = '';
+};
+aiStopBtn.onclick = aiStop;
+
+aiInput.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
+        aiSend(aiInput.value);
+        aiInput.value = '';
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (aiHistory.length && aiHistoryIdx > 0) { aiHistoryIdx--; aiInput.value = aiHistory[aiHistoryIdx]; }
+    } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (aiHistoryIdx < aiHistory.length - 1) { aiHistoryIdx++; aiInput.value = aiHistory[aiHistoryIdx]; }
+        else { aiHistoryIdx = aiHistory.length; aiInput.value = ''; }
+    }
+};
 
 // ===================== INIT =====================
 async function init() {

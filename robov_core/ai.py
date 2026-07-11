@@ -778,6 +778,7 @@ class DisplayState:
         self.ticker_duration: float = 0.0
         self.last_answer: str = ""
         self.last_answer_time: float = 0.0
+        self.reasoning_history: str = ""
 
         self._sse_listeners: list = []
         self._sse_lock = threading.Lock()
@@ -801,6 +802,8 @@ class DisplayState:
                 "ticker_text": self.ticker_text,
                 "ticker_duration": self.ticker_duration,
                 "last_answer": self.last_answer,
+                "last_answer_time": self.last_answer_time,
+                "reasoning_history": self.reasoning_history,
             }
 
     def add_sse_listener(self, q: queue.Queue) -> None:
@@ -892,7 +895,7 @@ class R2Agent:
                 self._thread.join(timeout=3.0)
         self.display.update(
             is_idle=True, is_thinking=False, is_speaking=False,
-            reasoning_text="", tools_text="", answer_text="",
+            ticker_text="", ticker_duration=0.0,
         )
 
     def is_busy(self) -> bool:
@@ -902,10 +905,23 @@ class R2Agent:
     # Chat loop (runs in thread)
     # ------------------------------------------------------------------
     def _chat_loop(self, prompt: str) -> None:
+        with self.display.lock:
+            old_reasoning = self.display.reasoning_text
+            old_tools = self.display.tools_text
+            old_history = self.display.reasoning_history
+        combined = ""
+        if old_history:
+            combined = old_history
+        if old_reasoning:
+            combined += ("\n\n" if combined else "") + old_reasoning
+        if old_tools:
+            combined += ("\n\n" if combined else "") + old_tools
+
         self.display.update(
             is_idle=False, is_thinking=True, is_speaking=False,
             reasoning_text="", tools_text="", answer_text="",
             ticker_text="", ticker_duration=0.0,
+            reasoning_history=combined,
         )
 
         cwd = self.cwd
@@ -1043,7 +1059,6 @@ class R2Agent:
 
         self.display.update(
             is_idle=True, is_thinking=False,
-            reasoning_text="", tools_text="",
         )
 
     # ------------------------------------------------------------------

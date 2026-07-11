@@ -263,11 +263,12 @@ class RobotFace:
         self._preload_all_emotions()
         
         font = pygame.font.SysFont("Arial", 28, bold=True)
-        overlay_font = pygame.font.SysFont("Consolas", 18)
+        overlay_font = pygame.font.SysFont("Consolas", 28)
         ticker_font = pygame.font.SysFont("Arial", 36, bold=True)
 
         # Ticker state
         ticker_offset = 0.0
+        _prev_ticker_text = ""
 
         while self.state.is_running():
             # delta time in seconds
@@ -313,23 +314,32 @@ class RobotFace:
             if ai_state:
                 reasoning = ai_state.get("reasoning_text", "")
                 tools = ai_state.get("tools_text", "")
+                history = ai_state.get("reasoning_history", "")
+
                 overlay_text = ""
+                if history:
+                    overlay_text = history
                 if reasoning:
-                    overlay_text = reasoning
+                    overlay_text += ("\n\n" if overlay_text else "") + reasoning
                 if tools:
                     overlay_text += ("\n\n" if overlay_text else "") + tools
 
                 if overlay_text:
                     overlay_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
-                    # Word-wrap and render
                     lines = self._wrap_text(overlay_font, overlay_text, sw - 80)
+                    max_lines = (sh - 120) // 32
+                    if len(lines) > max_lines:
+                        paragraphs = overlay_text.split("\n\n")
+                        keep = max(1, len(paragraphs) // 4)
+                        trimmed = "\n\n".join(paragraphs[-keep:])
+                        lines = self._wrap_text(overlay_font, trimmed, sw - 80)
                     y = 20
                     for line in lines:
                         if y > sh - 80:
                             break
-                        surf = overlay_font.render(line, True, (255, 255, 255, 50))
+                        surf = overlay_font.render(line, True, (40, 40, 40, 80))
                         overlay_surf.blit(surf, (40, y))
-                        y += 22
+                        y += 32
                     screen.blit(overlay_surf, (0, 0))
 
             # Get current emote texture and blink scale
@@ -359,17 +369,19 @@ class RobotFace:
             if ai_state:
                 ticker_text = ai_state.get("ticker_text", "")
                 ticker_duration = ai_state.get("ticker_duration", 0)
+                if ticker_text != _prev_ticker_text:
+                    ticker_offset = 0.0
+                    _prev_ticker_text = ticker_text
                 if ticker_text and ticker_duration > 0:
                     text_surf = ticker_font.render(ticker_text, True, (255, 255, 255))
                     text_h = text_surf.get_height()
                     text_w = text_surf.get_width()
                     total_dist = sw + text_w
                     ticker_offset += (total_dist / ticker_duration) * dt
-                    if ticker_offset > total_dist:
-                        ticker_offset = 0.0
-                    tx = sw - int(ticker_offset) % total_dist
-                    ty = sh - max(42, int(sh * 0.10)) + (max(42, int(sh * 0.10)) - text_h) // 2
-                    screen.blit(text_surf, (tx, ty))
+                    if ticker_offset <= total_dist:
+                        tx = sw - int(ticker_offset)
+                        ty = sh - max(42, int(sh * 0.10)) + (max(42, int(sh * 0.10)) - text_h) // 2
+                        screen.blit(text_surf, (tx, ty))
 
             # Menu overlay (simplified – touch bottom area toggles)
             if getattr(self, '_menu_visible', False):
