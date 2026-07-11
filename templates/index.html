@@ -77,6 +77,23 @@
         #help-content hr { border:none; border-top:1px solid #2a2a2a; margin:16px 0; }
         #help-content blockquote { border-left:3px solid #44944a; padding:6px 12px; margin:10px 0; background:#0f0f0f; border-radius:0 8px 8px 0; color:#aaa; }
         #help-content strong { color:#fff; }
+        #ai-chat-log { flex:1; border-radius:14px; border:1px solid var(--line); background:#0d0d0d; padding:12px; overflow-y:auto; font-size:13px; line-height:1.5; font-family: 'JetBrains Mono', Consolas, monospace; display:flex; flex-direction:column; gap:6px; }
+        .ai-msg { padding:6px 10px; border-radius:10px; max-width:95%; animation: fadeIn 0.15s ease-in; }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+        .ai-msg-user { background:#1a2a1a; border:1px solid #2a3a2a; color:#b0e0b0; align-self:flex-end; border-bottom-right-radius:3px; }
+        .ai-msg-think { background:#151520; border:1px solid #252535; color:#7a7a9a; font-style:italic; font-size:12px; border-bottom-left-radius:3px; }
+        .ai-msg-think .ai-label { color:#5555aa; font-weight:600; font-style:normal; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
+        .ai-msg-tool { background:#1a1510; border:1px solid #2a2520; color:#c0a060; font-size:11px; border-bottom-left-radius:3px; }
+        .ai-msg-tool .ai-label { color:#aa8833; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
+        .ai-msg-answer { background:#101a15; border:1px solid #1a2a22; color:#e0f0e8; font-size:13px; border-bottom-left-radius:3px; }
+        .ai-msg-answer .ai-label { color:#44944a; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
+        .ai-msg-error { background:#201010; border:1px solid #301a1a; color:#e08080; border-bottom-left-radius:3px; }
+        .ai-msg-error .ai-label { color:#aa4444; font-weight:600; font-size:10px; }
+        .ai-msg-system { background:#101015; border:1px solid #1a1a25; color:#707088; font-size:11px; text-align:center; }
+        #ai-status-bar { display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--line); border-radius:12px; background:#0d0d0d; font-size:11px; color:var(--muted); flex-shrink:0; margin-top:6px; }
+        #ai-status-bar .dot { width:8px; height:8px; border-radius:50%; background:#555; flex-shrink:0; }
+        #ai-status-bar .dot.thinking { background:#d19a66; animation: pulse 0.8s infinite alternate; }
+        #ai-status-bar .dot.speaking { background:#44944a; animation: pulse 0.6s infinite alternate; }
         @media (max-width: 480px) {
             .layout { padding: 8px; gap: 8px; }
             .servo-row label { width: 70px; font-size: 10px; }
@@ -159,6 +176,7 @@
                 <button id="tabTerminal" class="active">Терминал</button>
                 <button id="tabLogs">Логи</button>
                 <button id="tabPython">Python</button>
+                <button id="tabAI">AI</button>
                 <button id="tabHelp">Помощь</button>
             </div>
             <div id="terminal-pane" style="display:flex; flex-direction:column; flex:1; min-height:0;">
@@ -191,6 +209,16 @@ speak("Привет, я робот R2!")</textarea></div>
                     <div id="help-sidebar" style="flex:0 0 140px; overflow-y:auto; border:1px solid var(--line); border-radius:14px; background:#0d0d0d; padding:6px 0;"></div>
                     <div id="help-content" class="terminal-box" style="flex:1; line-height:1.6; font-size:13px; overflow-y:auto;"></div>
                 </div>
+            </div>
+            <div id="ai-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0;">
+                <div id="ai-chat-log"></div>
+                <div style="display:flex; margin-top:8px; gap:8px; align-items:center; flex-shrink:0;">
+                    <span style="color:#44944a; font-family: monospace;">🤖</span>
+                    <input type="text" id="ai-input" placeholder="Спроси робота..." style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:12px; padding:8px 12px; font-family:monospace; outline:none; font-size:13px;">
+                    <button id="ai-send-btn" style="background:#44944a; color:white; border:none; border-radius:12px; padding:8px 16px; cursor:pointer; font-size:13px; font-weight:500; white-space:nowrap;">Отправить</button>
+                    <button id="ai-stop-btn" style="background:#8b0000; color:white; border:none; border-radius:12px; padding:8px 14px; cursor:pointer; font-size:13px; font-weight:500; white-space:nowrap; display:none;">Стоп</button>
+                </div>
+                <div id="ai-status-bar"><div class="dot" id="ai-dot"></div><span id="ai-status-text">Ожидание...</span></div>
             </div>
         </aside>
     </div>
@@ -233,6 +261,14 @@ const helpSidebar = document.getElementById('help-sidebar');
 const helpContent = document.getElementById('help-content');
 const exitBtn = document.getElementById('exitBtn');
 const updateBtn = document.getElementById('updateBtn');
+const tabAI = document.getElementById('tabAI');
+const aiPane = document.getElementById('ai-pane');
+const aiChatLog = document.getElementById('ai-chat-log');
+const aiInput = document.getElementById('ai-input');
+const aiSendBtn = document.getElementById('ai-send-btn');
+const aiStopBtn = document.getElementById('ai-stop-btn');
+const aiDot = document.getElementById('ai-dot');
+const aiStatusText = document.getElementById('ai-status-text');
 
 // ===================== STATE RESTORE =====================
 function restoreState() {
@@ -391,24 +427,31 @@ function attachEvents() {
     tabTerminal.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabTerminal.classList.add('active');
-        terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
+        terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden'); aiPane.classList.add('hidden');
     };
     tabLogs.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabLogs.classList.add('active');
-        logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
+        logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden'); aiPane.classList.add('hidden');
         fetchSystemStats();
     };
     tabPython.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabPython.classList.add('active');
-        pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); helpPane.classList.add('hidden');
+        pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); helpPane.classList.add('hidden'); aiPane.classList.add('hidden');
         if (!pythonEditor) initPythonEditor();
+    };
+    tabAI.onclick = () => {
+        document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
+        tabAI.classList.add('active');
+        aiPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
+        aiChatLog.scrollTop = aiChatLog.scrollHeight;
+        aiInput.focus();
     };
     tabHelp.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabHelp.classList.add('active');
-        helpPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden');
+        helpPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); aiPane.classList.add('hidden');
         if (!helpSidebar.children.length) loadHelpFiles();
     };
 
@@ -580,6 +623,122 @@ function attachEvents() {
             alert(d.message || 'Обновление запущено.');
         } catch(e) { alert('Ошибка: '+e.message); updateBtn.disabled = false; updateBtn.textContent = '↻'; }
     };
+
+    // ===================== AI CHAT =====================
+    let aiSSE = null;
+    let aiThinkingEl = null;
+    let aiToolsEl = null;
+    let aiAnswerEl = null;
+    let aiHistory = [];
+    let aiHistoryIdx = -1;
+
+    function aiAddMsg(type, label, text) {
+        const div = document.createElement('div');
+        div.className = 'ai-msg ai-msg-' + type;
+        if (label) div.innerHTML = '<span class="ai-label">' + label + '</span><br>';
+        const content = document.createElement('span');
+        content.textContent = text;
+        div.appendChild(content);
+        aiChatLog.appendChild(div);
+        aiChatLog.scrollTop = aiChatLog.scrollHeight;
+        return div;
+    }
+
+    function aiUpdateOrCreate(type, label, text, elRef) {
+        if (!elRef) {
+            elRef = aiAddMsg(type, label, text);
+        } else {
+            const content = elRef.querySelector('span:last-child') || elRef;
+            content.textContent = text;
+            aiChatLog.scrollTop = aiChatLog.scrollHeight;
+        }
+        return elRef;
+    }
+
+    function aiSetStatus(state, text) {
+        aiDot.className = 'dot' + (state === 'thinking' ? ' thinking' : state === 'speaking' ? ' speaking' : '');
+        aiStatusText.textContent = text || 'Ожидание...';
+        if (state === 'thinking' || state === 'speaking') {
+            aiSendBtn.style.display = 'none';
+            aiStopBtn.style.display = '';
+        } else {
+            aiSendBtn.style.display = '';
+            aiStopBtn.style.display = 'none';
+        }
+    }
+
+    function aiConnectSSE() {
+        if (aiSSE) aiSSE.close();
+        aiSSE = new EventSource('/api/ai/stream');
+        aiSSE.onmessage = (e) => {
+            try {
+                const d = JSON.parse(e.data);
+                if (d.is_idle && !d.is_thinking && !d.is_speaking) {
+                    aiSetStatus('idle', 'Ожидание...');
+                    aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+                    return;
+                }
+                if (d.is_thinking) {
+                    aiSetStatus('thinking', 'Рассуждает...');
+                    if (d.reasoning_text) {
+                        aiThinkingEl = aiUpdateOrCreate('think', 'Рассуждение', d.reasoning_text, aiThinkingEl);
+                    }
+                }
+                if (d.tools_text) {
+                    aiToolsEl = aiUpdateOrCreate('tool', 'Инструменты', d.tools_text, aiToolsEl);
+                }
+                if (d.is_speaking) {
+                    aiSetStatus('speaking', 'Говорит...');
+                }
+                if (!d.is_thinking && !d.is_speaking && !d.is_idle) {
+                    aiSetStatus('thinking', 'Думаю...');
+                }
+            } catch(err) {}
+        };
+        aiSSE.onerror = () => {
+            setTimeout(aiConnectSSE, 3000);
+        };
+    }
+
+    async function aiSend(prompt) {
+        if (!prompt.trim()) return;
+        aiAddMsg('user', 'Вы', prompt);
+        aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+        aiSetStatus('thinking', 'Отправляю...');
+        try {
+            const r = await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})});
+            const d = await r.json();
+            if (d.error) aiAddMsg('error', 'Ошибка', d.error);
+        } catch(e) { aiAddMsg('error', 'Ошибка', e.message); }
+    }
+
+    async function aiStop() {
+        try { await fetch('/api/ai/stop', {method:'POST'}); } catch(e) {}
+        aiSetStatus('idle', 'Остановлен');
+        aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+    }
+
+    aiSendBtn.onclick = () => {
+        if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
+        aiSend(aiInput.value); aiInput.value = '';
+    };
+    aiStopBtn.onclick = aiStop;
+
+    aiInput.onkeydown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
+            aiSend(aiInput.value);
+            aiInput.value = '';
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (aiHistory.length && aiHistoryIdx > 0) { aiHistoryIdx--; aiInput.value = aiHistory[aiHistoryIdx]; }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (aiHistoryIdx < aiHistory.length - 1) { aiHistoryIdx++; aiInput.value = aiHistory[aiHistoryIdx]; }
+            else { aiHistoryIdx = aiHistory.length; aiInput.value = ''; }
+        }
+    };
 }
 
 // ===================== INIT =====================
@@ -594,6 +753,22 @@ async function init() {
     fetchTerminalOutput();
     setInterval(fetchSystemStats, 2200);
     setInterval(fetchTerminalOutput, 400);
+    aiConnectSSE();
+
+    // Poll for AI answer display (SSE may not always carry the final answer)
+    setInterval(async () => {
+        if (aiPane.classList.contains('hidden')) return;
+        try {
+            const r = await fetch('/api/ai/status');
+            const d = await r.json();
+            if (d.last_answer && d.last_answer_time) {
+                if (!aiAnswerEl || aiAnswerEl.dataset.ts !== String(d.last_answer_time)) {
+                    aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
+                    aiAnswerEl.dataset.ts = String(d.last_answer_time);
+                }
+            }
+        } catch(e) {}
+    }, 1000);
 }
 init();
 </script>

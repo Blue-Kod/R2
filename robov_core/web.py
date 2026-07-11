@@ -1,3 +1,4 @@
+import json as _json
 import os
 import subprocess
 import sys
@@ -6,6 +7,7 @@ import time
 import shutil
 import mimetypes
 import functools
+import queue
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +27,8 @@ from robov_core.high_level import (
     get_servo_angles, get_servo_angles_physical, get_servo_offsets,
     set_servo_physical, log, cleanup,
 )
+
+from robov_core.ai import init_agent
 
 
 _mjpeg_counter: int = 0
@@ -596,5 +600,67 @@ def create_app() -> Flask:
             return raw, 200, {"Content-Type": "text/plain; charset=utf-8"}
         except Exception as e:
             return f"Ошибка загрузки справки: {e}", 500
+
+    # --- AI Agent ---
+
+    @app.route("/api/ai/command", methods=["POST"])
+    @require_auth
+    def ai_command():
+        data = request.get_json(silent=True) or {}
+        prompt = str(data.get("prompt", "")).strip()
+        if not prompt:
+            return jsonify({"error": "No prompt"}), 400
+        try:
+            agent = init_agent()
+            agent.command(prompt)
+            return jsonify({"status": "ok"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/ai/stop", methods=["POST"])
+    @require_auth
+    def ai_stop():
+        try:
+            agent = init_agent()
+            agent.stop()
+            return jsonify({"status": "ok"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/ai/status")
+    @require_auth
+    def ai_status():
+        try:
+            agent = init_agent()
+            return jsonify(agent.display.get_all())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/ai/stream")
+    @require_auth
+    def ai_stream():
+        def generate():
+            q = queue.Queue()
+            agent = init_agent()
+            agent.display.add_sse_listener(q)
+            try:
+                while True:
+                    try:
+                        data = q.get(timeout=15)
+                        yield f"data: {_json.dumps(data, ensure_ascii=False)}\n\n"
+                    except queue.Empty:
+                        yield f": keepalive\n\n"
+            except GeneratorExit:
+                agent.display.remove_sse_listener(q)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     return app

@@ -98,6 +98,8 @@ _all_threads: List[threading.Thread] = []
 
 _tts: Any = None
 
+_ai_agent = None
+
 
 def speak(text: str) -> None:
     global _tts
@@ -414,6 +416,42 @@ def start_background() -> None:
         _display_thread.start()
         _all_threads.append(_display_thread)
 
+    # Initialize AI agent
+    try:
+        from robov_core.ai import init_agent
+        global _ai_agent
+        _ai_agent = init_agent(cwd=str(ROOT_DIR))
+        # Inject robot API into AI's python environment
+        _ai_agent.executor.python_env.update({
+            "angle": angle,
+            "emote": emote,
+            "speak": speak,
+            "set_emote": set_emote,
+            "get_emote": get_emote,
+            "set_eyes_position": set_eyes_position,
+            "get_eyes_position": get_eyes_position,
+            "get_stereo_camera": get_stereo_camera,
+            "get_raw_frame": get_raw_frame,
+            "get_coords_stereo": get_coords_stereo,
+            "health_snapshot": health_snapshot,
+            "ip_address": ip_address,
+            "log": log,
+            "cleanup": cleanup,
+            "shell_start": shell_start,
+            "shell_write": shell_write,
+            "shell_output": shell_output,
+            "shell_onetime": shell_onetime,
+            "get_servo_angles": get_servo_angles,
+            "get_servo_offsets": get_servo_offsets,
+            "set_servo_physical": set_servo_physical,
+            "get_servo_angles_physical": get_servo_angles_physical,
+            "set_emote": set_emote,
+            "supported_emotes": supported_emotes,
+        })
+        log("AI agent initialized")
+    except Exception as e:
+        log(f"AI agent init error: {e}")
+
     _hardware_initialized = True
 
 
@@ -560,3 +598,7 @@ def set_servo_offset(channel: int, offset: float) -> bool:
     if servo is None:
         return False
     return servo.set_offset(channel, offset)
+
+
+def get_ai_agent():
+    return _ai_agent

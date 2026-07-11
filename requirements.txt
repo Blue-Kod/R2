@@ -45,3 +45,6 @@ mss>=9.0.0
 
 # Russian TTS
 retro-ru-tts>=1.0.7
+
+# AI / LLM (EveryLLM backend)
+g4f>=7.8.0

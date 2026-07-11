@@ -5,6 +5,8 @@ Robot Face Display using a single face texture (PNG).
 Texture touches left/right screen edges.
 Blinking = vertical squash of the whole face.
 Smooth emote change: close -> swap texture -> open.
+AI overlay: semi-transparent reasoning text behind the face.
+Ticker: scrolling answer text at bottom synced to audio duration.
 """
 
 import math
@@ -261,6 +263,11 @@ class RobotFace:
         self._preload_all_emotions()
         
         font = pygame.font.SysFont("Arial", 28, bold=True)
+        overlay_font = pygame.font.SysFont("Consolas", 18)
+        ticker_font = pygame.font.SysFont("Arial", 36, bold=True)
+
+        # Ticker state
+        ticker_offset = 0.0
 
         while self.state.is_running():
             # delta time in seconds
@@ -301,6 +308,30 @@ class RobotFace:
             # Clear screen
             screen.fill((0, 0, 0))
 
+            # --- AI reasoning overlay (behind the face) ---
+            ai_state = self._get_ai_state()
+            if ai_state:
+                reasoning = ai_state.get("reasoning_text", "")
+                tools = ai_state.get("tools_text", "")
+                overlay_text = ""
+                if reasoning:
+                    overlay_text = reasoning
+                if tools:
+                    overlay_text += ("\n\n" if overlay_text else "") + tools
+
+                if overlay_text:
+                    overlay_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                    # Word-wrap and render
+                    lines = self._wrap_text(overlay_font, overlay_text, sw - 80)
+                    y = 20
+                    for line in lines:
+                        if y > sh - 80:
+                            break
+                        surf = overlay_font.render(line, True, (255, 255, 255, 50))
+                        overlay_surf.blit(surf, (40, y))
+                        y += 22
+                    screen.blit(overlay_surf, (0, 0))
+
             # Get current emote texture and blink scale
             emote = self.state.get_emote()
             tex = self._get_texture_for_emote(emote)
@@ -323,6 +354,22 @@ class RobotFace:
             x_offset = (sw - target_width) // 2 + int(self._jiggle_x)
             y_offset = (sh - target_height) // 2 + int(self._jiggle_y)
             screen.blit(scaled_tex, (x_offset, y_offset))
+
+            # --- Ticker bar (scrolling answer text) ---
+            if ai_state:
+                ticker_text = ai_state.get("ticker_text", "")
+                ticker_duration = ai_state.get("ticker_duration", 0)
+                if ticker_text and ticker_duration > 0:
+                    text_surf = ticker_font.render(ticker_text, True, (255, 255, 255))
+                    text_h = text_surf.get_height()
+                    text_w = text_surf.get_width()
+                    total_dist = sw + text_w
+                    ticker_offset += (total_dist / ticker_duration) * dt
+                    if ticker_offset > total_dist:
+                        ticker_offset = 0.0
+                    tx = sw - int(ticker_offset) % total_dist
+                    ty = sh - max(42, int(sh * 0.10)) + (max(42, int(sh * 0.10)) - text_h) // 2
+                    screen.blit(text_surf, (tx, ty))
 
             # Menu overlay (simplified – touch bottom area toggles)
             if getattr(self, '_menu_visible', False):
@@ -362,6 +409,38 @@ class RobotFace:
     # kept for backwards compatibility (does nothing)
     def update_eyes_position(self, x, y):
         pass
+
+    def _get_ai_state(self):
+        """Get AI display state from the shared agent (thread-safe)."""
+        try:
+            from robov_core.ai import agent
+            if agent and agent.display:
+                return agent.display.get_all()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _wrap_text(font, text, max_width):
+        """Word-wrap text to fit within max_width pixels."""
+        lines = []
+        for paragraph in text.split("\n"):
+            if not paragraph.strip():
+                lines.append("")
+                continue
+            words = paragraph.split(" ")
+            current = ""
+            for word in words:
+                test = (current + " " + word).strip()
+                if font.size(test)[0] <= max_width:
+                    current = test
+                else:
+                    if current:
+                        lines.append(current)
+                    current = word
+            if current:
+                lines.append(current)
+        return lines
 
 
 # ----------------------------------------------------------------------
