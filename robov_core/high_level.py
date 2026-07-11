@@ -148,14 +148,14 @@ def _init_hardware() -> None:
     else:
         try:
             subprocess.run(
-                ["amixer", "-c", "1", "cset", "numid=18", "220"],
+                ["amixer", "-c", "1", "cset", "numid=18", "191"],
                 capture_output=True, timeout=5
             )
             subprocess.run(
-                ["amixer", "-c", "1", "cset", "numid=19", "220"],
+                ["amixer", "-c", "1", "cset", "numid=19", "191"],
                 capture_output=True, timeout=5
             )
-            log("Audio volume set to ~86% (DACL/DACR = 220)")
+            log("Audio volume set to ~75% (DACL/DACR = 191)")
         except Exception as exc:
             log(f"Volume set failed: {exc}")
 

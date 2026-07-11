@@ -28,12 +28,10 @@ class StereoCamera:
         self.lock: threading.Lock = threading.Lock()
 
         self.img_size: Tuple[int, int] = (640, 360)
-        self.low_size: Tuple[int, int] = (160, 120)
         self.depth_enabled: bool = False
         self.hud_enabled: bool = False
         self.alpha_depth: float = 0.3
         self.show_left: bool = True
-        self.num_disp: int = 256
         self.wls_enabled: bool = True
         self.fps: float = 30.0
         self._tick: int = 0
@@ -44,7 +42,6 @@ class StereoCamera:
         self.window_size: int = 11
         self.min_disp: int = 0
         self.num_disp: int = 256
-        self._remap_flags: int = cv2.INTER_NEAREST
 
         self.actual_width: int = 0
         self.actual_height: int = 0
@@ -130,17 +127,18 @@ class StereoCamera:
             self.cap = None
 
     def get_rectified_frames(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        if not self.cap or not self.cap.isOpened():
-            if not self.initialize_camera():
-                return None, None
+        with self.lock:
+            if not self.cap or not self.cap.isOpened():
+                if not self.initialize_camera():
+                    return None, None
 
-        ret, frame = self.cap.read()
-        if not ret:
-            if not self.initialize_camera():
-                return None, None
             ret, frame = self.cap.read()
             if not ret:
-                return None, None
+                if not self.initialize_camera():
+                    return None, None
+                ret, frame = self.cap.read()
+                if not ret:
+                    return None, None
 
         frame = cv2.rotate(frame, cv2.ROTATE_180)
         half_w = frame.shape[1] // 2
@@ -152,28 +150,16 @@ class StereoCamera:
     def compute_disparity(self, left_frame: np.ndarray, right_frame: np.ndarray) -> np.ndarray:
         grayL = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
         grayR = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
-        orig_h, orig_w = grayL.shape
-
-        if not self.depth_enabled:
-            grayL = cv2.resize(grayL, (0, 0), fx=0.5, fy=0.5)
-            grayR = cv2.resize(grayR, (0, 0), fx=0.5, fy=0.5)
 
         displ = self.left_matcher.compute(grayL, grayR)
 
-        if (self.depth_enabled or self.wls_enabled) and self.right_matcher and self.wls_filter:
+        if self.wls_enabled and self.right_matcher and self.wls_filter:
             dispr = self.right_matcher.compute(grayR, grayL)
             filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
         else:
             filtered_disp = displ
 
         filtered_disp[filtered_disp < 0] = 0
-
-        if not self.depth_enabled:
-            filtered_disp = cv2.resize(filtered_disp, (orig_w, orig_h))
-
-        if self.depth_enabled:
-            self.disp_buffer.append(filtered_disp.copy())
-
         return filtered_disp
 
     def get_depth_at_point(self, disparity_map: np.ndarray, x: Optional[int] = None, y: Optional[int] = None) -> float:
@@ -196,12 +182,6 @@ class StereoCamera:
         disp_vis = cv2.normalize(disparity_map, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
         disp_vis = cv2.morphologyEx(disp_vis, cv2.MORPH_OPEN, self.kernel)
         return cv2.applyColorMap(disp_vis, cv2.COLORMAP_JET)
-
-    def add_depth_text(self, frame: np.ndarray, depth_mm: float, position: Tuple[int, int] = (30, 50)) -> np.ndarray:
-        txt = f"Depth: {depth_mm:.1f} mm" if depth_mm < 5000 else "Out of range"
-        result = frame.copy()
-        cv2.putText(result, txt, position, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        return result
 
     def capture_frame_with_depth(self) -> Optional[dict]:
         left_frame, right_frame = self.get_rectified_frames()
@@ -247,6 +227,14 @@ class StereoCamera:
         return frame
 
     def get_depth_at(self, x: int, y: int) -> float:
+        if len(self.disp_buffer) > 0:
+            disp = self.disp_buffer[-1]
+            sh, sw = disp.shape[:2]
+            sx = int(x * sw / self.imSize[0])
+            sy = int(y * sh / self.imSize[1])
+            sx = max(0, min(sx, sw - 1))
+            sy = max(0, min(sy, sh - 1))
+            return self.get_depth_at_point(disp, sx, sy)
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
             return 120.0
@@ -259,7 +247,7 @@ class StereoCamera:
             if depth_mm is None or depth_mm <= 0:
                 return None
 
-            h, w = self.imSize
+            w, h = self.imSize
             if x_px < 0 or x_px >= w or y_px < 0 or y_px >= h:
                 return None
 
@@ -291,40 +279,37 @@ class StereoCamera:
         half_w = raw.shape[1] // 2
 
         if self.depth_enabled or self.hud_enabled:
-            imgL = cv2.remap(raw[:, :half_w], self.lMapX, self.lMapY, self._remap_flags)
-            imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, self._remap_flags)
+            imgL = cv2.remap(raw[:, :half_w], self.lMapX, self.lMapY, cv2.INTER_LINEAR)
+            imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, cv2.INTER_LINEAR)
             frame = imgL if self.show_left else imgR
             frame = cv2.resize(frame, self.img_size)
 
             grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
             grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
-            displ = self.left_matcher.compute(grayL, grayR)
+
+            grayL_d = cv2.resize(grayL, self.img_size, interpolation=cv2.INTER_LINEAR)
+            grayR_d = cv2.resize(grayR, self.img_size, interpolation=cv2.INTER_LINEAR)
+
+            displ = self.left_matcher.compute(grayL_d, grayR_d)
             displ[displ < 0] = 0
 
             wls_active = self.wls_enabled and self.right_matcher and self.wls_filter
+            disp_final = displ
+            if wls_active:
+                dispr = self.right_matcher.compute(grayR_d, grayL_d)
+                disp_final = self.wls_filter.filter(displ, grayL_d, disparity_map_right=dispr)
+                disp_final[disp_final < 0] = 0
 
-            if self.depth_enabled and not self.hud_enabled:
-                if wls_active:
-                    dispr = self.right_matcher.compute(grayR, grayL)
-                    disp_wls = self.wls_filter.filter(displ.copy(), grayL, disparity_map_right=dispr)
-                    disp_wls[disp_wls < 0] = 0
-                    depth_src = disp_wls
-                else:
-                    depth_src = displ
-                depth_vis = cv2.normalize(depth_src, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+            self.disp_buffer.append(disp_final.copy())
+
+            if self.depth_enabled:
+                depth_vis = cv2.normalize(disp_final, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
                 depth_vis = cv2.morphologyEx(depth_vis, cv2.MORPH_OPEN, self.kernel)
                 depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
-                depth_resized = cv2.resize(depth_vis, self.img_size)
-                cv2.addWeighted(frame, 1 - self.alpha_depth, depth_resized, self.alpha_depth, 0, dst=frame)
+                cv2.addWeighted(frame, 1 - self.alpha_depth, depth_vis, self.alpha_depth, 0, dst=frame)
 
             if self.hud_enabled:
-                if wls_active:
-                    dispr = self.right_matcher.compute(grayR, grayL)
-                    disp_wls = self.wls_filter.filter(displ.copy(), grayL, disparity_map_right=dispr)
-                    disp_wls[disp_wls < 0] = 0
-                    frame = self._render_hud(frame, disp_wls, center_only=True)
-                else:
-                    frame = self._render_hud(frame, displ, center_only=False)
+                frame = self._render_hud(frame, disp_final, center_only=False)
         else:
             rawL = raw[:, :half_w]
             rawR = raw[:, half_w:]
@@ -338,8 +323,11 @@ class StereoCamera:
         dh, dw = disp_raw.shape[:2]
         result = frame.copy()
 
+        f_eff = self.focal_length * dh / self.imSize[1]
         d16 = disp_raw.astype(np.float32) / 16.0
-        Z = np.where(d16 > 1.0, self.focal_length * self.baseline / d16, 0.0)
+
+        with np.errstate(divide='ignore'):
+            Z = np.where(d16 > 1.0, f_eff * self.baseline / d16, 0.0)
         Z = np.clip(Z, 0, 50000)
 
         fx = dw // 2
