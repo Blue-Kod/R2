@@ -23,6 +23,9 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import importlib.util as _ilu
+
+from robov_core.everyllm import EveryLLMError
+
 _e_path = os.path.join(os.path.dirname(__file__), "everyllm")
 _e_spec = _ilu.spec_from_file_location("everyllm", os.path.join(_e_path, "__init__.py"),
     submodule_search_locations=[_e_path])
@@ -857,6 +860,7 @@ class R2Agent:
         self.cwd = cwd or os.getcwd()
         self.max_rounds = max_rounds
         self.max_tokens = max_tokens
+        self._current_model: Optional[str] = None
 
         self.memory = Memory(self.cwd)
         self.executor = ToolExecutor(self.cwd, _detect_shell(), self.memory)
@@ -902,6 +906,66 @@ class R2Agent:
         return self._thread is not None and self._thread.is_alive()
 
     # ------------------------------------------------------------------
+    # LLM helpers with model fallback
+    # ------------------------------------------------------------------
+    def _get_model_candidates(self) -> list[str]:
+        """Return ordered list of models to try."""
+        if self.model != "auto":
+            return [self.model]
+        try:
+            scores = self.llm.ttft_scores()
+            ranked = sorted(scores.keys(), key=lambda m: scores[m])
+        except Exception:
+            ranked = []
+        all_models = self.llm.models()
+        seen = set()
+        result = []
+        for m in ranked + all_models:
+            if m not in seen:
+                seen.add(m)
+                result.append(m)
+        return result
+
+    def _llm_create(self, messages: list[dict], **kwargs) -> Any:
+        """Create non-streaming completion with model fallback."""
+        candidates = self._get_model_candidates()
+        last_err = None
+        for model_name in candidates:
+            if self._cancel_event.is_set():
+                break
+            try:
+                result = self.llm.chat.completions.create(
+                    model=model_name, messages=messages,
+                    max_tokens=self.max_tokens, stream=False, **kwargs,
+                )
+                self._current_model = model_name
+                return result
+            except Exception as e:
+                last_err = e
+                continue
+        raise last_err or EveryLLMError("All models failed")
+
+    def _llm_stream(self, messages: list[dict], **kwargs):
+        """Streaming completion with model fallback."""
+        candidates = self._get_model_candidates()
+        last_err = None
+        for model_name in candidates:
+            if self._cancel_event.is_set():
+                break
+            try:
+                stream = self.llm.chat.completions.create(
+                    model=model_name, messages=messages,
+                    max_tokens=self.max_tokens, stream=True, **kwargs,
+                )
+                self._current_model = model_name
+                yield from stream
+                return
+            except Exception as e:
+                last_err = e
+                continue
+        raise last_err or EveryLLMError("All models failed")
+
+    # ------------------------------------------------------------------
     # Chat loop (runs in thread)
     # ------------------------------------------------------------------
     def _chat_loop(self, prompt: str) -> None:
@@ -932,8 +996,9 @@ class R2Agent:
         ]
 
         response_text = ""
-        think_log = ""
+        prev_think = ""
         tool_log = ""
+        self._current_model = None
 
         for round_num in range(1, self.max_rounds + 1):
             if self._cancel_event.is_set():
@@ -941,25 +1006,19 @@ class R2Agent:
 
             think_buf = ""
             answer_buf = ""
-            first_chunk = True
-            think_done_printed = False
             think_start = time.time()
             phase = "thinking"
+            native_tool_calls = []
 
-            self.display.update(is_thinking=True, reasoning_text="", tools_text=tool_log)
+            self.display.update(is_thinking=True, tools_text=tool_log)
 
+            # --- Try streaming, fallback to non-streaming ---
+            streamed_ok = False
             try:
-                stream = self.llm.chat.completions.create(
-                    model=self.model,
-                    messages=list(self.history),
-                    max_tokens=self.max_tokens,
-                    stream=True,
-                )
-
+                stream = self._llm_stream(list(self.history))
                 for chunk in stream:
                     if self._cancel_event.is_set():
                         break
-
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -968,56 +1027,62 @@ class R2Agent:
 
                     if rc and phase == "thinking":
                         think_buf += rc
-                        think_log = think_buf
-                        self.display.update(reasoning_text=think_log)
+                        self.display.update(reasoning_text=prev_think + ("\n" if prev_think else "") + think_buf)
 
                     if content:
                         if phase == "thinking":
                             phase = "answer"
                             self.display.update(
                                 is_thinking=False,
-                                reasoning_text=think_log,
+                                reasoning_text=prev_think + ("\n" if prev_think else "") + think_buf,
                             )
                         answer_buf += content
                         self.display.update(answer_text=answer_buf)
-
+                streamed_ok = True
             except Exception as e:
                 if self._cancel_event.is_set():
                     break
-                think_log += f"\n[error: {e}]"
-                self.display.update(reasoning_text=think_log)
+                prev_think += f"\n[stream error: {e}]"
+                self.display.update(reasoning_text=prev_think)
 
             if self._cancel_event.is_set():
                 break
 
-            think_elapsed = time.time() - think_start
-            native_tool_calls = []
-
-            if phase == "thinking" and not answer_buf:
+            # --- Non-streaming fallback if streaming failed or produced nothing ---
+            if not streamed_ok or (not answer_buf and not think_buf):
                 try:
-                    result = self.llm.chat.completions.create(
-                        model=self.model,
-                        messages=list(self.history),
-                        max_tokens=self.max_tokens,
-                        stream=False,
-                    )
+                    result = self._llm_create(list(self.history))
                     if result.choices:
                         msg = result.choices[0].message
-                        answer_buf = getattr(msg, "content", "") or ""
+                        fb_content = getattr(msg, "content", "") or ""
+                        fb_reasoning = getattr(msg, "reasoning_content", "") or ""
                         native_tool_calls = getattr(msg, "tool_calls", None) or []
-                except Exception:
-                    pass
-                think_buf = ""
+                        if fb_reasoning and not think_buf:
+                            think_buf = fb_reasoning
+                            prev_think += ("\n" if prev_think else "") + think_buf
+                            self.display.update(reasoning_text=prev_think)
+                        if fb_content:
+                            answer_buf = fb_content
+                            phase = "answer"
+                            self.display.update(
+                                is_thinking=False, answer_text=answer_buf,
+                                reasoning_text=prev_think,
+                            )
+                except Exception as e:
+                    if self._cancel_event.is_set():
+                        break
+                    prev_think += f"\n[error: {e}]"
+                    self.display.update(reasoning_text=prev_think)
+
+            if self._cancel_event.is_set():
+                break
 
             response_text = answer_buf or think_buf
+
+            # --- If completely empty, retry once more ---
             if not response_text:
                 try:
-                    result = self.llm.chat.completions.create(
-                        model=self.model,
-                        messages=list(self.history),
-                        max_tokens=self.max_tokens,
-                        stream=False,
-                    )
+                    result = self._llm_create(list(self.history))
                     if result.choices:
                         msg = result.choices[0].message
                         response_text = getattr(msg, "content", "") or ""
@@ -1025,7 +1090,7 @@ class R2Agent:
                 except Exception:
                     pass
 
-            self.history.append({"role": "assistant", "content": response_text})
+            self.history.append({"role": "assistant", "content": response_text or "(no response)"})
 
             actions = self._extract_actions(response_text)
 
@@ -1040,7 +1105,9 @@ class R2Agent:
             if not actions:
                 break
 
+            prev_think += ("\n" if prev_think else "") + think_buf
             results_text = self._execute_actions(actions)
+            tool_log = self.display.get_all()["tools_text"]
             self.history.append({"role": "user", "content": results_text})
 
         # Final answer — speak it + show ticker
@@ -1052,7 +1119,7 @@ class R2Agent:
                     last_answer_time=time.time(),
                     is_speaking=True,
                     ticker_text=clean_answer,
-                    ticker_duration=max(3.0, len(clean_answer) / 15.0),
+                    ticker_duration=max(5.0, len(clean_answer) / 15.0 + 2.0),
                 )
                 self._speak(clean_answer)
                 self.display.update(is_speaking=False)

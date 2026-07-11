@@ -337,7 +337,7 @@ class RobotFace:
                     for line in lines:
                         if y > sh - 80:
                             break
-                        surf = overlay_font.render(line, True, (40, 40, 40, 80))
+                        surf = overlay_font.render(line, True, (50, 50, 50, 120))
                         overlay_surf.blit(surf, (40, y))
                         y += 32
                     screen.blit(overlay_surf, (0, 0))

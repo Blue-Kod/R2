@@ -679,7 +679,7 @@ function aiConnectSSE() {
             const d = JSON.parse(e.data);
             if (d.is_idle && !d.is_thinking && !d.is_speaking) {
                 aiSetStatus('idle', 'Ожидание...');
-                aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+                aiThinkingEl = null; aiToolsEl = null;
                 return;
             }
             if (d.is_thinking) {
@@ -695,12 +695,6 @@ function aiConnectSSE() {
                 aiSetStatus('speaking', 'Говорит...');
                 if (d.last_answer && !aiAnswerEl) {
                     aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
-                }
-            }
-            if (d.last_answer && !d.is_thinking && !d.is_speaking && !d.is_idle) {
-                if (!aiAnswerEl || (d.last_answer_time && aiAnswerEl.dataset.ts !== String(d.last_answer_time))) {
-                    aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
-                    if (d.last_answer_time) aiAnswerEl.dataset.ts = String(d.last_answer_time);
                 }
             }
             if (!d.is_thinking && !d.is_speaking && !d.is_idle) {
@@ -770,14 +764,13 @@ async function init() {
     // Poll for AI answer display (SSE may not always carry the final answer)
     setInterval(async () => {
         if (aiPane.classList.contains('hidden')) return;
+        if (aiAnswerEl) return;
         try {
             const r = await fetch('/api/ai/status');
             const d = await r.json();
             if (d.last_answer && d.last_answer_time) {
-                if (!aiAnswerEl || aiAnswerEl.dataset.ts !== String(d.last_answer_time)) {
-                    aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
-                    aiAnswerEl.dataset.ts = String(d.last_answer_time);
-                }
+                aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
+                aiAnswerEl.dataset.ts = String(d.last_answer_time);
             }
         } catch(e) {}
     }, 1000);
