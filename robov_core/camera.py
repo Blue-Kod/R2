@@ -42,7 +42,7 @@ class StereoCamera:
         self.window_size: int = 11
         self.min_disp: int = 0
         self.num_disp: int = 256
-        self.depth_scale: float = 1.11
+        self.depth_scale: float = 1.25
 
         self.actual_width: int = 0
         self.actual_height: int = 0
