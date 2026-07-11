@@ -263,6 +263,7 @@ def create_app() -> Flask:
                     "alpha_depth": camera.alpha_depth,
                     "show_left": camera.show_left,
                     "num_disp": camera.num_disp,
+                    "depth_scale": camera.depth_scale,
                 })
         data = request.get_json(silent=True) or {}
         camera.update_params(
@@ -272,6 +273,7 @@ def create_app() -> Flask:
             alpha_depth=data.get("alpha_depth"),
             show_left=data.get("show_left"),
             num_disp=data.get("num_disp"),
+            depth_scale=data.get("depth_scale"),
         )
         return jsonify({"status": "ok"})
 

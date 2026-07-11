@@ -42,6 +42,7 @@ class StereoCamera:
         self.window_size: int = 11
         self.min_disp: int = 0
         self.num_disp: int = 256
+        self.depth_scale: float = 1.11
 
         self.actual_width: int = 0
         self.actual_height: int = 0
@@ -72,7 +73,7 @@ class StereoCamera:
     def _setup_rectification(self) -> None:
         self.R1, self.R2, self.P1, self.P2, self.Q = cv2.fisheye.stereoRectify(
             self.Kl, self.Dl, self.Kr, self.Dr, self.imSize, self.R, self.T,
-            flags=cv2.fisheye.CALIB_ZERO_DISPARITY, balance=0.0
+            flags=cv2.fisheye.CALIB_ZERO_DISPARITY, balance=0.8
         )
         self.lMapX, self.lMapY = cv2.fisheye.initUndistortRectifyMap(
             self.Kl, self.Dl, self.R1, self.P1, self.imSize, cv2.CV_32FC1
@@ -169,7 +170,7 @@ class StereoCamera:
             x = w // 2
         if y is None:
             y = h // 2
-        return float(abs(points_3d[y, x][2]))
+        return float(abs(points_3d[y, x][2])) * self.depth_scale
 
     def get_average_depth_map(self) -> Tuple[Optional[np.ndarray], Optional[float]]:
         if len(self.disp_buffer) == 0:
@@ -327,7 +328,7 @@ class StereoCamera:
         d16 = disp_raw.astype(np.float32) / 16.0
 
         with np.errstate(divide='ignore'):
-            Z = np.where(d16 > 1.0, f_eff * self.baseline / d16, 0.0)
+            Z = np.where(d16 > 1.0, f_eff * self.baseline / d16, 0.0) * self.depth_scale
         Z = np.clip(Z, 0, 50000)
 
         fx = dw // 2
