@@ -48,3 +48,7 @@ retro-ru-tts>=1.0.7
 
 # AI / LLM (EveryLLM backend)
 g4f>=7.8.0
+
+# YOLOE open-vocabulary detection (YOLOE Test)
+ultralytics>=8.3.0
+git+https://github.com/ultralytics/CLIP.git

@@ -33,6 +33,7 @@ _e_mod = _ilu.module_from_spec(_e_spec)
 sys.modules["everyllm"] = _e_mod
 _e_spec.loader.exec_module(_e_mod)
 EveryLLM = _e_mod.EveryLLM
+EveryLLMError = _e_mod.EveryLLMError
 
 # ---------------------------------------------------------------------------
 # Tag patterns (from EveryLLM harness.py)
@@ -1078,6 +1079,21 @@ class R2Agent:
                 break
 
             response_text = answer_buf or think_buf
+
+            # --- If only reasoning with no content and no actions, force a non-streaming retry ---
+            if answer_buf == "" and not self._extract_actions(think_buf):
+                try:
+                    result = self._llm_create(list(self.history))
+                    if result.choices:
+                        msg = result.choices[0].message
+                        retry_content = getattr(msg, "content", "") or ""
+                        native_tool_calls = getattr(msg, "tool_calls", None) or []
+                        if retry_content:
+                            answer_buf = retry_content
+                            response_text = answer_buf
+                            self.display.update(answer_text=answer_buf)
+                except Exception:
+                    pass
 
             # --- If completely empty, retry once more ---
             if not response_text:

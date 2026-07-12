@@ -77,19 +77,19 @@
         #help-content hr { border:none; border-top:1px solid #2a2a2a; margin:16px 0; }
         #help-content blockquote { border-left:3px solid #44944a; padding:6px 12px; margin:10px 0; background:#0f0f0f; border-radius:0 8px 8px 0; color:#aaa; }
         #help-content strong { color:#fff; }
-        #ai-chat-log { flex:1; border-radius:14px; border:1px solid var(--line); background:#0d0d0d; padding:12px; overflow-y:auto; font-size:13px; line-height:1.5; font-family: 'JetBrains Mono', Consolas, monospace; display:flex; flex-direction:column; gap:6px; }
-        .ai-msg { padding:6px 10px; border-radius:10px; max-width:95%; animation: fadeIn 0.15s ease-in; }
-        @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
-        .ai-msg-user { background:#1a2a1a; border:1px solid #2a3a2a; color:#b0e0b0; align-self:flex-end; border-bottom-right-radius:3px; }
-        .ai-msg-think { background:#151520; border:1px solid #252535; color:#7a7a9a; font-style:italic; font-size:12px; border-bottom-left-radius:3px; }
-        .ai-msg-think .ai-label { color:#5555aa; font-weight:600; font-style:normal; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
-        .ai-msg-tool { background:#1a1510; border:1px solid #2a2520; color:#c0a060; font-size:11px; border-bottom-left-radius:3px; }
-        .ai-msg-tool .ai-label { color:#aa8833; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
-        .ai-msg-answer { background:#101a15; border:1px solid #1a2a22; color:#e0f0e8; font-size:13px; border-bottom-left-radius:3px; }
-        .ai-msg-answer .ai-label { color:#44944a; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
-        .ai-msg-error { background:#201010; border:1px solid #301a1a; color:#e08080; border-bottom-left-radius:3px; }
-        .ai-msg-error .ai-label { color:#aa4444; font-weight:600; font-size:10px; }
-        .ai-msg-system { background:#101015; border:1px solid #1a1a25; color:#707088; font-size:11px; text-align:center; }
+        #ai-chat-log { flex:1; border-radius:14px; border:1px solid var(--line); background:#0d0d0d; padding:12px; overflow-y:auto; font-size:13px; line-height:1.6; font-family: 'JetBrains Mono', Consolas, monospace; display:flex; flex-direction:column; gap:0; }
+        .ai-turn { margin-bottom:10px; }
+        .ai-turn-user { color:#6abf69; padding:4px 0; }
+        .ai-turn-user::before { content:'> '; color:#44944a; font-weight:bold; }
+        .ai-turn-reasoning { color:#555580; padding:2px 0; white-space:pre-wrap; word-break:break-word; }
+        .ai-turn-reasoning .ai-r-label { color:#444470; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px; display:block; }
+        .ai-turn-tools { color:#9a7a30; padding:2px 0; white-space:pre-wrap; word-break:break-word; font-size:12px; }
+        .ai-turn-tools .ai-t-label { color:#7a6020; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px; display:block; }
+        .ai-turn-answer { color:#e0f0e8; padding:4px 0; }
+        .ai-turn-answer::before { content:'R2: '; color:#44944a; font-weight:bold; }
+        .ai-turn-error { color:#d06050; padding:4px 0; }
+        .ai-turn-error::before { content:'! '; color:#aa4444; font-weight:bold; }
+        .ai-turn-sep { border-bottom:1px solid #1a1a1a; margin:6px 0; }
         #ai-status-bar { display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--line); border-radius:12px; background:#0d0d0d; font-size:11px; color:var(--muted); flex-shrink:0; margin-top:6px; }
         #ai-status-bar .dot { width:8px; height:8px; border-radius:50%; background:#555; flex-shrink:0; }
         #ai-status-bar .dot.thinking { background:#d19a66; animation: pulse 0.8s infinite alternate; }
@@ -623,40 +623,94 @@ function attachEvents() {
             alert(d.message || 'Обновление запущено.');
         } catch(e) { alert('Ошибка: '+e.message); updateBtn.disabled = false; updateBtn.textContent = '↻'; }
     };
-
-    aiSendBtn.onclick = () => { aiInput.focus(); };
-    aiStopBtn.onclick = () => {};
 }
 
-// ===================== AI CHAT (outside attachEvents for scope) =====================
+// ===================== AI CHAT =====================
 let aiSSE = null;
-let aiThinkingEl = null;
+let aiTurnEl = null;
+let aiReasoningEl = null;
 let aiToolsEl = null;
 let aiAnswerEl = null;
 let aiHistory = [];
 let aiHistoryIdx = -1;
 
-function aiAddMsg(type, label, text) {
-    const div = document.createElement('div');
-    div.className = 'ai-msg ai-msg-' + type;
-    if (label) div.innerHTML = '<span class="ai-label">' + label + '</span><br>';
-    const content = document.createElement('span');
-    content.textContent = text;
-    div.appendChild(content);
-    aiChatLog.appendChild(div);
-    aiChatLog.scrollTop = aiChatLog.scrollHeight;
-    return div;
+function aiNewTurn() {
+    if (aiTurnEl) {
+        const sep = document.createElement('div');
+        sep.className = 'ai-turn-sep';
+        aiChatLog.appendChild(sep);
+    }
+    aiTurnEl = document.createElement('div');
+    aiTurnEl.className = 'ai-turn';
+    aiChatLog.appendChild(aiTurnEl);
+    aiReasoningEl = null;
+    aiToolsEl = null;
+    aiAnswerEl = null;
 }
 
-function aiUpdateOrCreate(type, label, text, elRef) {
-    if (!elRef) {
-        elRef = aiAddMsg(type, label, text);
-    } else {
-        const content = elRef.querySelector('span:last-child') || elRef;
-        content.textContent = text;
-        aiChatLog.scrollTop = aiChatLog.scrollHeight;
+function aiShowUser(text) {
+    aiNewTurn();
+    const el = document.createElement('div');
+    el.className = 'ai-turn-user';
+    el.textContent = text;
+    aiTurnEl.appendChild(el);
+    aiChatLog.scrollTop = aiChatLog.scrollHeight;
+}
+
+function aiShowReasoning(text) {
+    if (!aiTurnEl) aiNewTurn();
+    if (!aiReasoningEl) {
+        aiReasoningEl = document.createElement('div');
+        aiReasoningEl.className = 'ai-turn-reasoning';
+        const lbl = document.createElement('span');
+        lbl.className = 'ai-r-label';
+        lbl.textContent = 'Рассуждение';
+        aiReasoningEl.appendChild(lbl);
+        const body = document.createElement('span');
+        body.className = 'ai-r-body';
+        aiReasoningEl.appendChild(body);
+        aiTurnEl.appendChild(aiReasoningEl);
     }
-    return elRef;
+    aiReasoningEl.querySelector('.ai-r-body').textContent = text;
+    aiChatLog.scrollTop = aiChatLog.scrollHeight;
+}
+
+function aiShowTools(text) {
+    if (!aiTurnEl) aiNewTurn();
+    if (!aiToolsEl) {
+        aiToolsEl = document.createElement('div');
+        aiToolsEl.className = 'ai-turn-tools';
+        const lbl = document.createElement('span');
+        lbl.className = 'ai-t-label';
+        lbl.textContent = 'Инструменты';
+        aiToolsEl.appendChild(lbl);
+        const body = document.createElement('span');
+        body.className = 'ai-t-body';
+        aiToolsEl.appendChild(body);
+        aiTurnEl.appendChild(aiToolsEl);
+    }
+    aiToolsEl.querySelector('.ai-t-body').textContent = text;
+    aiChatLog.scrollTop = aiChatLog.scrollHeight;
+}
+
+function aiShowAnswer(text) {
+    if (!aiTurnEl) aiNewTurn();
+    if (!aiAnswerEl) {
+        aiAnswerEl = document.createElement('div');
+        aiAnswerEl.className = 'ai-turn-answer';
+        aiTurnEl.appendChild(aiAnswerEl);
+    }
+    aiAnswerEl.textContent = text;
+    aiChatLog.scrollTop = aiChatLog.scrollHeight;
+}
+
+function aiShowError(text) {
+    if (!aiTurnEl) aiNewTurn();
+    const el = document.createElement('div');
+    el.className = 'ai-turn-error';
+    el.textContent = text;
+    aiTurnEl.appendChild(el);
+    aiChatLog.scrollTop = aiChatLog.scrollHeight;
 }
 
 function aiSetStatus(state, text) {
@@ -679,50 +733,39 @@ function aiConnectSSE() {
             const d = JSON.parse(e.data);
             if (d.is_idle && !d.is_thinking && !d.is_speaking) {
                 aiSetStatus('idle', 'Ожидание...');
-                aiThinkingEl = null; aiToolsEl = null;
                 return;
             }
             if (d.is_thinking) {
                 aiSetStatus('thinking', 'Рассуждает...');
-                if (d.reasoning_text) {
-                    aiThinkingEl = aiUpdateOrCreate('think', 'Рассуждение', d.reasoning_text, aiThinkingEl);
-                }
+                if (d.reasoning_text) aiShowReasoning(d.reasoning_text);
             }
-            if (d.tools_text) {
-                aiToolsEl = aiUpdateOrCreate('tool', 'Инструменты', d.tools_text, aiToolsEl);
-            }
+            if (d.tools_text) aiShowTools(d.tools_text);
             if (d.is_speaking) {
                 aiSetStatus('speaking', 'Говорит...');
-                if (d.last_answer && !aiAnswerEl) {
-                    aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
-                }
+                if (d.last_answer && !aiAnswerEl) aiShowAnswer(d.last_answer);
             }
             if (!d.is_thinking && !d.is_speaking && !d.is_idle) {
                 aiSetStatus('thinking', 'Думаю...');
             }
         } catch(err) {}
     };
-    aiSSE.onerror = () => {
-        setTimeout(aiConnectSSE, 3000);
-    };
+    aiSSE.onerror = () => { setTimeout(aiConnectSSE, 3000); };
 }
 
 async function aiSend(prompt) {
     if (!prompt.trim()) return;
-    aiAddMsg('user', 'Вы', prompt);
-    aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
+    aiShowUser(prompt);
     aiSetStatus('thinking', 'Отправляю...');
     try {
         const r = await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})});
         const d = await r.json();
-        if (d.error) aiAddMsg('error', 'Ошибка', d.error);
-    } catch(e) { aiAddMsg('error', 'Ошибка', e.message); }
+        if (d.error) aiShowError(d.error);
+    } catch(e) { aiShowError(e.message); }
 }
 
 async function aiStop() {
     try { await fetch('/api/ai/stop', {method:'POST'}); } catch(e) {}
     aiSetStatus('idle', 'Остановлен');
-    aiThinkingEl = null; aiToolsEl = null; aiAnswerEl = null;
 }
 
 aiSendBtn.onclick = () => {
@@ -752,7 +795,6 @@ async function init() {
     attachEvents();
     restoreState();
     await updateRenderParams();
-    // Set SSH host from window location
     sshHostDisplay.textContent = location.hostname;
 
     fetchSystemStats();
@@ -761,7 +803,6 @@ async function init() {
     setInterval(fetchTerminalOutput, 400);
     aiConnectSSE();
 
-    // Poll for AI answer display (SSE may not always carry the final answer)
     setInterval(async () => {
         if (aiPane.classList.contains('hidden')) return;
         if (aiAnswerEl) return;
@@ -769,8 +810,10 @@ async function init() {
             const r = await fetch('/api/ai/status');
             const d = await r.json();
             if (d.last_answer && d.last_answer_time) {
-                aiAnswerEl = aiAddMsg('answer', 'R2', d.last_answer);
-                aiAnswerEl.dataset.ts = String(d.last_answer_time);
+                if (!aiAnswerEl || aiAnswerEl._ts !== d.last_answer_time) {
+                    aiShowAnswer(d.last_answer);
+                    if (aiAnswerEl) aiAnswerEl._ts = d.last_answer_time;
+                }
             }
         } catch(e) {}
     }, 1000);
