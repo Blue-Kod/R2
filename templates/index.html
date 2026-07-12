@@ -628,6 +628,7 @@ function attachEvents() {
 // ===================== AI CHAT =====================
 let aiSSE = null;
 let aiTurnEl = null;
+let aiDisplayEl = null;
 let aiReasoningEl = null;
 let aiToolsEl = null;
 let aiAnswerEl = null;
@@ -643,6 +644,7 @@ function aiNewTurn() {
     aiTurnEl = document.createElement('div');
     aiTurnEl.className = 'ai-turn';
     aiChatLog.appendChild(aiTurnEl);
+    aiDisplayEl = null;
     aiReasoningEl = null;
     aiToolsEl = null;
     aiAnswerEl = null;
@@ -657,15 +659,29 @@ function aiShowUser(text) {
     aiChatLog.scrollTop = aiChatLog.scrollHeight;
 }
 
+function aiShowDisplay(text) {
+    if (!aiTurnEl) aiNewTurn();
+    if (!aiDisplayEl) {
+        aiDisplayEl = document.createElement('div');
+        aiDisplayEl.className = 'ai-turn-reasoning';
+        const lbl = document.createElement('span');
+        lbl.className = 'ai-r-label';
+        lbl.textContent = 'Цепочка';
+        aiDisplayEl.appendChild(lbl);
+        const body = document.createElement('span');
+        body.className = 'ai-r-body';
+        aiDisplayEl.appendChild(body);
+        aiTurnEl.appendChild(aiDisplayEl);
+    }
+    aiDisplayEl.querySelector('.ai-r-body').textContent = text;
+    aiChatLog.scrollTop = aiChatLog.scrollHeight;
+}
+
 function aiShowReasoning(text) {
     if (!aiTurnEl) aiNewTurn();
     if (!aiReasoningEl) {
         aiReasoningEl = document.createElement('div');
         aiReasoningEl.className = 'ai-turn-reasoning';
-        const lbl = document.createElement('span');
-        lbl.className = 'ai-r-label';
-        lbl.textContent = 'Рассуждение';
-        aiReasoningEl.appendChild(lbl);
         const body = document.createElement('span');
         body.className = 'ai-r-body';
         aiReasoningEl.appendChild(body);
@@ -680,10 +696,6 @@ function aiShowTools(text) {
     if (!aiToolsEl) {
         aiToolsEl = document.createElement('div');
         aiToolsEl.className = 'ai-turn-tools';
-        const lbl = document.createElement('span');
-        lbl.className = 'ai-t-label';
-        lbl.textContent = 'Инструменты';
-        aiToolsEl.appendChild(lbl);
         const body = document.createElement('span');
         body.className = 'ai-t-body';
         aiToolsEl.appendChild(body);
@@ -735,6 +747,7 @@ function aiConnectSSE() {
                 aiSetStatus('idle', 'Ожидание...');
                 return;
             }
+            if (d.display_text) aiShowDisplay(d.display_text);
             if (d.is_thinking) {
                 aiSetStatus('thinking', 'Рассуждает...');
                 if (d.reasoning_text) aiShowReasoning(d.reasoning_text);
