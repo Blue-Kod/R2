@@ -41,12 +41,13 @@ class StereoCamera:
         self.camera_fov: int = 120
         self.window_size: int = 11
         self.min_disp: int = 0
-        self.num_disp: int = 256
+        self.num_disp: int = 160
         self.depth_scale: float = 1.25
 
         self.actual_width: int = 0
         self.actual_height: int = 0
         self._latest_frame: Optional[np.ndarray] = None
+        self._latest_left: Optional[np.ndarray] = None
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
 
@@ -200,6 +201,14 @@ class StereoCamera:
     def clear_buffer(self) -> None:
         self.disp_buffer.clear()
 
+    def get_shared_depth(self):
+        if len(self.disp_buffer) < 2:
+            return None, None
+        avg_disp = np.mean(list(self.disp_buffer), axis=0).astype(np.int16)
+        with self.lock:
+            left = self._latest_left
+        return left, avg_disp
+
     def get_frame(self) -> np.ndarray:
         if not self.cap or not self.cap.isOpened():
             if not self.initialize_camera():
@@ -301,7 +310,9 @@ class StereoCamera:
                 disp_final = self.wls_filter.filter(displ, grayL_d, disparity_map_right=dispr)
                 disp_final[disp_final < 0] = 0
 
+            disp_final = cv2.medianBlur(disp_final, 3)
             self.disp_buffer.append(disp_final.copy())
+            self._latest_left = frame.copy()
 
             if self.depth_enabled:
                 depth_vis = cv2.normalize(disp_final, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)

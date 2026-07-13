@@ -25,8 +25,8 @@ class RerunViewer:
         self.pointcloud_enabled: bool = True
         self._running: bool = False
         self._thread: Optional[threading.Thread] = None
-        self._downscale: int = 2
         self._max_points: int = 50000
+        self._grid_cell: int = 16
         self._fps: float = 0.0
         self._frame_count: int = 0
         self._last_fps_time: float = time.time()
@@ -83,10 +83,10 @@ class RerunViewer:
             time.sleep(0.05)
 
     def _log_frame(self) -> None:
-        data = self.camera.capture_frame_with_depth()
-        if data is None:
+        left, disp = self.camera.get_shared_depth()
+        if left is None:
             if not self._logged_null_once:
-                self._log("camera returned None — no frame logged yet")
+                self._log("waiting for disp_buffer (need ≥2 frames)")
                 self._logged_null_once = True
             return
 
@@ -94,23 +94,15 @@ class RerunViewer:
             self._log("camera OK — streaming frames")
             self._logged_null_once = False
 
-        left = data["left_frame"]
-        disp = data["disparity_map"]
-
-        h, w = left.shape[:2]
-        nw, nh = w // self._downscale, h // self._downscale
-        left_small = cv2.resize(left, (nw, nh))
-        disp_small = cv2.resize(disp, (nw, nh))
-
-        rr.log("camera/left", rr.Image(cv2.cvtColor(left_small, cv2.COLOR_BGR2RGB)))
+        rr.log("camera/left", rr.Image(cv2.cvtColor(left, cv2.COLOR_BGR2RGB)))
 
         if self.pointcloud_enabled:
-            depth, points, colors = self._build_pointcloud(disp_small, left_small)
+            depth, points, colors = self._build_pointcloud(disp, left)
             rr.log("camera/depth", rr.DepthImage(depth))
             if len(points) > 0:
                 rr.log("camera/pointcloud", rr.Points3D(points, colors=colors))
         else:
-            depth = self._disparity_to_depth(disp_small)
+            depth = self._disparity_to_depth(disp)
             rr.log("camera/depth", rr.DepthImage(depth))
 
         self._frame_count += 1
@@ -169,14 +161,21 @@ class RerunViewer:
         points = np.column_stack([X_m, Y_m, Z_m])
 
         if len(points) > self._max_points:
-            idx = np.random.choice(len(points), self._max_points, replace=False)
-            points = points[idx]
-            colors = colors[idx]
+            points, colors = self._grid_subsample(u, v, points, colors)
 
         depth_map = np.zeros((h, w), dtype=np.float32)
         depth_map[valid] = Z_m
 
         return depth_map, points.astype(np.float32), colors.astype(np.float32)
+
+    def _grid_subsample(self, u, v, points, colors):
+        cell = self._grid_cell
+        u_int = u.astype(np.int32)
+        v_int = v.astype(np.int32)
+        cell_ids = (v_int // cell) * 10000 + u_int // cell
+        _, first_idx = np.unique(cell_ids, return_index=True)
+        sel = first_idx[:self._max_points]
+        return points[sel], colors[sel]
 
     @property
     def fps(self) -> float:
