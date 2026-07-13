@@ -784,6 +784,7 @@ class DisplayState:
         self.last_answer: str = ""
         self.last_answer_time: float = 0.0
         self.reasoning_history: str = ""
+        self.current_model: str = ""
 
         self._sse_listeners: list = []
         self._sse_lock = threading.Lock()
@@ -809,6 +810,7 @@ class DisplayState:
                 "last_answer": self.last_answer,
                 "last_answer_time": self.last_answer_time,
                 "reasoning_history": self.reasoning_history,
+                "current_model": self.current_model,
             }
 
     def add_sse_listener(self, q: queue.Queue) -> None:
@@ -944,6 +946,7 @@ class R2Agent:
                     max_tokens=self.max_tokens, stream=False, **kwargs,
                 )
                 self._current_model = model_name
+                self.display.update(current_model=model_name)
                 return result
             except Exception as e:
                 last_err = e
@@ -965,6 +968,7 @@ class R2Agent:
                     max_tokens=self.max_tokens, stream=True, **kwargs,
                 )
                 self._current_model = model_name
+                self.display.update(current_model=model_name)
                 yield from stream
                 return
             except Exception as e:

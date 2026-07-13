@@ -10,12 +10,9 @@ class AnyApiProvider(BaseProvider):
     key_name = "anyapi"
     _base_url = "https://api.anyapi.ai/v1"
     model_map = {
-        "anyapi/openai/gpt-4o": "openai/gpt-4o",
-        "anyapi/openai/gpt-4o-mini": "openai/gpt-4o-mini",
-        "anyapi/deepseek/deepseek-r1": "deepseek/deepseek-r1",
-        "anyapi/deepseek/deepseek-v3": "deepseek/deepseek-v3",
-        "anyapi/meta-llama/llama-3.3-70b-instruct": "meta-llama/llama-3.3-70b-instruct",
-        "anyapi/auto": "anyapi/auto",
+        "anyapi/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "anyapi/nvidia/nemotron-3-ultra-550b-a55b:free": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "anyapi/nvidia/nemotron-nano-9b-v2:free": "nvidia/nemotron-nano-9b-v2:free"
     }
 
     def __init__(self, api_key: str):

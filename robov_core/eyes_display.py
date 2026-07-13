@@ -407,6 +407,13 @@ class RobotFace:
                 txt = font.render("Exit", True, (255, 255, 255))
                 screen.blit(txt, txt.get_rect(center=self._exit_btn_rect.center))
 
+            # --- Current LLM model (top-right corner) ---
+            if ai_state:
+                model_name = ai_state.get("current_model", "")
+                if model_name:
+                    model_surf = overlay_font.render(model_name, True, (120, 120, 120))
+                    screen.blit(model_surf, (sw - model_surf.get_width() - 12, 10))
+
             pygame.display.flip()
 
         log.info("Shutting down...")

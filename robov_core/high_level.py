@@ -194,6 +194,27 @@ def _download_tts_model():
 
 _MIN_WORD_LEN = 5
 
+
+def _strip_speech(text: str) -> str:
+    """Remove all markdown, HTML, code blocks, and formatting from TTS text."""
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    text = re.sub(r"`[^`\n]+`", "", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    text = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"\1", text)
+    text = re.sub(r"~~([^~]+)~~", r"\1", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\d+\.\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"---+", "", text)
+    text = re.sub(r"\|", " ", text)
+    text = re.sub(r"\n{2,}", " ", text)
+    return text.strip()
+
 class StreamingSpeaker:
     """Buffers LLM tokens and speaks complete word-chunks in a background thread."""
 
@@ -239,17 +260,7 @@ class StreamingSpeaker:
 
     @staticmethod
     def _clean(text: str) -> str:
-        text = re.sub(r"<[^>]+>", "", text)
-        text = re.sub(r"```[\s\S]*?```", "", text)
-        text = re.sub(r"`[^`]+`", "", text)
-        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-        text = re.sub(r"\*([^*]+)\*", r"\1", text)
-        text = re.sub(r"__([^_]+)__", r"\1", text)
-        text = re.sub(r"_([^_]+)_", r"\1", text)
-        text = re.sub(r"~~([^~]+)~~", r"\1", text)
-        text = re.sub(r"#+ ", "", text)
-        text = re.sub(r"[-*] ", "", text)
-        return text.strip()
+        return _strip_speech(text)
 
     @staticmethod
     def _worker(q: queue.Queue) -> None:
@@ -559,6 +570,17 @@ def start_background() -> None:
         from robov_core.ai import init_agent
         global _ai_agent
         _ai_agent = init_agent(cwd=str(ROOT_DIR))
+
+        def _refresh_models():
+            try:
+                log("EveryLLM: refreshing model rankings...")
+                _ai_agent.llm.refresh(asynchronously=True, timeout=8.0)
+                log("EveryLLM: model rankings updated.")
+            except Exception as e:
+                log(f"EveryLLM refresh error: {e}")
+
+        threading.Thread(target=_refresh_models, daemon=True, name="r2-llm-refresh").start()
+
         # Inject robot API into AI's python environment
         _ai_agent.executor.python_env.update({
             "angle": angle,
