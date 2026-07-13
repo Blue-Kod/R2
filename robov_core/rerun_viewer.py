@@ -25,8 +25,8 @@ class RerunViewer:
         self.pointcloud_enabled: bool = True
         self._running: bool = False
         self._thread: Optional[threading.Thread] = None
-        self._max_points: int = 50000
-        self._grid_cell: int = 16
+        self._max_points: int = 120000
+        self._grid_cell: int = 8
         self._fps: float = 0.0
         self._frame_count: int = 0
         self._last_fps_time: float = time.time()
@@ -42,7 +42,7 @@ class RerunViewer:
             return False
         try:
             rr.init("r2_robot")
-            server_uri = rr.serve_grpc(grpc_port=self.grpc_port)
+            server_uri = rr.serve_grpc(grpc_port=self.grpc_port, server_memory_limit="500MiB")
             rr.serve_web_viewer(
                 open_browser=False,
                 web_port=self.port,

@@ -10,6 +10,8 @@ import numpy as np
 os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 
+from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, DepthResult
+
 
 class CameraInitError(Exception):
     pass
@@ -55,7 +57,8 @@ class StereoCamera:
         self._setup_rectification()
         self.focal_length = self.P1[0, 0]
         self.baseline = abs(float(self.T[0]))
-        self._setup_stereo_matchers()
+        self.depth_provider: DepthProvider = StereoSGBMDepthProvider()
+        self._init_provider()
 
     def _load_camera_parameters(self) -> None:
         try:
@@ -83,31 +86,21 @@ class StereoCamera:
             self.Kr, self.Dr, self.R2, self.P2, self.imSize, cv2.CV_32FC1
         )
 
-    def _setup_stereo_matchers(self) -> None:
-        self.left_matcher = cv2.StereoSGBM_create(
-            minDisparity=self.min_disp,
-            numDisparities=self.num_disp,
-            blockSize=self.window_size,
-            P1=8 * 3 * self.window_size ** 2,
-            P2=32 * 3 * self.window_size ** 2,
-            disp12MaxDiff=1,
-            uniquenessRatio=15,
-            speckleWindowSize=200,
-            speckleRange=2,
-            preFilterCap=63,
-            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
+    def _init_provider(self) -> None:
+        self.depth_provider.setup(
+            num_disp=self.num_disp,
+            window_size=self.window_size,
+            min_disp=self.min_disp,
+            wls_enabled=self.depth_enabled or self.wls_enabled,
         )
-
-        if self.depth_enabled or self.wls_enabled:
-            self.right_matcher = cv2.ximgproc.createRightMatcher(self.left_matcher)
-            self.wls_filter = cv2.ximgproc.createDisparityWLSFilter(matcher_left=self.left_matcher)
-            self.wls_filter.setLambda(8000.0)
-            self.wls_filter.setSigmaColor(1.5)
-        else:
-            self.right_matcher = None
-            self.wls_filter = None
-
         self.kernel = np.ones((3, 3), np.uint8)
+
+    def set_depth_provider(self, provider: DepthProvider) -> None:
+        with self.lock:
+            self.depth_provider.release()
+            self.depth_provider = provider
+            self._init_provider()
+        self.disp_buffer.clear()
 
     def initialize_camera(self) -> bool:
         try:
@@ -152,17 +145,10 @@ class StereoCamera:
     def compute_disparity(self, left_frame: np.ndarray, right_frame: np.ndarray) -> np.ndarray:
         grayL = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
         grayR = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
-
-        displ = self.left_matcher.compute(grayL, grayR)
-
-        if self.wls_enabled and self.right_matcher and self.wls_filter:
-            dispr = self.right_matcher.compute(grayR, grayL)
-            filtered_disp = self.wls_filter.filter(displ, grayL, disparity_map_right=dispr)
-        else:
-            filtered_disp = displ
-
-        filtered_disp[filtered_disp < 0] = 0
-        return filtered_disp
+        grayL = cv2.resize(grayL, self.img_size)
+        grayR = cv2.resize(grayR, self.img_size)
+        result = self.depth_provider.compute(grayL, grayR)
+        return result.disparity
 
     def get_depth_at_point(self, disparity_map: np.ndarray, x: Optional[int] = None, y: Optional[int] = None) -> float:
         points_3d = cv2.reprojectImageTo3D(disparity_map.astype(np.float32) / 16.0, self.Q)
@@ -280,7 +266,7 @@ class StereoCamera:
                     setattr(self, key, value)
             matcher_keys = {"wls_enabled", "num_disp", "window_size", "min_disp"}
             if matcher_keys & kwargs.keys():
-                self._setup_stereo_matchers()
+                self._init_provider()
 
     # --- Shared frame buffer ---
 
@@ -300,17 +286,8 @@ class StereoCamera:
             grayL_d = cv2.resize(grayL, self.img_size, interpolation=cv2.INTER_LINEAR)
             grayR_d = cv2.resize(grayR, self.img_size, interpolation=cv2.INTER_LINEAR)
 
-            displ = self.left_matcher.compute(grayL_d, grayR_d)
-            displ[displ < 0] = 0
-
-            wls_active = self.wls_enabled and self.right_matcher and self.wls_filter
-            disp_final = displ
-            if wls_active:
-                dispr = self.right_matcher.compute(grayR_d, grayL_d)
-                disp_final = self.wls_filter.filter(displ, grayL_d, disparity_map_right=dispr)
-                disp_final[disp_final < 0] = 0
-
-            disp_final = cv2.medianBlur(disp_final, 3)
+            result = self.depth_provider.compute(grayL_d, grayR_d)
+            disp_final = result.disparity
             self.disp_buffer.append(disp_final.copy())
             self._latest_left = frame.copy()
 
