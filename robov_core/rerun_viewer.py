@@ -103,13 +103,14 @@ class RerunViewer:
 
         rr.log("camera/left", rr.Image(cv2.cvtColor(left_small, cv2.COLOR_BGR2RGB)))
 
-        depth = self._disparity_to_depth(disp_small)
-        rr.log("camera/depth", rr.DepthImage(depth.astype(np.float32)))
-
         if self.pointcloud_enabled:
-            points, colors = self._build_pointcloud(disp_small, left_small)
+            depth, points, colors = self._build_pointcloud(disp_small, left_small)
+            rr.log("camera/depth", rr.DepthImage(depth))
             if len(points) > 0:
                 rr.log("camera/pointcloud", rr.Points3D(points, colors=colors))
+        else:
+            depth = self._disparity_to_depth(disp_small)
+            rr.log("camera/depth", rr.DepthImage(depth))
 
         self._frame_count += 1
         now = time.time()
@@ -128,14 +129,32 @@ class RerunViewer:
                 f_eff * self.camera.baseline / d16,
                 0.0,
             ) * self.camera.depth_scale
-        return np.clip(depth, 0, 50000)
+        return np.clip(depth, 0, 50000).astype(np.float32)
 
     def _build_pointcloud(self, disp: np.ndarray, image: np.ndarray):
-        disp_float = disp.astype(np.float32) / 16.0
-        points_3d = cv2.reprojectImageTo3D(disp_float, self.camera.Q)
+        h, w = disp.shape[:2]
+        d16 = disp.astype(np.float32) / 16.0
 
-        valid = disp_float > 1.0
-        points = points_3d[valid] * self.camera.depth_scale / 1000.0
+        f_eff = self.camera.focal_length * h / self.camera.imSize[1]
+        cx = self.camera.Kl[0, 2] * w / self.camera.imSize[0]
+        cy = self.camera.Kl[1, 2] * h / self.camera.imSize[1]
+
+        valid = d16 > 1.0
+        if not np.any(valid):
+            return self._disparity_to_depth(disp), np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
+
+        rows, cols = np.where(valid)
+        u = cols.astype(np.float32)
+        v = rows.astype(np.float32)
+        d = d16[valid]
+
+        Z = f_eff * self.camera.baseline / d * self.camera.depth_scale
+        Z = np.clip(Z, 0, 50000)
+
+        X = (u - cx) * Z / f_eff
+        Y = (v - cy) * Z / f_eff
+
+        points = np.column_stack([X / 1000.0, -Y / 1000.0, Z / 1000.0])
 
         colors_bgr = image[valid]
         colors_rgb = cv2.cvtColor(
@@ -148,7 +167,10 @@ class RerunViewer:
             points = points[idx]
             colors = colors[idx]
 
-        return points.astype(np.float32), colors.astype(np.float32)
+        depth_map = np.zeros((h, w), dtype=np.float32)
+        depth_map[valid] = Z / 1000.0
+
+        return depth_map, points.astype(np.float32), colors.astype(np.float32)
 
     @property
     def fps(self) -> float:
