@@ -129,7 +129,7 @@ class RerunViewer:
                 f_eff * self.camera.baseline / d16,
                 0.0,
             ) * self.camera.depth_scale
-        return np.clip(depth, 0, 50000).astype(np.float32)
+        return np.clip(depth, 0, 5000).astype(np.float32)
 
     def _build_pointcloud(self, disp: np.ndarray, image: np.ndarray):
         h, w = disp.shape[:2]
@@ -139,9 +139,13 @@ class RerunViewer:
         cx = self.camera.Kl[0, 2] * w / self.camera.imSize[0]
         cy = self.camera.Kl[1, 2] * h / self.camera.imSize[1]
 
-        valid = d16 > 1.0
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        bright = gray > 5
+
+        valid = (d16 > 1.0) & bright
         if not np.any(valid):
-            return self._disparity_to_depth(disp), np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
+            depth = self._disparity_to_depth(disp)
+            return depth, np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
 
         rows, cols = np.where(valid)
         u = cols.astype(np.float32)
@@ -149,12 +153,11 @@ class RerunViewer:
         d = d16[valid]
 
         Z = f_eff * self.camera.baseline / d * self.camera.depth_scale
-        Z = np.clip(Z, 0, 50000)
+        Z = np.clip(Z, 0, 5000)
 
-        X = (u - cx) * Z / f_eff
-        Y = (v - cy) * Z / f_eff
-
-        points = np.column_stack([X / 1000.0, -Y / 1000.0, Z / 1000.0])
+        X_m = (u - cx) * Z / f_eff / 1000.0
+        Y_m = (v - cy) * Z / f_eff / 1000.0
+        Z_m = Z / 1000.0
 
         colors_bgr = image[valid]
         colors_rgb = cv2.cvtColor(
@@ -162,13 +165,15 @@ class RerunViewer:
         ).reshape(-1, 3)
         colors = colors_rgb.astype(np.float32) / 255.0
 
+        points = np.column_stack([X_m, -Y_m, -Z_m])
+
         if len(points) > self._max_points:
             idx = np.random.choice(len(points), self._max_points, replace=False)
             points = points[idx]
             colors = colors[idx]
 
         depth_map = np.zeros((h, w), dtype=np.float32)
-        depth_map[valid] = Z / 1000.0
+        depth_map[valid] = Z_m
 
         return depth_map, points.astype(np.float32), colors.astype(np.float32)
 
