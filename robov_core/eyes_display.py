@@ -12,6 +12,7 @@ Ticker: scrolling answer text at bottom synced to audio duration.
 import math
 import os
 import sys
+import subprocess
 import threading
 import logging
 import socket
@@ -193,6 +194,8 @@ class RobotFace:
         self._cmd_active = False
         self._cmd_input_rect = pygame.Rect(0, 0, 0, 0)
         self._cmd_send_rect = pygame.Rect(0, 0, 0, 0)
+        self._close_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self._onboard_proc = None
 
     def _preload_all_emotions(self):
         """Загружает все PNG из папки emotions/ при старте."""
@@ -290,6 +293,7 @@ class RobotFace:
                     if self._cmd_active:
                         if event.key == pygame.K_ESCAPE:
                             self._cmd_active = False
+                            self._stop_onboard()
                         elif event.key == pygame.K_BACKSPACE:
                             self._cmd_buf = self._cmd_buf[:-1]
                         elif event.key == pygame.K_RETURN:
@@ -310,14 +314,23 @@ class RobotFace:
                         if self._exit_btn_rect.collidepoint(mx, my):
                             log.info("Exit via menu")
                             self.state.stop()
+                        elif self._close_btn_rect.collidepoint(mx, my):
+                            self._menu_visible = False
+                            self.state._menu_visible = False
+                            self._cmd_active = False
+                            self._stop_onboard()
                         elif self._cmd_send_rect.collidepoint(mx, my):
                             if self._cmd_buf.strip():
                                 self._send_command(self._cmd_buf.strip())
                                 self._cmd_buf = ""
                         elif self._cmd_input_rect.collidepoint(mx, my):
-                            self._cmd_active = True
+                            if not self._cmd_active:
+                                self._cmd_active = True
+                                self._start_onboard()
                         else:
-                            self._cmd_active = False
+                            if self._cmd_active:
+                                self._cmd_active = False
+                                self._stop_onboard()
                     else:
                         # toggle menu on bottom 20% of screen
                         if my > sh * 0.8:
@@ -421,7 +434,7 @@ class RobotFace:
                 overlay.fill((0, 0, 0, 220))
                 screen.blit(overlay, (0, 0))
 
-                m_w, m_h = 400, 340
+                m_w, m_h = 400, 400
                 m_rect = pygame.Rect((sw - m_w) // 2, (sh - m_h) // 2, m_w, m_h)
                 pygame.draw.rect(screen, (25, 25, 25), m_rect)
                 pygame.draw.rect(screen, (200, 200, 200), m_rect, 2)
@@ -460,6 +473,14 @@ class RobotFace:
                 pygame.draw.rect(screen, (255, 100, 100), self._exit_btn_rect, 2)
                 txt = font.render("Exit", True, (255, 255, 255))
                 screen.blit(txt, txt.get_rect(center=self._exit_btn_rect.center))
+                y_cur += 65
+
+                # Close menu button
+                self._close_btn_rect = pygame.Rect(m_rect.x + 50, y_cur, 300, 45)
+                pygame.draw.rect(screen, (50, 50, 80), self._close_btn_rect)
+                pygame.draw.rect(screen, (100, 120, 200), self._close_btn_rect, 2)
+                close_txt = font.render("Close", True, (255, 255, 255))
+                screen.blit(close_txt, close_txt.get_rect(center=self._close_btn_rect.center))
 
             # --- Current LLM model (top-right corner) ---
             if ai_state:
@@ -471,6 +492,17 @@ class RobotFace:
             pygame.display.flip()
 
         log.info("Shutting down...")
+        proc = self._onboard_proc
+        self._onboard_proc = None
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
         pygame.quit()
 
     def start(self):
@@ -503,6 +535,39 @@ class RobotFace:
             command(text)
         except Exception as e:
             log.error(f"Command failed: {e}")
+
+    def _start_onboard(self):
+        if self._onboard_proc is not None:
+            return
+        try:
+            self._onboard_proc = subprocess.Popen(
+                ["onboard", "--x-layout", "us"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            pygame.event.set_grab(False)
+            log.info("On-screen keyboard started")
+        except FileNotFoundError:
+            log.warning("onboard not found, on-screen keyboard unavailable")
+            self._onboard_proc = None
+        except Exception as e:
+            log.error(f"Failed to start onboard: {e}")
+            self._onboard_proc = None
+
+    def _stop_onboard(self):
+        proc = self._onboard_proc
+        if proc is None:
+            return
+        self._onboard_proc = None
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        pygame.event.set_grab(True)
+        log.info("On-screen keyboard stopped")
 
     @staticmethod
     def _wrap_text(font, text, max_width):

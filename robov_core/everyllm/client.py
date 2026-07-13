@@ -38,6 +38,35 @@ def _refine_prompt() -> list[dict]:
     return [{"role": "user", "content": f"Say hello in 25 words or fewer. {n}"}]
 
 
+def _classify_error(e: Exception) -> str:
+    """Return a short human-readable error classification."""
+    name = type(e).__name__
+    msg = str(e).strip()
+    low = msg.lower()
+    if "rate" in low and ("limit" in low or "429" in low):
+        return "rate limit"
+    if "401" in low or "403" in low or "unauthorized" in low or "forbidden" in low:
+        return "auth error"
+    if "timeout" in low or "timed out" in low:
+        return "timeout"
+    if "connect" in low or "refused" in low or "unreachable" in low:
+        return "connection refused"
+    if "dns" in low or "resolve" in low or "name or service" in low:
+        return "DNS error"
+    if "ssl" in low or "certificate" in low:
+        return "SSL error"
+    if "not found" in low or "404" in low:
+        return "not found"
+    if "key" in low and ("invalid" in low or "expired" in low):
+        return "invalid API key"
+    if name == "AuthenticationError" or "auth" in low:
+        return "auth error"
+    if msg:
+        short = msg[:80]
+        return f"{name}: {short}"
+    return name
+
+
 class _Completions:
     def __init__(self, client: EveryLLM):
         self._client = client
@@ -366,13 +395,13 @@ class EveryLLM:
             provider = pg["provider"]
             group_results = {}
             for model_name in pg["models"]:
-                ttft = self._measure_ttft(provider, model_name, timeout)
+                ttft, err = self._measure_ttft(provider, model_name, timeout)
                 if ttft is not None:
                     self._tracker.update(model_name, ttft)
                     group_results[model_name] = {"ttft_ms": round(ttft), "ok": True}
                 else:
                     group_results[model_name] = {
-                        "ttft_ms": None, "ok": False, "error": "Timeout or failed",
+                        "ttft_ms": None, "ok": False, "error": err or "failed",
                     }
             return group_results
 
@@ -405,9 +434,9 @@ class EveryLLM:
             for future in as_completed(futures):
                 name = futures[future]
                 try:
-                    ttft = future.result()
+                    ttft, err = future.result()
                 except Exception:
-                    ttft = None
+                    ttft, err = None, "provider crashed"
                 if ttft is not None:
                     self._tracker.update(name, ttft)
                     results[name] = {"ttft_ms": round(ttft), "ok": True}
@@ -415,7 +444,7 @@ class EveryLLM:
                     results[name] = {
                         "ttft_ms": None,
                         "ok": False,
-                        "error": "Timeout or failed",
+                        "error": err or "failed",
                     }
 
         self._save_best_models()
@@ -516,11 +545,13 @@ class EveryLLM:
         except Exception:
             return False
 
-    def _measure_ttft(self, provider, model_name: str, timeout: float = 10.0) -> Optional[float]:
+    def _measure_ttft(self, provider, model_name: str, timeout: float = 10.0):
+        """Return (ttft_ms, error_msg). error_msg is None on success."""
         for attempt in range(3):
             result = [None]
             exception = [None]
             is_rate_limit = [False]
+            last_error = [""]
 
             def _target():
                 try:
@@ -546,8 +577,9 @@ class EveryLLM:
                                 return
                     except RateLimitError:
                         is_rate_limit[0] = True
-                    except Exception:
-                        pass
+                        last_error[0] = "rate limit"
+                    except Exception as e:
+                        last_error[0] = _classify_error(e)
 
                     self._tracker.set_streaming(model_name, False)
 
@@ -570,8 +602,9 @@ class EveryLLM:
                             result[0] = (time.time() - start) * 1000
                     except RateLimitError:
                         is_rate_limit[0] = True
-                    except Exception:
-                        pass
+                        last_error[0] = "rate limit"
+                    except Exception as e:
+                        last_error[0] = _classify_error(e)
                 except Exception as e:
                     exception[0] = e
 
@@ -584,24 +617,25 @@ class EveryLLM:
                 if attempt < 2:
                     time.sleep(1.0 * (attempt + 1))
                     continue
-                return None
+                return None, "timeout (no response)"
             if exception[0]:
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
                     continue
-                return None
+                return None, _classify_error(exception[0])
             if is_rate_limit[0]:
                 if attempt < 2:
                     time.sleep(3.0 * (attempt + 1))
                     continue
-                return None
+                return None, "rate limit (429)"
             if result[0] is not None:
-                return result[0]
+                return result[0], None
             if attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
                 continue
-            return None
-        return None
+            err = last_error[0] or "empty response"
+            return None, err
+        return None, "failed after 3 attempts"
 
     def _resolve_best_path(self, path: Optional[str | Path]) -> Path:
         if path is not None:
