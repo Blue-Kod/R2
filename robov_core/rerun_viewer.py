@@ -50,6 +50,7 @@ class RerunViewer:
             self._log(f"gRPC on :{self.grpc_port}, web on :{self.port}, URI: {server_uri}")
 
             self._send_test_frame()
+            rr.log("camera", rr.ViewCoordinates.RDF, static=True)
 
             self._running = True
             self._thread = threading.Thread(
@@ -165,7 +166,7 @@ class RerunViewer:
         ).reshape(-1, 3)
         colors = colors_rgb.astype(np.float32) / 255.0
 
-        points = np.column_stack([X_m, -Y_m, -Z_m])
+        points = np.column_stack([X_m, Y_m, Z_m])
 
         if len(points) > self._max_points:
             idx = np.random.choice(len(points), self._max_points, replace=False)
