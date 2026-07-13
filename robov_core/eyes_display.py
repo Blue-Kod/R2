@@ -188,6 +188,7 @@ class RobotFace:
         self._jiggle_timer = 0.0
 
         self._menu_visible = False
+        self._menu_rect = pygame.Rect(0, 0, 0, 0)
 
         # Command input state
         self._cmd_buf = ""
@@ -321,7 +322,11 @@ class RobotFace:
                     if event.type == pygame.FINGERDOWN:
                         mx = int(mx * sw)
                         my = int(my * sh)
-                    if self._menu_visible:
+
+                    if my > sh * 0.8 and not self._menu_rect.collidepoint(mx, my):
+                        self._menu_visible = not self._menu_visible
+                        self.state._menu_visible = self._menu_visible
+                    elif self._menu_visible:
                         if self._exit_btn_rect.collidepoint(mx, my):
                             log.info("Exit via menu")
                             self.state.stop()
@@ -344,11 +349,6 @@ class RobotFace:
                             if self._cmd_active:
                                 self._cmd_active = False
                                 self._stop_onboard()
-                    else:
-                        # toggle menu on bottom 20% of screen
-                        if my > sh * 0.8:
-                            self._menu_visible = not getattr(self, '_menu_visible', False)
-                            self.state._menu_visible = self._menu_visible  # keep in sync
 
             # Update animation (including random idle blinks)
             self.state.update_logic(dt)
@@ -447,7 +447,8 @@ class RobotFace:
                 screen.blit(overlay, (0, 0))
 
                 m_w, m_h = 400, 460
-                m_rect = pygame.Rect((sw - m_w) // 2, 10, m_w, m_h)
+                self._menu_rect = pygame.Rect((sw - m_w) // 2, 10, m_w, m_h)
+                m_rect = self._menu_rect
                 pygame.draw.rect(screen, (25, 25, 25), m_rect)
                 pygame.draw.rect(screen, (200, 200, 200), m_rect, 2)
 
@@ -558,9 +559,20 @@ class RobotFace:
 
     @staticmethod
     def _shutdown():
-        log.info("Shutdown requested")
+        log.info("Shutdown requested — cleaning up...")
         try:
-            subprocess.Popen(["sudo", "shutdown", "-H", "now"])
+            from robov_core.high_level import cleanup
+            cleanup()
+        except Exception as e:
+            log.error(f"Cleanup before shutdown failed: {e}")
+        log.info("Launching system shutdown")
+        try:
+            subprocess.Popen(
+                ["sudo", "shutdown", "-H", "now"],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except Exception as e:
             log.error(f"Shutdown failed: {e}")
 
