@@ -88,30 +88,6 @@ class StereoCamera:
 
     @staticmethod
     def _create_default_provider() -> DepthProvider:
-        from pathlib import Path
-        import os
-        script_dir = Path(__file__).resolve().parent.parent
-        models_dir = script_dir / "models"
-
-        rknn_path = models_dir / "las2_s_640x384.rknn"
-        onnx_path = models_dir / "las2_s_640x384.onnx"
-
-        if os.path.isfile(str(rknn_path)):
-            try:
-                p = RKNNDepthProvider()
-                p.setup(rknn_path=str(rknn_path), onnx_path=str(onnx_path))
-                return p
-            except Exception:
-                pass
-
-        if os.path.isfile(str(onnx_path)):
-            try:
-                p = LAS2DepthProvider()
-                p.setup(onnx_path=str(onnx_path))
-                return p
-            except Exception:
-                pass
-
         return StereoSGBMDepthProvider()
 
     def _init_provider(self) -> None:
