@@ -109,7 +109,8 @@ async function fetchStatus() {
         const d = await r.json();
         if (d.available && d.running) {
             const host = location.hostname;
-            const url = `http://${host}:${d.port}`;
+            const grpcUrl = `rerun+http://${host}:${d.grpc_port}/proxy`;
+            const url = `http://${host}:${d.port}/?url=${encodeURIComponent(grpcUrl)}`;
             if (!rerunReady) {
                 iframe.src = url;
                 iframe.onload = () => {
