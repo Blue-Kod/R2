@@ -24,7 +24,6 @@ numpy>=1.24.0,<2.0.0
 # Hardware I2C control for PCA9685 servo driver
 PCA9685-smbus2>=1.0.0
 
-
 # Display/graphics
 pygame>=2.5.0
 
@@ -40,15 +39,8 @@ sounddevice>=0.4.6
 # Scientific computing - heavy, install only if needed
 scipy>=1.11.0
 
-# Screen capture for remote desktop
-mss>=9.0.0
-
 # Russian TTS
 retro-ru-tts>=1.0.7
 
 # AI / LLM (EveryLLM backend)
 g4f>=7.8.0
-
-# YOLOE open-vocabulary detection (YOLOE Test)
-ultralytics>=8.3.0
-git+https://github.com/ultralytics/CLIP.git

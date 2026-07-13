@@ -186,10 +186,15 @@ class RobotFace:
         self._jiggle_change_interval = 1  # seconds between target changes
         self._jiggle_timer = 0.0
 
+        # Eye position offset (set by set_eyes_position)
+        self._eyes_offset_x = 0.0
+        self._eyes_offset_y = 0.0
+
         # Menu state
         self._menu_visible = False
         self._menu_input = ""
         self._menu_cursor_blink = 0.0
+        self._input_rect = pygame.Rect(0, 0, 0, 0)
         self._send_btn_rect = pygame.Rect(0, 0, 0, 0)
         self._send_btn_rect2 = pygame.Rect(0, 0, 0, 0)  # for keyboard icon
 
@@ -347,12 +352,20 @@ class RobotFace:
             # --- AI reasoning overlay (behind the face) ---
             ai_state = self._get_ai_state()
             if ai_state:
-                display = ai_state.get("display_text", "")
+                history = ai_state.get("chat_history", [])
                 reasoning = ai_state.get("reasoning_text", "")
 
-                overlay_text = display
+                overlay_parts = []
+                for entry in history:
+                    if entry["type"] == "reasoning":
+                        overlay_parts.append(entry["content"])
+                    elif entry["type"] == "tool":
+                        overlay_parts.append(f"  {entry['content']}")
+
                 if reasoning:
-                    overlay_text += ("\n" if overlay_text else "") + reasoning
+                    overlay_parts.append(reasoning)
+
+                overlay_text = "\n".join(overlay_parts)
 
                 if overlay_text:
                     overlay_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
@@ -367,7 +380,7 @@ class RobotFace:
                     for line in lines:
                         if y > sh - 80:
                             break
-                        surf = overlay_font.render(line, True, (50, 50, 50, 120))
+                        surf = overlay_font.render(line, True, (140, 140, 140, 180))
                         overlay_surf.blit(surf, (40, y))
                         y += 32
                     screen.blit(overlay_surf, (0, 0))
@@ -390,9 +403,9 @@ class RobotFace:
 
             scaled_tex = pygame.transform.scale(tex, (target_width, target_height))
 
-            # Draw centered both horizontally and vertically with jiggle effect
-            x_offset = (sw - target_width) // 2 + int(self._jiggle_x)
-            y_offset = (sh - target_height) // 2 + int(self._jiggle_y)
+            # Draw centered both horizontally and vertically with jiggle + eye offset
+            x_offset = (sw - target_width) // 2 + int(self._jiggle_x + self._eyes_offset_x)
+            y_offset = (sh - target_height) // 2 + int(self._jiggle_y + self._eyes_offset_y)
             screen.blit(scaled_tex, (x_offset, y_offset))
 
             # --- Ticker bar (scrolling answer text) ---
@@ -490,9 +503,11 @@ class RobotFace:
     def update_emote(self, name, smooth=True):
         self.state.request_emote_change(name, smooth)
 
-    # kept for backwards compatibility (does nothing)
     def update_eyes_position(self, x, y):
-        pass
+        """Set eye position offset [-1..1, -1..1]. Applied when rendering face."""
+        max_offset = 60.0
+        self._eyes_offset_x = max(-1.0, min(1.0, float(x))) * max_offset
+        self._eyes_offset_y = max(-1.0, min(1.0, float(y))) * max_offset
 
     def _get_ai_state(self):
         """Get AI display state from the shared agent (thread-safe)."""

@@ -800,6 +800,8 @@ class DisplayState:
         self.last_answer_time: float = 0.0
         self.display_text: str = ""
 
+        self.chat_history: list[dict] = []
+
         self._sse_listeners: list = []
         self._sse_lock = threading.Lock()
 
@@ -809,6 +811,27 @@ class DisplayState:
                 if hasattr(self, k):
                     setattr(self, k, v)
         self._notify_sse()
+
+    def add_to_history(self, entry_type: str, content: str, **extra) -> None:
+        entry = {"type": entry_type, "content": content}
+        entry.update(extra)
+        with self.lock:
+            self.chat_history.append(entry)
+        self._notify_sse()
+
+    def get_chat_history(self) -> list[dict]:
+        with self.lock:
+            return list(self.chat_history)
+
+    def get_current_turn_entries(self) -> list[dict]:
+        with self.lock:
+            last_user_idx = -1
+            for i, entry in enumerate(self.chat_history):
+                if entry["type"] == "user":
+                    last_user_idx = i
+            if last_user_idx < 0:
+                return list(self.chat_history)
+            return list(self.chat_history[last_user_idx + 1:])
 
     def get_all(self) -> dict:
         with self.lock:
@@ -825,6 +848,7 @@ class DisplayState:
                 "last_answer": self.last_answer,
                 "last_answer_time": self.last_answer_time,
                 "display_text": self.display_text,
+                "chat_history": self.get_chat_history(),
             }
 
     def add_sse_listener(self, q: queue.Queue) -> None:
@@ -987,21 +1011,11 @@ class R2Agent:
     # Chat loop (runs in thread)
     # ------------------------------------------------------------------
     def _chat_loop(self, prompt: str) -> None:
-        with self.display.lock:
-            old_display = self.display.display_text
-            old_reasoning = self.display.reasoning_text
-            old_tools = self.display.tools_text
-        combined = old_display
-        if old_reasoning:
-            combined += ("\n" if combined else "") + old_reasoning
-        if old_tools:
-            combined += ("\n" if combined else "") + old_tools
-
         self.display.update(
             is_idle=False, is_thinking=True, is_speaking=False,
             reasoning_text="", tools_text="", answer_text="",
             ticker_text="", ticker_duration=0.0,
-            display_text=combined,
+            display_text="",
             last_answer="", last_answer_time=0.0,
         )
 
@@ -1137,12 +1151,11 @@ class R2Agent:
             if not actions:
                 break
 
-            # Flush current reasoning to display_text before appending tools
+            # Save current reasoning to chat_history
+            if think_buf:
+                full_reasoning = prev_think + ("\n" if prev_think else "") + think_buf
+                self.display.add_to_history("reasoning", full_reasoning, round=round_num)
             with self.display.lock:
-                flushed = self.display.display_text
-                if think_buf:
-                    flushed += ("\n" if flushed else "") + think_buf
-                self.display.display_text = flushed
                 self.display.reasoning_text = ""
             prev_think = ""
             results_text = self._execute_actions(actions)
@@ -1154,6 +1167,7 @@ class R2Agent:
             clean_answer = self._strip_tags(response_text).strip()
             clean_answer = self._clean_for_speech(clean_answer)
             if clean_answer:
+                self.display.add_to_history("answer", clean_answer)
                 self.display.update(
                     last_answer=clean_answer,
                     last_answer_time=time.time(),
@@ -1247,6 +1261,7 @@ class R2Agent:
                 tools_text=self.display.get_all()["tools_text"]
                 + f"\n  |- {name} ({elapsed:.1f}s): {one_line}"
             )
+            self.display.add_to_history("tool", f"{name} ({elapsed:.1f}s): {one_line}")
 
         return "\n\n".join(results)
 
