@@ -11,6 +11,8 @@ try:
 except ImportError:
     _HAS_RERUN = False
 
+from robov_core.high_level import ip_address
+
 _LOG_TAG = "[RerunViewer]"
 
 
@@ -42,13 +44,19 @@ class RerunViewer:
             return False
         try:
             rr.init("r2_robot")
-            server_uri = rr.serve_grpc(grpc_port=self.grpc_port)
+            server_uri = rr.serve_grpc(
+                grpc_port=self.grpc_port,
+                cors_allow_origin=["*"],
+            )
+            # Replace 127.0.0.1 with real IP so remote browsers connect to robot
+            host_ip = ip_address()
+            remote_uri = server_uri.replace("127.0.0.1", host_ip)
             rr.serve_web_viewer(
                 open_browser=False,
                 web_port=self.port,
-                connect_to=server_uri,
+                connect_to=remote_uri,
             )
-            self._log(f"gRPC on :{self.grpc_port}, web on :{self.port}")
+            self._log(f"gRPC on :{self.grpc_port}, web on :{self.port}, URI: {remote_uri}")
 
             self._send_test_frame()
 
