@@ -241,8 +241,8 @@ class PygameKeyboard:
             if char == "shift" and self.shift:
                 color = self._btn_active_color
 
-            pygame.draw.rect(screen, color, rect, border_radius=4)
-            pygame.draw.rect(screen, self._btn_border_color, rect, 1, border_radius=4)
+            pygame.draw.rect(screen, color, rect)
+            pygame.draw.rect(screen, self._btn_border_color, rect, 1)
 
             txt = font.render(display, True, self._text_color)
             txt_rect = txt.get_rect(center=rect.center)

@@ -42,7 +42,7 @@ class RerunViewer:
             return False
         try:
             rr.init("r2_robot")
-            server_uri = rr.serve_grpc(grpc_port=self.grpc_port, server_memory_limit="500MiB")
+            server_uri = rr.serve_grpc(grpc_port=self.grpc_port, server_memory_limit="15%")
             rr.serve_web_viewer(
                 open_browser=False,
                 web_port=self.port,
