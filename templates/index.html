@@ -77,23 +77,6 @@
         #help-content hr { border:none; border-top:1px solid #2a2a2a; margin:16px 0; }
         #help-content blockquote { border-left:3px solid #44944a; padding:6px 12px; margin:10px 0; background:#0f0f0f; border-radius:0 8px 8px 0; color:#aaa; }
         #help-content strong { color:#fff; }
-        #ai-chat-log { flex:1; border-radius:14px; border:1px solid var(--line); background:#0d0d0d; padding:12px; overflow-y:auto; font-size:13px; line-height:1.6; font-family: 'JetBrains Mono', Consolas, monospace; display:flex; flex-direction:column; gap:0; }
-        .ai-turn { margin-bottom:10px; }
-        .ai-turn-user { color:#6abf69; padding:4px 0; }
-        .ai-turn-user::before { content:'> '; color:#44944a; font-weight:bold; }
-        .ai-turn-reasoning { color:#555580; padding:2px 0; white-space:pre-wrap; word-break:break-word; }
-        .ai-turn-reasoning .ai-r-label { color:#444470; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px; display:block; }
-        .ai-turn-tools { color:#9a7a30; padding:2px 0; white-space:pre-wrap; word-break:break-word; font-size:12px; }
-        .ai-turn-tools .ai-t-label { color:#7a6020; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px; display:block; }
-        .ai-turn-answer { color:#e0f0e8; padding:4px 0; }
-        .ai-turn-answer::before { content:'R2: '; color:#44944a; font-weight:bold; }
-        .ai-turn-error { color:#d06050; padding:4px 0; }
-        .ai-turn-error::before { content:'! '; color:#aa4444; font-weight:bold; }
-        .ai-turn-sep { border-bottom:1px solid #1a1a1a; margin:6px 0; }
-        #ai-status-bar { display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--line); border-radius:12px; background:#0d0d0d; font-size:11px; color:var(--muted); flex-shrink:0; margin-top:6px; }
-        #ai-status-bar .dot { width:8px; height:8px; border-radius:50%; background:#555; flex-shrink:0; }
-        #ai-status-bar .dot.thinking { background:#d19a66; animation: pulse 0.8s infinite alternate; }
-        #ai-status-bar .dot.speaking { background:#44944a; animation: pulse 0.6s infinite alternate; }
         @media (max-width: 480px) {
             .layout { padding: 8px; gap: 8px; }
             .servo-row label { width: 70px; font-size: 10px; }
@@ -176,7 +159,6 @@
                 <button id="tabTerminal" class="active">Терминал</button>
                 <button id="tabLogs">Логи</button>
                 <button id="tabPython">Python</button>
-                <button id="tabAI">AI</button>
                 <button id="tabHelp">Помощь</button>
             </div>
             <div id="terminal-pane" style="display:flex; flex-direction:column; flex:1; min-height:0;">
@@ -195,9 +177,10 @@
                 <div id="logs-output" class="terminal-box">📡 Логи загрузятся автоматически...</div>
             </div>
             <div id="python-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0; gap: 8px;">
-                <div id="python-editor-wrap" style="flex:1; border:1px solid #2a2a2a; border-radius:12px; overflow:hidden;"><textarea id="python-code" style="display:none;">print("Hello, World!")
-set_emote("happy")
-speak("Привет, я робот R2!")</textarea></div>
+                    <div id="python-editor-wrap" style="flex:1; border:1px solid #2a2a2a; border-radius:12px; overflow:hidden;"><textarea id="python-code" style="display:none;"># Отправить команду ИИ:
+command("Привет!")
+
+set_emote("happy")</textarea></div>
                 <div style="display: flex; gap: 8px;">
                     <button id="run-python-btn" style="flex:1; background: #44944a; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;"><span class="loading-spinner hidden" id="python-spinner"></span>▶ Запустить</button>
                     <button id="clear-python-btn" style="background: #333; color: white; border: none; border-radius: 12px; padding: 8px 16px; cursor: pointer;">Очистить</button>
@@ -209,16 +192,6 @@ speak("Привет, я робот R2!")</textarea></div>
                     <div id="help-sidebar" style="flex:0 0 140px; overflow-y:auto; border:1px solid var(--line); border-radius:14px; background:#0d0d0d; padding:6px 0;"></div>
                     <div id="help-content" class="terminal-box" style="flex:1; line-height:1.6; font-size:13px; overflow-y:auto;"></div>
                 </div>
-            </div>
-            <div id="ai-pane" class="hidden" style="display:flex; flex-direction:column; flex:1; min-height:0;">
-                <div id="ai-chat-log"></div>
-                <div style="display:flex; margin-top:8px; gap:8px; align-items:center; flex-shrink:0;">
-                    <span style="color:#44944a; font-family: monospace;">🤖</span>
-                    <input type="text" id="ai-input" placeholder="Спроси робота..." style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:12px; padding:8px 12px; font-family:monospace; outline:none; font-size:13px;">
-                    <button id="ai-send-btn" style="background:#44944a; color:white; border:none; border-radius:12px; padding:8px 16px; cursor:pointer; font-size:13px; font-weight:500; white-space:nowrap;">Отправить</button>
-                    <button id="ai-stop-btn" style="background:#8b0000; color:white; border:none; border-radius:12px; padding:8px 14px; cursor:pointer; font-size:13px; font-weight:500; white-space:nowrap; display:none;">Стоп</button>
-                </div>
-                <div id="ai-status-bar"><div class="dot" id="ai-dot"></div><span id="ai-status-text">Ожидание...</span></div>
             </div>
         </aside>
     </div>
@@ -261,14 +234,6 @@ const helpSidebar = document.getElementById('help-sidebar');
 const helpContent = document.getElementById('help-content');
 const exitBtn = document.getElementById('exitBtn');
 const updateBtn = document.getElementById('updateBtn');
-const tabAI = document.getElementById('tabAI');
-const aiPane = document.getElementById('ai-pane');
-const aiChatLog = document.getElementById('ai-chat-log');
-const aiInput = document.getElementById('ai-input');
-const aiSendBtn = document.getElementById('ai-send-btn');
-const aiStopBtn = document.getElementById('ai-stop-btn');
-const aiDot = document.getElementById('ai-dot');
-const aiStatusText = document.getElementById('ai-status-text');
 
 // ===================== STATE RESTORE =====================
 function restoreState() {
@@ -427,31 +392,24 @@ function attachEvents() {
     tabTerminal.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabTerminal.classList.add('active');
-        terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden'); aiPane.classList.add('hidden');
+        terminalPane.classList.remove('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
     };
     tabLogs.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabLogs.classList.add('active');
-        logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden'); aiPane.classList.add('hidden');
+        logsPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
         fetchSystemStats();
     };
     tabPython.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabPython.classList.add('active');
-        pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); helpPane.classList.add('hidden'); aiPane.classList.add('hidden');
+        pythonPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); helpPane.classList.add('hidden');
         if (!pythonEditor) initPythonEditor();
-    };
-    tabAI.onclick = () => {
-        document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
-        tabAI.classList.add('active');
-        aiPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); helpPane.classList.add('hidden');
-        aiChatLog.scrollTop = aiChatLog.scrollHeight;
-        aiInput.focus();
     };
     tabHelp.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
         tabHelp.classList.add('active');
-        helpPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden'); aiPane.classList.add('hidden');
+        helpPane.classList.remove('hidden'); terminalPane.classList.add('hidden'); logsPane.classList.add('hidden'); pythonPane.classList.add('hidden');
         if (!helpSidebar.children.length) loadHelpFiles();
     };
 
@@ -625,194 +583,6 @@ function attachEvents() {
     };
 }
 
-// ===================== AI CHAT =====================
-let aiSSE = null;
-let aiTurnEl = null;
-let aiReasoningEl = null;
-let aiToolsEl = null;
-let aiAnswerEl = null;
-let aiHistory = [];
-let aiHistoryIdx = -1;
-let aiLastHistoryIdx = 0;
-
-function aiNewTurn() {
-    if (aiTurnEl) {
-        const sep = document.createElement('div');
-        sep.className = 'ai-turn-sep';
-        aiChatLog.appendChild(sep);
-    }
-    aiTurnEl = document.createElement('div');
-    aiTurnEl.className = 'ai-turn';
-    aiChatLog.appendChild(aiTurnEl);
-    aiReasoningEl = null;
-    aiToolsEl = null;
-    aiAnswerEl = null;
-}
-
-function aiShowUser(text) {
-    aiNewTurn();
-    const el = document.createElement('div');
-    el.className = 'ai-turn-user';
-    el.textContent = text;
-    aiTurnEl.appendChild(el);
-    aiChatLog.scrollTop = aiChatLog.scrollHeight;
-}
-
-function aiShowReasoning(text) {
-    if (!aiTurnEl) aiNewTurn();
-    if (!aiReasoningEl) {
-        aiReasoningEl = document.createElement('div');
-        aiReasoningEl.className = 'ai-turn-reasoning';
-        const lbl = document.createElement('span');
-        lbl.className = 'ai-r-label';
-        lbl.textContent = 'Цепочка';
-        aiReasoningEl.appendChild(lbl);
-        const body = document.createElement('span');
-        body.className = 'ai-r-body';
-        aiReasoningEl.appendChild(body);
-        aiTurnEl.appendChild(aiReasoningEl);
-    }
-    aiReasoningEl.querySelector('.ai-r-body').textContent = text;
-    aiChatLog.scrollTop = aiChatLog.scrollHeight;
-}
-
-function aiShowTools(text) {
-    if (!aiTurnEl) aiNewTurn();
-    if (!aiToolsEl) {
-        aiToolsEl = document.createElement('div');
-        aiToolsEl.className = 'ai-turn-tools';
-        const lbl = document.createElement('span');
-        lbl.className = 'ai-t-label';
-        lbl.textContent = 'Инструменты';
-        aiToolsEl.appendChild(lbl);
-        const body = document.createElement('span');
-        body.className = 'ai-t-body';
-        aiToolsEl.appendChild(body);
-        aiTurnEl.appendChild(aiToolsEl);
-    }
-    aiToolsEl.querySelector('.ai-t-body').textContent = text;
-    aiChatLog.scrollTop = aiChatLog.scrollHeight;
-}
-
-function aiShowAnswer(text) {
-    if (!aiTurnEl) aiNewTurn();
-    if (!aiAnswerEl) {
-        aiAnswerEl = document.createElement('div');
-        aiAnswerEl.className = 'ai-turn-answer';
-        aiTurnEl.appendChild(aiAnswerEl);
-    }
-    aiAnswerEl.textContent = text;
-    aiChatLog.scrollTop = aiChatLog.scrollHeight;
-}
-
-function aiShowError(text) {
-    if (!aiTurnEl) aiNewTurn();
-    const el = document.createElement('div');
-    el.className = 'ai-turn-error';
-    el.textContent = text;
-    aiTurnEl.appendChild(el);
-    aiChatLog.scrollTop = aiChatLog.scrollHeight;
-}
-
-function aiRenderHistory(history) {
-    while (aiLastHistoryIdx < history.length) {
-        const entry = history[aiLastHistoryIdx];
-        switch (entry.type) {
-            case 'user':
-                aiShowUser(entry.content);
-                break;
-            case 'reasoning':
-                aiShowReasoning(entry.content);
-                aiReasoningEl = null;
-                break;
-            case 'tool':
-                aiShowTools(entry.content);
-                aiToolsEl = null;
-                break;
-            case 'answer':
-                aiShowAnswer(entry.content);
-                break;
-        }
-        aiLastHistoryIdx++;
-    }
-}
-
-function aiSetStatus(state, text) {
-    aiDot.className = 'dot' + (state === 'thinking' ? ' thinking' : state === 'speaking' ? ' speaking' : '');
-    aiStatusText.textContent = text || 'Ожидание...';
-    if (state === 'thinking' || state === 'speaking') {
-        aiSendBtn.style.display = 'none';
-        aiStopBtn.style.display = '';
-    } else {
-        aiSendBtn.style.display = '';
-        aiStopBtn.style.display = 'none';
-    }
-}
-
-function aiConnectSSE() {
-    if (aiSSE) aiSSE.close();
-    aiSSE = new EventSource('/api/ai/stream');
-    aiSSE.onmessage = (e) => {
-        try {
-            const d = JSON.parse(e.data);
-            if (d.is_idle && !d.is_thinking && !d.is_speaking) {
-                aiSetStatus('idle', 'Ожидание...');
-                return;
-            }
-            if (d.chat_history) aiRenderHistory(d.chat_history);
-            if (d.is_thinking) {
-                aiSetStatus('thinking', 'Рассуждает...');
-                if (d.reasoning_text) aiShowReasoning(d.reasoning_text);
-            }
-            if (d.is_speaking) {
-                aiSetStatus('speaking', 'Говорит...');
-            }
-            if (!d.is_thinking && !d.is_speaking && !d.is_idle) {
-                aiSetStatus('thinking', 'Думаю...');
-            }
-        } catch(err) {}
-    };
-    aiSSE.onerror = () => { setTimeout(aiConnectSSE, 3000); };
-}
-
-async function aiSend(prompt) {
-    if (!prompt.trim()) return;
-    aiShowUser(prompt);
-    aiSetStatus('thinking', 'Отправляю...');
-    try {
-        const r = await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})});
-        const d = await r.json();
-        if (d.error) aiShowError(d.error);
-    } catch(e) { aiShowError(e.message); }
-}
-
-async function aiStop() {
-    try { await fetch('/api/ai/stop', {method:'POST'}); } catch(e) {}
-    aiSetStatus('idle', 'Остановлен');
-}
-
-aiSendBtn.onclick = () => {
-    if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
-    aiSend(aiInput.value); aiInput.value = '';
-};
-aiStopBtn.onclick = aiStop;
-
-aiInput.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        if (aiInput.value.trim()) { aiHistory.push(aiInput.value.trim()); aiHistoryIdx = aiHistory.length; }
-        aiSend(aiInput.value);
-        aiInput.value = '';
-    } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        if (aiHistory.length && aiHistoryIdx > 0) { aiHistoryIdx--; aiInput.value = aiHistory[aiHistoryIdx]; }
-    } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        if (aiHistoryIdx < aiHistory.length - 1) { aiHistoryIdx++; aiInput.value = aiHistory[aiHistoryIdx]; }
-        else { aiHistoryIdx = aiHistory.length; aiInput.value = ''; }
-    }
-};
-
 // ===================== INIT =====================
 async function init() {
     attachEvents();
@@ -824,22 +594,6 @@ async function init() {
     fetchTerminalOutput();
     setInterval(fetchSystemStats, 2200);
     setInterval(fetchTerminalOutput, 400);
-    aiConnectSSE();
-
-    setInterval(async () => {
-        if (aiPane.classList.contains('hidden')) return;
-        if (aiAnswerEl) return;
-        try {
-            const r = await fetch('/api/ai/status');
-            const d = await r.json();
-            if (d.last_answer && d.last_answer_time) {
-                if (!aiAnswerEl || aiAnswerEl._ts !== d.last_answer_time) {
-                    aiShowAnswer(d.last_answer);
-                    if (aiAnswerEl) aiAnswerEl._ts = d.last_answer_time;
-                }
-            }
-        } catch(e) {}
-    }, 1000);
 }
 init();
 </script>

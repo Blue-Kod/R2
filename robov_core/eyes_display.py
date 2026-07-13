@@ -186,18 +186,6 @@ class RobotFace:
         self._jiggle_change_interval = 1  # seconds between target changes
         self._jiggle_timer = 0.0
 
-        # Eye position offset (set by set_eyes_position)
-        self._eyes_offset_x = 0.0
-        self._eyes_offset_y = 0.0
-
-        # Menu state
-        self._menu_visible = False
-        self._menu_input = ""
-        self._menu_cursor_blink = 0.0
-        self._input_rect = pygame.Rect(0, 0, 0, 0)
-        self._send_btn_rect = pygame.Rect(0, 0, 0, 0)
-        self._send_btn_rect2 = pygame.Rect(0, 0, 0, 0)  # for keyboard icon
-
     def _preload_all_emotions(self):
         """Загружает все PNG из папки emotions/ при старте."""
         base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "emotions")
@@ -277,11 +265,10 @@ class RobotFace:
         font = pygame.font.SysFont("Arial", 28, bold=True)
         overlay_font = pygame.font.SysFont("Consolas", 28)
         ticker_font = pygame.font.SysFont("Arial", 36, bold=True)
-        inp_font = pygame.font.SysFont("Consolas", 24)
 
         # Ticker state
         ticker_offset = 0.0
-        _prev_ticker_id = 0
+        _prev_ticker_text = ""
 
         while self.state.is_running():
             # delta time in seconds
@@ -291,46 +278,22 @@ class RobotFace:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.state.stop()
-
                 elif event.type == pygame.KEYDOWN:
-                    if self._menu_visible:
-                        if event.key == pygame.K_ESCAPE:
-                            self._menu_visible = False
-                        elif event.key == pygame.K_BACKSPACE:
-                            self._menu_input = self._menu_input[:-1]
-                        elif event.key == pygame.K_RETURN:
-                            if self._menu_input.strip():
-                                self._send_ai_command(self._menu_input.strip())
-                                self._menu_input = ""
-                        else:
-                            if event.unicode and len(self._menu_input) < 200:
-                                self._menu_input += event.unicode
-                    else:
-                        if event.key in [pygame.K_ESCAPE, pygame.K_q]:
-                            self.state.stop()
-
+                    if event.key in [pygame.K_ESCAPE, pygame.K_q]:
+                        self.state.stop()
                 elif event.type == pygame.MOUSEBUTTONDOWN or event.type == pygame.FINGERDOWN:
                     mx, my = event.pos
-                    # FINGERDOWN on touchscreen uses normalized 0-1 coords
                     if event.type == pygame.FINGERDOWN:
                         mx = int(mx * sw)
                         my = int(my * sh)
-                    if self._menu_visible:
-                        if self._exit_btn_rect.collidepoint(mx, my):
-                            log.info("Exit via menu")
-                            self.state.stop()
-                        elif self._send_btn_rect.collidepoint(mx, my):
-                            if self._menu_input.strip():
-                                self._send_ai_command(self._menu_input.strip())
-                                self._menu_input = ""
-                        elif self._input_rect.collidepoint(mx, my):
-                            pass  # click on input field — just focus, typing via KEYDOWN
-                        else:
-                            self._menu_visible = False
+                    if self._exit_btn_rect.collidepoint(mx, my):
+                        log.info("Exit via menu")
+                        self.state.stop()
                     else:
                         # toggle menu on bottom 20% of screen
                         if my > sh * 0.8:
-                            self._menu_visible = True
+                            self._menu_visible = not getattr(self, '_menu_visible', False)
+                            self.state._menu_visible = self._menu_visible  # keep in sync
 
             # Update animation (including random idle blinks)
             self.state.update_logic(dt)
@@ -352,35 +315,32 @@ class RobotFace:
             # --- AI reasoning overlay (behind the face) ---
             ai_state = self._get_ai_state()
             if ai_state:
-                history = ai_state.get("chat_history", [])
                 reasoning = ai_state.get("reasoning_text", "")
+                tools = ai_state.get("tools_text", "")
+                history = ai_state.get("reasoning_history", "")
 
-                overlay_parts = []
-                for entry in history:
-                    if entry["type"] == "reasoning":
-                        overlay_parts.append(entry["content"])
-                    elif entry["type"] == "tool":
-                        overlay_parts.append(f"  {entry['content']}")
-
+                overlay_text = ""
+                if history:
+                    overlay_text = history
                 if reasoning:
-                    overlay_parts.append(reasoning)
-
-                overlay_text = "\n".join(overlay_parts)
+                    overlay_text += ("\n\n" if overlay_text else "") + reasoning
+                if tools:
+                    overlay_text += ("\n\n" if overlay_text else "") + tools
 
                 if overlay_text:
                     overlay_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
                     lines = self._wrap_text(overlay_font, overlay_text, sw - 80)
                     max_lines = (sh - 120) // 32
                     if len(lines) > max_lines:
-                        paragraphs = overlay_text.split("\n")
+                        paragraphs = overlay_text.split("\n\n")
                         keep = max(1, len(paragraphs) // 4)
-                        trimmed = "\n".join(paragraphs[-keep:])
+                        trimmed = "\n\n".join(paragraphs[-keep:])
                         lines = self._wrap_text(overlay_font, trimmed, sw - 80)
                     y = 20
                     for line in lines:
                         if y > sh - 80:
                             break
-                        surf = overlay_font.render(line, True, (140, 140, 140, 180))
+                        surf = overlay_font.render(line, True, (50, 50, 50, 120))
                         overlay_surf.blit(surf, (40, y))
                         y += 32
                     screen.blit(overlay_surf, (0, 0))
@@ -403,19 +363,18 @@ class RobotFace:
 
             scaled_tex = pygame.transform.scale(tex, (target_width, target_height))
 
-            # Draw centered both horizontally and vertically with jiggle + eye offset
-            x_offset = (sw - target_width) // 2 + int(self._jiggle_x + self._eyes_offset_x)
-            y_offset = (sh - target_height) // 2 + int(self._jiggle_y + self._eyes_offset_y)
+            # Draw centered both horizontally and vertically with jiggle effect
+            x_offset = (sw - target_width) // 2 + int(self._jiggle_x)
+            y_offset = (sh - target_height) // 2 + int(self._jiggle_y)
             screen.blit(scaled_tex, (x_offset, y_offset))
 
             # --- Ticker bar (scrolling answer text) ---
             if ai_state:
                 ticker_text = ai_state.get("ticker_text", "")
                 ticker_duration = ai_state.get("ticker_duration", 0)
-                ticker_id = ai_state.get("ticker_id", 0)
-                if ticker_id != _prev_ticker_id:
+                if ticker_text != _prev_ticker_text:
                     ticker_offset = 0.0
-                    _prev_ticker_id = ticker_id
+                    _prev_ticker_text = ticker_text
                 if ticker_text and ticker_duration > 0:
                     text_surf = ticker_font.render(ticker_text, True, (255, 255, 255))
                     text_h = text_surf.get_height()
@@ -427,67 +386,26 @@ class RobotFace:
                         ty = sh - max(42, int(sh * 0.10)) + (max(42, int(sh * 0.10)) - text_h) // 2
                         screen.blit(text_surf, (tx, ty))
 
-            # Menu overlay
-            if self._menu_visible:
+            # Menu overlay (simplified – touch bottom area toggles)
+            if getattr(self, '_menu_visible', False):
                 overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
                 overlay.fill((0, 0, 0, 220))
                 screen.blit(overlay, (0, 0))
 
-                m_w, m_h = min(500, sw - 40), min(380, sh - 40)
+                m_w, m_h = 400, 250
                 m_rect = pygame.Rect((sw - m_w) // 2, (sh - m_h) // 2, m_w, m_h)
-                pygame.draw.rect(screen, (25, 25, 25), m_rect, border_radius=12)
-                pygame.draw.rect(screen, (200, 200, 200), m_rect, 2, border_radius=12)
+                pygame.draw.rect(screen, (25, 25, 25), m_rect)
+                pygame.draw.rect(screen, (200, 200, 200), m_rect, 2)
 
-                # IP label
-                ip_label = font.render(f"IP: {self._get_ip()}", True, (200, 200, 200))
-                screen.blit(ip_label, (m_rect.x + 30, m_rect.y + 20))
+                ip_label = font.render(f"IP: {self._get_ip()}", True, (255, 255, 255))
+                screen.blit(ip_label, (m_rect.x + 40, m_rect.y + 50))
 
-                # Separator line
-                sep_y = m_rect.y + 60
-                pygame.draw.line(screen, (80, 80, 80), (m_rect.x + 20, sep_y), (m_rect.x + m_w - 20, sep_y))
+                self._exit_btn_rect = pygame.Rect(m_rect.x + 50, m_rect.y + 130, 300, 70)
+                pygame.draw.rect(screen, (180, 40, 40), self._exit_btn_rect)
+                pygame.draw.rect(screen, (255, 100, 100), self._exit_btn_rect, 2)
 
-                # Command input label
-                cmd_label = font.render("Команда:", True, (180, 180, 180))
-                screen.blit(cmd_label, (m_rect.x + 30, m_rect.y + 75))
-
-                # Input field background
-                inp_h = 44
-                self._input_rect = pygame.Rect(m_rect.x + 30, m_rect.y + 110, m_w - 60, inp_h)
-                pygame.draw.rect(screen, (40, 40, 40), self._input_rect, border_radius=6)
-                pygame.draw.rect(screen, (120, 120, 120), self._input_rect, 1, border_radius=6)
-
-                # Input text + blinking cursor
-                self._menu_cursor_blink += dt
-                show_cursor = int(self._menu_cursor_blink * 2) % 2 == 0
-                display_input = self._menu_input
-                if show_cursor:
-                    display_input += "|"
-                # Truncate from left if too long
-                max_text_w = self._input_rect.w - 16
-                txt_surf = inp_font.render(display_input, True, (255, 255, 255))
-                while txt_surf.get_width() > max_text_w and len(display_input) > 1:
-                    display_input = display_input[1:]
-                    txt_surf = inp_font.render(display_input, True, (255, 255, 255))
-                screen.blit(txt_surf, (self._input_rect.x + 8, self._input_rect.y + (inp_h - txt_surf.get_height()) // 2))
-
-                # Send button
-                btn_y = m_rect.y + 170
-                btn_w = m_w - 60
-                self._send_btn_rect = pygame.Rect(m_rect.x + 30, btn_y, btn_w, 50)
-                has_text = len(self._menu_input.strip()) > 0
-                btn_color = (60, 130, 60) if has_text else (50, 50, 50)
-                pygame.draw.rect(screen, btn_color, self._send_btn_rect, border_radius=8)
-                pygame.draw.rect(screen, (100, 200, 100) if has_text else (80, 80, 80), self._send_btn_rect, 2, border_radius=8)
-                send_txt = font.render("Отправить", True, (255, 255, 255) if has_text else (120, 120, 120))
-                screen.blit(send_txt, send_txt.get_rect(center=self._send_btn_rect.center))
-
-                # Exit button
-                exit_y = btn_y + 65
-                self._exit_btn_rect = pygame.Rect(m_rect.x + 30, exit_y, btn_w, 50)
-                pygame.draw.rect(screen, (140, 35, 35), self._exit_btn_rect, border_radius=8)
-                pygame.draw.rect(screen, (200, 80, 80), self._exit_btn_rect, 2, border_radius=8)
-                exit_txt = font.render("Выход", True, (255, 255, 255))
-                screen.blit(exit_txt, exit_txt.get_rect(center=self._exit_btn_rect.center))
+                txt = font.render("Exit", True, (255, 255, 255))
+                screen.blit(txt, txt.get_rect(center=self._exit_btn_rect.center))
 
             pygame.display.flip()
 
@@ -503,11 +421,9 @@ class RobotFace:
     def update_emote(self, name, smooth=True):
         self.state.request_emote_change(name, smooth)
 
+    # kept for backwards compatibility (does nothing)
     def update_eyes_position(self, x, y):
-        """Set eye position offset [-1..1, -1..1]. Applied when rendering face."""
-        max_offset = 60.0
-        self._eyes_offset_x = max(-1.0, min(1.0, float(x))) * max_offset
-        self._eyes_offset_y = max(-1.0, min(1.0, float(y))) * max_offset
+        pass
 
     def _get_ai_state(self):
         """Get AI display state from the shared agent (thread-safe)."""
@@ -518,18 +434,6 @@ class RobotFace:
         except Exception:
             pass
         return None
-
-    def _send_ai_command(self, text: str):
-        """Send a command to the AI agent from the menu input."""
-        log.info(f"Menu command: {text}")
-        try:
-            from robov_core.ai import agent
-            if agent:
-                agent.command(text)
-            else:
-                log.warning("AI agent not initialized")
-        except Exception as e:
-            log.error(f"Failed to send AI command: {e}")
 
     @staticmethod
     def _wrap_text(font, text, max_width):

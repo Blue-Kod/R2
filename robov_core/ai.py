@@ -142,20 +142,6 @@ IMPORTANT: Everything you write as final text WILL BE SPOKEN ALOUD. Keep speech 
 def build_system_prompt(cwd: str) -> str:
     return f"""You are R2 — a physical robot assistant. You are physically present with the user. Everything you say OUTSIDE of <tool_call> tags and reasoning will be SPOKEN ALOUD through your speaker. The user will HEAR every word you output as text. Reasoning and tool calls are silent — only final text is spoken.
 
-CRITICAL IDENTITY RULES:
-- You are the robot. The user is the human. Never confuse them.
-- NEVER address the user as "ты" referring to the robot. "Ты" = the human.
-- NEVER say things like "я тебя вижу" (you see yourself) or "ты можешь говорить" (the robot can talk). YOU are the robot.
-- Use "я" for yourself (the robot), "ты" for the user (the human).
-- When speaking, use first person: "Я R2", "Я вижу", "Я могу".
-
-SPEECH RULES:
-- Everything outside tags will be SPOKEN ALOUD. Keep it short and natural.
-- ALWAYS respond in Russian (русский язык). All spoken text must be in Russian.
-- NO markdown, NO bullet lists, NO formatting, NO asterisks, NO code blocks, NO special characters.
-- Plain text only. Like a real conversation.
-- One or two short sentences max. Your speech is heard, not read.
-
 <env>
 Working directory: {cwd}
 Platform: {sys.platform}
@@ -213,7 +199,7 @@ Two-tier:
 </memory>
 
 <instructions>
-- You are the robot R2. The user is a human. Never confuse who is who.
+- You are a robot. Everything you write as final text WILL BE SPOKEN ALOUD. So keep speech short and natural.
 - NEVER say you will search, look up, or check something. Just DO IT — emit the <tool_call> tags directly. No talking about tools, just use them.
 - MANDATORY tool usage: if the user asks about ANY fact (people, places, events, weather, prices, news, dates, APIs, libraries, technologies, anything beyond simple math or logic) — you MUST emit tool_call tags. You have NO knowledge. You MUST search.
 - Use run_python with robot API to control the robot (speak, move, emote). Do it immediately, don't ask permission.
@@ -225,9 +211,8 @@ Two-tier:
 - REMEMBER USER FACTS: user shares a personal detail → immediately: remember tier="core" key="..." value="..."
 - CONTEXT CLUES: "tell me about it", "my city", "and my country" → recall query="..." first, then search.
 - Read files before editing.
-- Be extremely concise. One short sentence max. Your speech is heard aloud — no bullet lists, no markdown, no formatting, no special characters. Plain conversational text only.
+- Be extremely concise. One short sentence. Your speech is heard aloud — no bullet lists, no markdown, no formatting.
 - Speak Russian by default. Use the language the user writes in.
-- NEVER use asterisks, dashes as bullets, or any markdown-like formatting in spoken text.
 </instructions>"""
 
 
@@ -795,12 +780,9 @@ class DisplayState:
         self.is_idle: bool = True
         self.ticker_text: str = ""
         self.ticker_duration: float = 0.0
-        self.ticker_id: int = 0
         self.last_answer: str = ""
         self.last_answer_time: float = 0.0
-        self.display_text: str = ""
-
-        self.chat_history: list[dict] = []
+        self.reasoning_history: str = ""
 
         self._sse_listeners: list = []
         self._sse_lock = threading.Lock()
@@ -811,27 +793,6 @@ class DisplayState:
                 if hasattr(self, k):
                     setattr(self, k, v)
         self._notify_sse()
-
-    def add_to_history(self, entry_type: str, content: str, **extra) -> None:
-        entry = {"type": entry_type, "content": content}
-        entry.update(extra)
-        with self.lock:
-            self.chat_history.append(entry)
-        self._notify_sse()
-
-    def get_chat_history(self) -> list[dict]:
-        with self.lock:
-            return list(self.chat_history)
-
-    def get_current_turn_entries(self) -> list[dict]:
-        with self.lock:
-            last_user_idx = -1
-            for i, entry in enumerate(self.chat_history):
-                if entry["type"] == "user":
-                    last_user_idx = i
-            if last_user_idx < 0:
-                return list(self.chat_history)
-            return list(self.chat_history[last_user_idx + 1:])
 
     def get_all(self) -> dict:
         with self.lock:
@@ -844,11 +805,9 @@ class DisplayState:
                 "is_idle": self.is_idle,
                 "ticker_text": self.ticker_text,
                 "ticker_duration": self.ticker_duration,
-                "ticker_id": self.ticker_id,
                 "last_answer": self.last_answer,
                 "last_answer_time": self.last_answer_time,
-                "display_text": self.display_text,
-                "chat_history": self.get_chat_history(),
+                "reasoning_history": self.reasoning_history,
             }
 
     def add_sse_listener(self, q: queue.Queue) -> None:
@@ -1011,12 +970,23 @@ class R2Agent:
     # Chat loop (runs in thread)
     # ------------------------------------------------------------------
     def _chat_loop(self, prompt: str) -> None:
+        with self.display.lock:
+            old_reasoning = self.display.reasoning_text
+            old_tools = self.display.tools_text
+            old_history = self.display.reasoning_history
+        combined = ""
+        if old_history:
+            combined = old_history
+        if old_reasoning:
+            combined += ("\n\n" if combined else "") + old_reasoning
+        if old_tools:
+            combined += ("\n\n" if combined else "") + old_tools
+
         self.display.update(
             is_idle=False, is_thinking=True, is_speaking=False,
             reasoning_text="", tools_text="", answer_text="",
             ticker_text="", ticker_duration=0.0,
-            display_text="",
-            last_answer="", last_answer_time=0.0,
+            reasoning_history=combined,
         )
 
         cwd = self.cwd
@@ -1151,13 +1121,7 @@ class R2Agent:
             if not actions:
                 break
 
-            # Save current reasoning to chat_history
-            if think_buf:
-                full_reasoning = prev_think + ("\n" if prev_think else "") + think_buf
-                self.display.add_to_history("reasoning", full_reasoning, round=round_num)
-            with self.display.lock:
-                self.display.reasoning_text = ""
-            prev_think = ""
+            prev_think += ("\n" if prev_think else "") + think_buf
             results_text = self._execute_actions(actions)
             tool_log = self.display.get_all()["tools_text"]
             self.history.append({"role": "user", "content": results_text})
@@ -1165,16 +1129,13 @@ class R2Agent:
         # Final answer — speak it + show ticker
         if response_text and not self._cancel_event.is_set():
             clean_answer = self._strip_tags(response_text).strip()
-            clean_answer = self._clean_for_speech(clean_answer)
             if clean_answer:
-                self.display.add_to_history("answer", clean_answer)
                 self.display.update(
                     last_answer=clean_answer,
                     last_answer_time=time.time(),
                     is_speaking=True,
                     ticker_text=clean_answer,
                     ticker_duration=max(5.0, len(clean_answer) / 15.0 + 2.0),
-                    ticker_id=self.display.get_all()["ticker_id"] + 1,
                 )
                 self._speak(clean_answer)
                 self.display.update(is_speaking=False)
@@ -1261,7 +1222,6 @@ class R2Agent:
                 tools_text=self.display.get_all()["tools_text"]
                 + f"\n  |- {name} ({elapsed:.1f}s): {one_line}"
             )
-            self.display.add_to_history("tool", f"{name} ({elapsed:.1f}s): {one_line}")
 
         return "\n\n".join(results)
 
@@ -1283,22 +1243,6 @@ class R2Agent:
         text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
         text = re.sub(r"```tool_call.*?```", "", text, flags=re.DOTALL)
         text = re.sub(r"<python>.*?</python>", "", text, flags=re.DOTALL)
-        return text.strip()
-
-    @staticmethod
-    def _clean_for_speech(text: str) -> str:
-        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-        text = re.sub(r"\*([^*]+)\*", r"\1", text)
-        text = re.sub(r"__([^_]+)__", r"\1", text)
-        text = re.sub(r"_([^_]+)_", r"\1", text)
-        text = re.sub(r"~~([^~]+)~~", r"\1", text)
-        text = re.sub(r"`([^`]+)`", r"\1", text)
-        text = re.sub(r"```[\s\S]*?```", "", text)
-        text = re.sub(r"^[-*+]\s+", "", text, flags=re.MULTILINE)
-        text = re.sub(r"^#+\s+", "", text, flags=re.MULTILINE)
-        text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-        text = re.sub(r"---+", "", text)
-        text = re.sub(r"\n{2,}", "\n", text)
         return text.strip()
 
     def reset(self) -> None:

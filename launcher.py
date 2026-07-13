@@ -46,7 +46,8 @@ REQUIREMENTS_APT = [
     "unclutter-xfixes",
     "libopencv-dev",
     "python3-opencv",
-    "i2c-tools"
+    "i2c-tools",
+    "espeak-ng"
 ]
 
 MAIN_SCRIPT = "main.py"
@@ -54,6 +55,13 @@ AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
 INTERNET_CHECK_HOST = "8.8.8.8"
 LAST_COMMIT_FILE = ".last_commit"
 SETUP_COMPLETE_FLAG = ".setup_complete"  # Flag for first-run installation
+
+# Piper TTS model (Russian, Ruslan, medium)
+TTS_MODEL_DIR = "models"
+TTS_MODEL_NAME = "ru_RU-ruslan-medium"
+TTS_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium"
+TTS_MODEL_URL = f"{TTS_HF_BASE}/{TTS_MODEL_NAME}.onnx"
+TTS_JSON_URL = f"{TTS_HF_BASE}/{TTS_MODEL_NAME}.onnx.json"
 
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
@@ -150,6 +158,56 @@ def mark_setup_complete():
     except Exception as e:
         log_message(f"[!] Failed to create setup flag: {e}")
         return False
+
+def _download_file(url, dest_path):
+    """Download a file with progress logging. Returns True on success."""
+    try:
+        log_message(f"[TTS] Downloading {os.path.basename(dest_path)}...")
+        response = requests.get(url, stream=True, timeout=60)
+        response.raise_for_status()
+        total = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        with open(dest_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                f.write(chunk)
+                downloaded += len(chunk)
+        log_message(f"[TTS] Saved {os.path.basename(dest_path)} ({downloaded // (1024*1024)} MB)")
+        return True
+    except Exception as e:
+        log_message(f"[TTS] Failed to download {url}: {e}")
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        return False
+
+def ensure_tts_model():
+    """Download Piper TTS model files if not present locally."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    model_dir = os.path.join(script_dir, TTS_MODEL_DIR)
+    onnx_path = os.path.join(model_dir, f"{TTS_MODEL_NAME}.onnx")
+    json_path = os.path.join(model_dir, f"{TTS_MODEL_NAME}.onnx.json")
+
+    if os.path.exists(onnx_path) and os.path.exists(json_path):
+        log_message("[TTS] Piper model found locally.")
+        return True
+
+    if not is_internet_available(timeout=5):
+        log_message("[TTS] No internet - cannot download model.")
+        return False
+
+    os.makedirs(model_dir, exist_ok=True)
+    log_message("[TTS] Piper model not found, downloading from HuggingFace...")
+
+    ok = True
+    if not os.path.exists(onnx_path):
+        ok = _download_file(TTS_MODEL_URL, onnx_path) and ok
+    if not os.path.exists(json_path):
+        ok = _download_file(TTS_JSON_URL, json_path) and ok
+
+    if ok:
+        log_message("[TTS] Piper model ready.")
+    else:
+        log_message("[TTS] Model download incomplete - TTS may not work.")
+    return ok
 
 def install_apt_dependencies():
     """
@@ -635,6 +693,9 @@ def main():
         repo_updated = download_and_extract_repo(script_dir, script_name, target_user)
         if not repo_updated:
             log_message("[*] Repository update failed or not needed.")
+
+        log_message("[L] Ensuring TTS model is available...")
+        ensure_tts_model()
     else:
         log_message("[*] No internet, skipping update.")
 

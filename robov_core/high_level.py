@@ -97,32 +97,69 @@ _display_thread: Optional[threading.Thread] = None
 _all_threads: List[threading.Thread] = []
 
 _tts: Any = None
+_tts_sample_rate: int = 22050
 
 _ai_agent = None
 
+_TTS_MODEL_DIR = os.path.join(ROOT_DIR, "models")
+_TTS_MODEL_NAME = "ru_RU-ruslan-medium"
+
 
 def speak(text: str) -> None:
-    global _tts
+    global _tts, _tts_sample_rate
     if _tts is None:
         try:
-            import retro_ru_tts as _m
-            _tts = _m
+            from piper import PiperVoice
+            onnx_path = os.path.join(_TTS_MODEL_DIR, f"{_TTS_MODEL_NAME}.onnx")
+            if not os.path.exists(onnx_path):
+                log("TTS model not found, attempting download...")
+                _download_tts_model()
+            _tts = PiperVoice.load(onnx_path)
+            _tts_sample_rate = _tts.config.sample_rate
+            log(f"Piper TTS loaded (sample_rate={_tts_sample_rate})")
         except ImportError:
-            log("TTS unavailable: retro_ru_tts not installed")
+            log("TTS unavailable: piper-tts not installed")
+            return
+        except Exception as e:
+            log(f"TTS init error: {e}")
             return
     try:
-        import os, tempfile, subprocess
-        pcm = _tts.synthesize(text, play=False)
-        pad_silence = b'\x00' * 2000
-        pcm = pad_silence + pcm + pad_silence
-        wav = _tts.pcm_to_wav(pcm)
-        path = os.path.join(tempfile.gettempdir(), "r2_tts.wav")
-        with open(path, "wb") as f:
-            f.write(wav)
-        subprocess.run(["aplay", "-D", "plughw:1,0", path], check=True, capture_output=True)
-        os.unlink(path)
+        import subprocess
+        aplay = subprocess.Popen(
+            ["aplay", "-D", "plughw:1,0", "-t", "raw",
+             "-f", "S16_LE", "-r", str(_tts_sample_rate), "-c", "1"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for chunk in _tts.synthesize_stream_raw(text):
+            aplay.stdin.write(chunk)
+        aplay.stdin.close()
+        aplay.wait()
     except Exception as e:
         log(f"TTS error: {e}")
+
+
+def _download_tts_model():
+    """Download Piper TTS model from HuggingFace if missing."""
+    import requests as _req
+    hf_base = "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium"
+    os.makedirs(_TTS_MODEL_DIR, exist_ok=True)
+    for ext in ("onnx", "onnx.json"):
+        url = f"{hf_base}/{_TTS_MODEL_NAME}.{ext}"
+        dest = os.path.join(_TTS_MODEL_DIR, f"{_TTS_MODEL_NAME}.{ext}")
+        if os.path.exists(dest):
+            continue
+        try:
+            log(f"Downloading {_TTS_MODEL_NAME}.{ext}...")
+            r = _req.get(url, stream=True, timeout=120)
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(256 * 1024):
+                    f.write(chunk)
+            log(f"Saved {_TTS_MODEL_NAME}.{ext}")
+        except Exception as e:
+            log(f"Failed to download {ext}: {e}")
 
 def log(message: str) -> None:
     print(message)
@@ -602,3 +639,11 @@ def set_servo_offset(channel: int, offset: float) -> bool:
 
 def get_ai_agent():
     return _ai_agent
+
+
+def command(text: str) -> None:
+    """Send a command to the AI agent (for use in the Python tab)."""
+    if _ai_agent is None:
+        log("AI agent not initialized")
+        return
+    _ai_agent.command(text)
