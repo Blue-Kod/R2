@@ -15,8 +15,8 @@ ptyprocess>=0.7.0
 
 # OpenCV - use opencv-python-headless for server environments (no GUI deps)
 # For Orange Pi with display, use opencv-python instead
-opencv-python==4.13.0.92
-opencv-contrib-python==4.13.0.92
+opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
 
 # NumPy - pinned for ARM compatibility
 numpy>=1.24.0,<2.0.0
