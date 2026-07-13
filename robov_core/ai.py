@@ -212,6 +212,7 @@ Two-tier:
 - CONTEXT CLUES: "tell me about it", "my city", "and my country" → recall query="..." first, then search.
 - Read files before editing.
 - Be extremely concise. One short sentence. Your speech is heard aloud — no bullet lists, no markdown, no formatting.
+- For simple greetings (привет, как дела, приветствую) and trivial questions — answer immediately in 1 short sentence, no reasoning needed. Do NOT search or use tools for simple social conversation.
 - Speak Russian by default. Use the language the user writes in.
 </instructions>"""
 
@@ -872,6 +873,7 @@ class R2Agent:
         self._cancel_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self.reasoning_enabled: bool = True
 
     # ------------------------------------------------------------------
     # Public API
@@ -929,6 +931,8 @@ class R2Agent:
 
     def _llm_create(self, messages: list[dict], **kwargs) -> Any:
         """Create non-streaming completion with model fallback."""
+        if not self.reasoning_enabled:
+            kwargs.setdefault("thinking", {"type": "disabled"})
         candidates = self._get_model_candidates()
         last_err = None
         for model_name in candidates:
@@ -948,6 +952,8 @@ class R2Agent:
 
     def _llm_stream(self, messages: list[dict], **kwargs):
         """Streaming completion with model fallback."""
+        if not self.reasoning_enabled:
+            kwargs.setdefault("thinking", {"type": "disabled"})
         candidates = self._get_model_candidates()
         last_err = None
         for model_name in candidates:
@@ -1042,7 +1048,12 @@ class R2Agent:
                             )
                         answer_buf += content
                         speaker.feed(content)
-                        self.display.update(answer_text=answer_buf)
+                        self.display.update(
+                            answer_text=answer_buf,
+                            is_speaking=True,
+                            ticker_text=answer_buf,
+                            ticker_duration=max(5.0, len(answer_buf) / 15.0 + 2.0),
+                        )
                 streamed_ok = True
             except Exception as e:
                 if self._cancel_event.is_set():
@@ -1132,19 +1143,18 @@ class R2Agent:
             self.history.append({"role": "user", "content": results_text})
             speaker.reset()
 
-        # Final answer — speak it + show ticker
+        # Final answer — flush remaining speech + stop ticker
         if response_text and not self._cancel_event.is_set():
             clean_answer = self._strip_tags(response_text).strip()
             if clean_answer:
+                speaker.flush()
                 self.display.update(
                     last_answer=clean_answer,
                     last_answer_time=time.time(),
-                    is_speaking=True,
-                    ticker_text=clean_answer,
-                    ticker_duration=max(5.0, len(clean_answer) / 15.0 + 2.0),
+                    is_speaking=False,
+                    ticker_text="",
+                    ticker_duration=0.0,
                 )
-                speaker.flush()
-                self.display.update(is_speaking=False)
 
         self.display.update(
             is_idle=True, is_thinking=False,

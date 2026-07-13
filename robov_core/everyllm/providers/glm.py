@@ -35,12 +35,13 @@ class GlmProvider(BaseProvider):
         return self._non_stream(messages, model, max_tokens)
 
     def _glm_payload(self, model, messages, max_tokens, stream, **kwargs):
+        thinking = kwargs.pop("thinking", {"type": "enabled"})
         payload = {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
             "stream": stream,
-            "thinking": {"type": "disabled"},
+            "thinking": thinking,
         }
         if "tools" in kwargs:
             payload["tools"] = kwargs["tools"]

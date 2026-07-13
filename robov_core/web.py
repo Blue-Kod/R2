@@ -627,6 +627,18 @@ def create_app() -> Flask:
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    @app.route("/api/ai/reasoning", methods=["GET", "POST"])
+    @require_auth
+    def ai_reasoning():
+        try:
+            agent = init_agent()
+            if request.method == "POST":
+                data = request.get_json(silent=True) or {}
+                agent.reasoning_enabled = bool(data.get("enabled", True))
+            return jsonify({"enabled": agent.reasoning_enabled})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     @app.route("/api/ai/status")
     @require_auth
     def ai_status():

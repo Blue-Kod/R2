@@ -110,6 +110,9 @@
             <div title="Реальное разрешение камеры">Cam: <span id="camResStat">-</span></div>
             <button id="updateBtn" class="update-btn">↻</button>
             <button id="exitBtn" class="exit-btn">⏻</button>
+            <label style="font-size:11px; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; border:1px solid var(--line); border-radius:12px; padding:6px 10px; background:var(--panel); white-space:nowrap;">
+                <input type="checkbox" id="reasoningToggle" checked style="accent-color:#44944a; width:14px; height:14px;"> Рассуждение
+            </label>
         </div>
     </header>
 
@@ -117,6 +120,13 @@
         <aside class="panel">
             <div class="panel-title">Сервоприводы</div>
             <div class="servo-controls">
+                <div style="margin-bottom:14px;">
+                    <div class="panel-title" style="margin-bottom:8px;">Команда роботу</div>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="robotCommand" placeholder="Привет!" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:12px; padding:8px 12px; font-size:13px; outline:none;">
+                        <button id="sendRobotCmd" style="background:#44944a; color:white; border:none; border-radius:12px; padding:8px 14px; cursor:pointer; font-size:13px; font-weight:500;">▶</button>
+                    </div>
+                </div>
                 <div class="servo-row"><label>(00) Шея:</label><input type="range" id="servo0" min="0" max="180" value="90"><span id="servo0_val">90°</span></div>
                 <div class="servo-row"><label>(01) Пр. плечо:</label><input type="range" id="servo1" min="0" max="270" value="135"><span id="servo1_val">135°</span></div>
                 <div class="servo-row"><label>(02) Лев. плечо:</label><input type="range" id="servo2" min="0" max="270" value="135"><span id="servo2_val">135°</span></div>
@@ -475,6 +485,32 @@ function attachEvents() {
     depthEnabledChk.onchange = sendCameraParams;
     hudEnabledChk.onchange = sendCameraParams;
     wlsEnabledChk.onchange = sendCameraParams;
+
+    // Robot command input
+    const robotCmdInput = document.getElementById('robotCommand');
+    const sendRobotBtn = document.getElementById('sendRobotCmd');
+    async function sendRobotCommand() {
+        const text = robotCmdInput.value.trim();
+        if (!text) return;
+        sendRobotBtn.disabled = true;
+        try {
+            await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:text})});
+            robotCmdInput.value = '';
+        } catch(e) {}
+        finally { sendRobotBtn.disabled = false; }
+    }
+    sendRobotBtn.onclick = sendRobotCommand;
+    robotCmdInput.onkeydown = (e) => { if (e.key === 'Enter') sendRobotCommand(); };
+
+    // Reasoning toggle
+    const reasoningToggle = document.getElementById('reasoningToggle');
+    async function loadReasoningState() {
+        try { const r = await fetch('/api/ai/reasoning'); const d = await r.json(); reasoningToggle.checked = d.enabled; } catch(e) {}
+    }
+    loadReasoningState();
+    reasoningToggle.onchange = async () => {
+        try { await fetch('/api/ai/reasoning', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:reasoningToggle.checked})}); } catch(e) {}
+    };
 
     terminalInput.onkeydown = (e) => {
         if (e.key === 'Enter') {

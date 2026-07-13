@@ -234,7 +234,7 @@ class StreamingSpeaker:
             if any(len(w) >= _MIN_WORD_LEN for w in words):
                 self._queue.put(prefix.strip())
                 self._buf = self._buf[last_space + 1:]
-                return
+                continue
             return
 
     @staticmethod

@@ -14,6 +14,7 @@ def load_keys(keys_path: Optional[str | Path] = None) -> dict[str, str]:
 
     candidates = [
         Path.cwd() / "KEYS.json",
+        Path(__file__).resolve().parent.parent.parent / "KEYS.json",
         Path(__file__).resolve().parent.parent / "KEYS.json",
     ]
     for p in candidates:
