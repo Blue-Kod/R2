@@ -58,7 +58,7 @@ def main():
         sys.exit(1)
 
     ret = rknn.build(
-        do_quantization=quantize_enabled,
+        do_quantization=False,
         dataset=dataset,
     )
     if ret != 0:
