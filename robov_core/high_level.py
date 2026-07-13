@@ -834,7 +834,7 @@ def set_depth_provider(name: str) -> bool:
     if _camera is None:
         return False
     from robov_core.depth_providers import (
-        StereoSGBMDepthProvider, LAS2DepthProvider,
+        StereoSGBMDepthProvider, LAS2DepthProvider, RKNNDepthProvider,
     )
     name = name.strip().upper()
     if name == "SGBM":
@@ -846,6 +846,18 @@ def set_depth_provider(name: str) -> bool:
             return False
         provider = LAS2DepthProvider()
         provider.setup(onnx_path=str(onnx_path))
+    elif name == "RKNN":
+        rknn_path = ROOT_DIR / "models" / "las2_s_640x384.rknn"
+        onnx_path = ROOT_DIR / "models" / "las2_s_640x384.onnx"
+        if not rknn_path.exists():
+            log(f"RKNN model not found at {rknn_path}")
+            return False
+        provider = RKNNDepthProvider()
+        try:
+            provider.setup(rknn_path=str(rknn_path), onnx_path=str(onnx_path))
+        except Exception as e:
+            log(f"RKNN setup failed: {e}")
+            return False
     else:
         log(f"Unknown depth provider: {name}")
         return False

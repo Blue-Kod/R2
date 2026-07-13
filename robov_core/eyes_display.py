@@ -28,6 +28,11 @@ except ImportError:
     print("Pygame not installed. Install with: pip install pygame")
     sys.exit(1)
 
+try:
+    from robov_core.keyboard import PygameKeyboard
+except ImportError:
+    PygameKeyboard = None
+
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(message)s',
@@ -197,7 +202,7 @@ class RobotFace:
         self._cmd_send_rect = pygame.Rect(0, 0, 0, 0)
         self._close_btn_rect = pygame.Rect(0, 0, 0, 0)
         self._shutdown_btn_rect = pygame.Rect(0, 0, 0, 0)
-        self._onboard_proc = None
+        self._pygame_keyboard = None
 
     def _preload_all_emotions(self):
         """Загружает все PNG из папки emotions/ при старте."""
@@ -272,22 +277,13 @@ class RobotFace:
         pygame.mouse.set_visible(True)
         clock = pygame.time.Clock()
 
-        # Remove always-on-top so onboard keyboard can appear above
-        try:
-            import subprocess as _sp
-            wid = _sp.check_output(
-                ["xdotool", "search", "--name", "pygame"],
-                stderr=_sp.DEVNULL,
-            ).decode().strip()
-            if wid:
-                first_wid = wid.split("\n")[0]
-                _sp.run(["wmctrl", "-i", "-r", first_wid, "-b", "remove,above"],
-                        stderr=_sp.DEVNULL, stdout=_sp.DEVNULL)
-        except Exception:
-            pass
-
         # Preload default and normal textures (display is ready)
         self._preload_all_emotions()
+        
+        # Initialize pygame keyboard
+        if PygameKeyboard is not None:
+            self._pygame_keyboard = PygameKeyboard(sw, sh)
+            self._pygame_keyboard.set_callback(self._on_keyboard_input)
         
         font = pygame.font.SysFont("Arial", 28, bold=True)
         overlay_font = pygame.font.SysFont("Consolas", 28)
@@ -305,7 +301,8 @@ class RobotFace:
                     if self._cmd_active:
                         if event.key == pygame.K_ESCAPE:
                             self._cmd_active = False
-                            self._stop_onboard()
+                            if self._pygame_keyboard:
+                                self._pygame_keyboard.hide()
                         elif event.key == pygame.K_BACKSPACE:
                             self._cmd_buf = self._cmd_buf[:-1]
                         elif event.key == pygame.K_RETURN:
@@ -323,6 +320,21 @@ class RobotFace:
                         mx = int(mx * sw)
                         my = int(my * sh)
 
+                    # Handle pygame keyboard first if visible
+                    if self._pygame_keyboard and self._pygame_keyboard.visible:
+                        key_result = self._pygame_keyboard.handle_event(event)
+                        if key_result:
+                            action, value = key_result
+                            if action == "char":
+                                self._cmd_buf += value
+                            elif action == "backspace":
+                                self._cmd_buf = self._cmd_buf[:-1]
+                            elif action == "enter":
+                                if self._cmd_buf.strip():
+                                    self._send_command(self._cmd_buf.strip())
+                                    self._cmd_buf = ""
+                        continue
+
                     if my > sh * 0.8 and not self._menu_rect.collidepoint(mx, my):
                         self._menu_visible = not self._menu_visible
                         self.state._menu_visible = self._menu_visible
@@ -334,7 +346,8 @@ class RobotFace:
                             self._menu_visible = False
                             self.state._menu_visible = False
                             self._cmd_active = False
-                            self._stop_onboard()
+                            if self._pygame_keyboard:
+                                self._pygame_keyboard.hide()
                         elif self._shutdown_btn_rect.collidepoint(mx, my):
                             self._shutdown()
                         elif self._cmd_send_rect.collidepoint(mx, my):
@@ -344,11 +357,13 @@ class RobotFace:
                         elif self._cmd_input_rect.collidepoint(mx, my):
                             if not self._cmd_active:
                                 self._cmd_active = True
-                                self._start_onboard()
+                                if self._pygame_keyboard:
+                                    self._pygame_keyboard.show()
                         else:
                             if self._cmd_active:
                                 self._cmd_active = False
-                                self._stop_onboard()
+                                if self._pygame_keyboard:
+                                    self._pygame_keyboard.hide()
 
             # Update animation (including random idle blinks)
             self.state.update_logic(dt)
@@ -510,20 +525,13 @@ class RobotFace:
                     model_surf = overlay_font.render(model_name, True, (120, 120, 120))
                     screen.blit(model_surf, (sw - model_surf.get_width() - 12, 10))
 
+            # Draw pygame keyboard if visible
+            if self._pygame_keyboard and self._pygame_keyboard.visible:
+                self._pygame_keyboard.draw(screen)
+
             pygame.display.flip()
 
         log.info("Shutting down...")
-        proc = self._onboard_proc
-        self._onboard_proc = None
-        if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=2)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
         pygame.quit()
 
     def start(self):
@@ -576,39 +584,16 @@ class RobotFace:
         except Exception as e:
             log.error(f"Shutdown failed: {e}")
 
-    def _start_onboard(self):
-        if self._onboard_proc is not None:
-            return
-        try:
-            self._onboard_proc = subprocess.Popen(
-                ["onboard", "--x-layout", "us"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            pygame.event.set_grab(False)
-            log.info("On-screen keyboard started")
-        except FileNotFoundError:
-            log.warning("onboard not found, on-screen keyboard unavailable")
-            self._onboard_proc = None
-        except Exception as e:
-            log.error(f"Failed to start onboard: {e}")
-            self._onboard_proc = None
-
-    def _stop_onboard(self):
-        proc = self._onboard_proc
-        if proc is None:
-            return
-        self._onboard_proc = None
-        try:
-            proc.terminate()
-            proc.wait(timeout=2)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-        pygame.event.set_grab(True)
-        log.info("On-screen keyboard stopped")
+    def _on_keyboard_input(self, text):
+        """Callback for pygame keyboard input."""
+        if text == "backspace":
+            self._cmd_buf = self._cmd_buf[:-1]
+        elif text == "enter":
+            if self._cmd_buf.strip():
+                self._send_command(self._cmd_buf.strip())
+                self._cmd_buf = ""
+        else:
+            self._cmd_buf += text
 
     @staticmethod
     def _wrap_text(font, text, max_width):

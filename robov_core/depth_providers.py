@@ -175,3 +175,112 @@ class LAS2DepthProvider(DepthProvider):
 
     def release(self) -> None:
         self._session = None
+
+
+class RKNNDepthProvider(DepthProvider):
+    """LAS2-S stereo depth via Rockchip NPU (rknn-toolkit-lite2).
+
+    Falls back to ONNX Runtime if rknn-lite2 is unavailable or .rknn file missing.
+    """
+
+    def __init__(self) -> None:
+        self._rknn = None
+        self._fallback: Optional[LAS2DepthProvider] = None
+        self._input_h: int = 384
+        self._input_w: int = 640
+        self._crop_h: int = 360
+        self._core_mask: int = 0  # 0 = auto
+
+    def setup(self, **kwargs) -> None:
+        rknn_path: str = kwargs.get("rknn_path", "")
+        onnx_path: str = kwargs.get("onnx_path", "")
+        self._crop_h: int = kwargs.get("crop_h", 360)
+        self._core_mask: int = kwargs.get("core_mask", 0)
+
+        if not rknn_path or not os.path.isfile(rknn_path):
+            raise FileNotFoundError(f"RKNN model not found: {rknn_path}")
+
+        try:
+            from rknnlite.api import RKNNLite
+        except ImportError:
+            raise ImportError(
+                "rknn-toolkit-lite2 not installed. "
+                "Install on the NPU device: pip install rknn-toolkit-lite2"
+            )
+
+        self._rknn = RKNNLite()
+        if self._rknn.load_rknn(rknn_path) != 0:
+            raise RuntimeError(f"Failed to load RKNN model: {rknn_path}")
+
+        core_mask = RKNNLite.NPU_CORE_0_1_2
+        if self._core_mask == 1:
+            core_mask = RKNNLite.NPU_CORE_0
+        elif self._core_mask == 2:
+            core_mask = RKNNLite.NPU_CORE_1
+        elif self._core_mask == 3:
+            core_mask = RKNNLite.NPU_CORE_2
+
+        if self._rknn.init_runtime(core_mask=core_mask) != 0:
+            raise RuntimeError("Failed to init RKNN runtime")
+
+        self._rknn_sdk_version = self._rknn.get_sdk_version()
+        self._input_h = 384
+        self._input_w = 640
+        return
+
+    def _setup_fallback(self, onnx_path: str) -> None:
+        if self._fallback is not None:
+            return
+        if not onnx_path or not os.path.isfile(onnx_path):
+            return
+        self._fallback = LAS2DepthProvider()
+        self._fallback.setup(onnx_path=onnx_path, crop_h=self._crop_h)
+
+    def compute(self, left: np.ndarray, right: np.ndarray) -> DepthResult:
+        if self._rknn is None:
+            if self._fallback is not None:
+                return self._fallback.compute(left, right)
+            raise RuntimeError("Neither RKNN model nor fallback loaded")
+
+        h, w = left.shape[:2]
+
+        left_rgb = cv2.cvtColor(left, cv2.COLOR_BGR2RGB)
+        right_rgb = cv2.cvtColor(right, cv2.COLOR_BGR2RGB)
+
+        need_resize = (h != self._input_h) or (w != self._input_w)
+        if need_resize:
+            left_rgb = cv2.resize(left_rgb, (self._input_w, self._input_h))
+            right_rgb = cv2.resize(right_rgb, (self._input_w, self._input_h))
+
+        left_input = left_rgb.astype(np.float32).transpose(2, 0, 1)[None]
+        right_input = right_rgb.astype(np.float32).transpose(2, 0, 1)[None]
+
+        try:
+            outputs = self._rknn.inference(inputs=[left_input, right_input])
+        except Exception as e:
+            if self._fallback is not None:
+                return self._fallback.compute(left, right)
+            raise RuntimeError(f"RKNN inference failed: {e}")
+
+        disp_float = outputs[0][0, 0]
+
+        if need_resize and self._crop_h < self._input_h:
+            disp_float = disp_float[:h, :w]
+
+        disp_int16 = np.clip(disp_float * 16.0, 0, 32767).astype(np.int16)
+        return DepthResult(disparity=disp_int16)
+
+    @property
+    def name(self) -> str:
+        return "RKNN"
+
+    def release(self) -> None:
+        if self._rknn is not None:
+            try:
+                self._rknn.release()
+            except Exception:
+                pass
+            self._rknn = None
+        if self._fallback is not None:
+            self._fallback.release()
+            self._fallback = None

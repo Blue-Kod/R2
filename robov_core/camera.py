@@ -10,7 +10,7 @@ import numpy as np
 os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 
-from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, LAS2DepthProvider, DepthResult
+from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, LAS2DepthProvider, RKNNDepthProvider, DepthResult
 
 
 class CameraInitError(Exception):
@@ -26,7 +26,7 @@ class StereoCamera:
         self.camera_param_file: str = camera_param_file
         self.camera_source: int = source
         self.cap: Optional[cv2.VideoCapture] = None
-        self.disp_buffer: deque = deque(maxlen=5)
+        self.disp_buffer: deque = deque(maxlen=1)
         self.lock: threading.Lock = threading.Lock()
 
         self.img_size: Tuple[int, int] = (640, 360)
@@ -91,7 +91,19 @@ class StereoCamera:
         from pathlib import Path
         import os
         script_dir = Path(__file__).resolve().parent.parent
-        onnx_path = script_dir / "models" / "las2_s_640x384.onnx"
+        models_dir = script_dir / "models"
+
+        rknn_path = models_dir / "las2_s_640x384.rknn"
+        onnx_path = models_dir / "las2_s_640x384.onnx"
+
+        if os.path.isfile(str(rknn_path)):
+            try:
+                p = RKNNDepthProvider()
+                p.setup(rknn_path=str(rknn_path), onnx_path=str(onnx_path))
+                return p
+            except Exception:
+                pass
+
         if os.path.isfile(str(onnx_path)):
             try:
                 p = LAS2DepthProvider()
@@ -99,6 +111,7 @@ class StereoCamera:
                 return p
             except Exception:
                 pass
+
         return StereoSGBMDepthProvider()
 
     def _init_provider(self) -> None:
@@ -201,12 +214,11 @@ class StereoCamera:
         self.disp_buffer.clear()
 
     def get_shared_depth(self):
-        if len(self.disp_buffer) < 2:
+        if len(self.disp_buffer) == 0:
             return None, None
-        avg_disp = np.mean(list(self.disp_buffer), axis=0).astype(np.int16)
         with self.lock:
             left = self._latest_left
-        return left, avg_disp
+        return left, self.disp_buffer[-1].copy()
 
     def get_frame(self) -> np.ndarray:
         if not self.cap or not self.cap.isOpened():

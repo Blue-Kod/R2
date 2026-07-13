@@ -49,7 +49,6 @@ class RerunViewer:
             )
             self._log(f"gRPC on :{self.grpc_port}, web on :{self.port}, URI: {server_uri}")
 
-            self._send_test_frame()
             rr.log("camera", rr.ViewCoordinates.RDF, static=True)
 
             self._running = True
@@ -62,11 +61,6 @@ class RerunViewer:
             self._log(f"start failed: {e}")
             return False
 
-    def _send_test_frame(self) -> None:
-        img = np.zeros((120, 160, 3), dtype=np.uint8)
-        cv2.putText(img, "R2 Connected", (10, 70),
-                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-        rr.log("camera/status", rr.Image(img))
 
     def stop(self) -> None:
         self._running = False

@@ -70,6 +70,7 @@ LAS2_HF_REPO = "tomtomtommi/LiteAnyStereoV2"
 LAS2_WEIGHT_FILENAME = "LAS2_S.pth"
 LAS2_ONNX_FILENAME = "las2_s_640x384.onnx"
 LAS2_ONNX_PATH = "models/las2_s_640x384.onnx"
+LAS2_RKNN_PATH = "models/las2_s_640x384.rknn"
 
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
@@ -292,6 +293,50 @@ def setup_las():
 
     onnx_mb = os.path.getsize(onnx_path) / (1024 * 1024)
     log_message(f"[LAS2] Setup complete. ONNX model: {onnx_mb:.1f} MB")
+
+    # --- RKNN conversion (optional, only on Linux ARM64 with NPU) ---
+    rknn_path = os.path.join(script_dir, LAS2_RKNN_PATH)
+    if not os.path.isfile(rknn_path) and platform.system() == "Linux":
+        import platform as _plat
+        if _plat.machine() in ("aarch64", "arm64"):
+            log_message("[LAS2] Attempting RKNN conversion for NPU...")
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                     "rknn-toolkit2"],
+                    capture_output=True, text=True, timeout=120, env=env,
+                )
+                if result.returncode != 0:
+                    log_message(f"[LAS2] rknn-toolkit2 install failed: {result.stderr[:200]}")
+                else:
+                    convert_script = os.path.join(script_dir, "models", "convert_to_rknn.py")
+                    if os.path.isfile(convert_script):
+                        result = subprocess.run(
+                            [sys.executable, convert_script,
+                             "--onnx", onnx_path,
+                             "--output", rknn_path,
+                             "--target", "rk3588",
+                             "--quantize", "float16"],
+                            capture_output=True, text=True, timeout=120, env=env,
+                        )
+                        if result.returncode == 0 and os.path.isfile(rknn_path):
+                            rknn_mb = os.path.getsize(rknn_path) / (1024 * 1024)
+                            log_message(f"[LAS2] RKNN model ready: {rknn_mb:.1f} MB")
+                        else:
+                            log_message(f"[LAS2] RKNN conversion failed: {result.stderr[:300]}")
+                    else:
+                        log_message(f"[LAS2] convert_to_rknn.py not found, skipping.")
+            except Exception as e:
+                log_message(f"[LAS2] RKNN conversion error: {e}")
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "uninstall", "-y",
+                     "rknn-toolkit2"],
+                    capture_output=True, timeout=60, env=env,
+                )
+            except Exception:
+                pass
+
     return True
 
 def install_apt_dependencies():
