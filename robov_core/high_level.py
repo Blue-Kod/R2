@@ -132,8 +132,8 @@ def speak(text: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        for chunk in _tts.synthesize_stream_raw(text):
-            aplay.stdin.write(chunk)
+        for chunk in _tts.synthesize(text):
+            aplay.stdin.write(chunk.audio_int16_bytes)
         aplay.stdin.close()
         aplay.wait()
     except Exception as e:
