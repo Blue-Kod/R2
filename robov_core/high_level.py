@@ -1,5 +1,7 @@
 import os
 import platform
+import queue
+import re
 import socket
 import subprocess
 import sys
@@ -98,33 +100,62 @@ _all_threads: List[threading.Thread] = []
 
 _tts: Any = None
 _tts_sample_rate: int = 22050
+_tts_lock: threading.Lock = threading.Lock()
 
 _ai_agent = None
 
 _TTS_MODEL_DIR = os.path.join(ROOT_DIR, "models")
 _TTS_MODEL_NAME = "ru_RU-ruslan-medium"
+_TTS_LENGTH_SCALE = 0.9
+
+
+def _init_tts():
+    """Load Piper TTS model with optimized ONNX session."""
+    global _tts, _tts_sample_rate
+    try:
+        import onnxruntime
+        from piper import PiperVoice
+        onnx_path = os.path.join(_TTS_MODEL_DIR, f"{_TTS_MODEL_NAME}.onnx")
+        if not os.path.exists(onnx_path):
+            log("TTS model not found, attempting download...")
+            _download_tts_model()
+        _tts = PiperVoice.load(onnx_path)
+        _tts_sample_rate = _tts.config.sample_rate
+
+        cpu_count = os.cpu_count() or 4
+        sess_opts = onnxruntime.SessionOptions()
+        sess_opts.intra_op_num_threads = cpu_count
+        sess_opts.inter_op_num_threads = max(1, cpu_count // 2)
+        sess_opts.graph_optimization_level = (
+            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+        )
+        _tts.session = onnxruntime.InferenceSession(
+            onnx_path, sess_options=sess_opts,
+            providers=["CPUExecutionProvider"],
+        )
+
+        import io, wave
+        with wave.open(io.BytesIO(), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(_tts_sample_rate)
+            _tts.synthesize_wav("ок", w)
+        log(f"Piper TTS ready (sample_rate={_tts_sample_rate}, threads={cpu_count})")
+    except ImportError:
+        log("TTS unavailable: piper-tts not installed")
+    except Exception as e:
+        log(f"TTS init error: {e}")
+        _tts = None
 
 
 def speak(text: str) -> None:
-    global _tts, _tts_sample_rate
+    global _tts
     if _tts is None:
-        try:
-            from piper import PiperVoice
-            onnx_path = os.path.join(_TTS_MODEL_DIR, f"{_TTS_MODEL_NAME}.onnx")
-            if not os.path.exists(onnx_path):
-                log("TTS model not found, attempting download...")
-                _download_tts_model()
-            _tts = PiperVoice.load(onnx_path)
-            _tts_sample_rate = _tts.config.sample_rate
-            log(f"Piper TTS loaded (sample_rate={_tts_sample_rate})")
-        except ImportError:
-            log("TTS unavailable: piper-tts not installed")
-            return
-        except Exception as e:
-            log(f"TTS init error: {e}")
-            return
+        _init_tts()
+    if _tts is None:
+        return
     try:
-        import subprocess
+        import subprocess, io, wave
         aplay = subprocess.Popen(
             ["aplay", "-D", "plughw:1,0", "-t", "raw",
              "-f", "S16_LE", "-r", str(_tts_sample_rate), "-c", "1"],
@@ -160,6 +191,76 @@ def _download_tts_model():
             log(f"Saved {_TTS_MODEL_NAME}.{ext}")
         except Exception as e:
             log(f"Failed to download {ext}: {e}")
+
+_MIN_WORD_LEN = 5
+
+class StreamingSpeaker:
+    """Buffers LLM tokens and speaks complete word-chunks in a background thread."""
+
+    def __init__(self):
+        self._buf = ""
+        self._queue: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
+        self._thread.start()
+
+    def feed(self, text: str) -> None:
+        self._buf += text
+        self._try_split()
+
+    def flush(self) -> None:
+        rest = self._buf.strip()
+        self._buf = ""
+        if rest:
+            self._queue.put(rest)
+        self._queue.put(None)
+        self._thread.join()
+
+    def reset(self) -> None:
+        self._buf = ""
+        self._queue.put(None)
+        self._queue = queue.Queue()
+        self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
+        self._thread.start()
+
+    def _try_split(self) -> None:
+        while True:
+            if " " not in self._buf:
+                return
+            last_space = self._buf.rfind(" ")
+            prefix = self._buf[:last_space]
+            if not prefix:
+                return
+            words = prefix.split()
+            if any(len(w) >= _MIN_WORD_LEN for w in words):
+                self._queue.put(prefix.strip())
+                self._buf = self._buf[last_space + 1:]
+                return
+            return
+
+    @staticmethod
+    def _clean(text: str) -> str:
+        text = re.sub(r"<[^>]+>", "", text)
+        text = re.sub(r"```[\s\S]*?```", "", text)
+        text = re.sub(r"`[^`]+`", "", text)
+        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+        text = re.sub(r"\*([^*]+)\*", r"\1", text)
+        text = re.sub(r"__([^_]+)__", r"\1", text)
+        text = re.sub(r"_([^_]+)_", r"\1", text)
+        text = re.sub(r"~~([^~]+)~~", r"\1", text)
+        text = re.sub(r"#+ ", "", text)
+        text = re.sub(r"[-*] ", "", text)
+        return text.strip()
+
+    @staticmethod
+    def _worker(q: queue.Queue) -> None:
+        while True:
+            chunk = q.get()
+            if chunk is None:
+                break
+            cleaned = StreamingSpeaker._clean(chunk)
+            if cleaned:
+                speak(cleaned)
+
 
 def log(message: str) -> None:
     print(message)

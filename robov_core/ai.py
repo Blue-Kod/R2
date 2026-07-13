@@ -1001,6 +1001,9 @@ class R2Agent:
         tool_log = ""
         self._current_model = None
 
+        from robov_core.high_level import StreamingSpeaker
+        speaker = StreamingSpeaker()
+
         for round_num in range(1, self.max_rounds + 1):
             if self._cancel_event.is_set():
                 break
@@ -1038,6 +1041,7 @@ class R2Agent:
                                 reasoning_text=prev_think + ("\n" if prev_think else "") + think_buf,
                             )
                         answer_buf += content
+                        speaker.feed(content)
                         self.display.update(answer_text=answer_buf)
                 streamed_ok = True
             except Exception as e:
@@ -1065,6 +1069,7 @@ class R2Agent:
                         if fb_content:
                             answer_buf = fb_content
                             phase = "answer"
+                            speaker.feed(fb_content)
                             self.display.update(
                                 is_thinking=False, answer_text=answer_buf,
                                 reasoning_text=prev_think,
@@ -1125,6 +1130,7 @@ class R2Agent:
             results_text = self._execute_actions(actions)
             tool_log = self.display.get_all()["tools_text"]
             self.history.append({"role": "user", "content": results_text})
+            speaker.reset()
 
         # Final answer — speak it + show ticker
         if response_text and not self._cancel_event.is_set():
@@ -1137,7 +1143,7 @@ class R2Agent:
                     ticker_text=clean_answer,
                     ticker_duration=max(5.0, len(clean_answer) / 15.0 + 2.0),
                 )
-                self._speak(clean_answer)
+                speaker.flush()
                 self.display.update(is_speaking=False)
 
         self.display.update(
