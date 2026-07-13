@@ -14,10 +14,12 @@ except ImportError:
 
 class RerunViewer:
     WEB_VIEWER_PORT = 9876
+    GRPC_PORT = 9877
 
     def __init__(self, camera, port: int = WEB_VIEWER_PORT):
         self.camera = camera
         self.port = port
+        self.grpc_port: int = self.GRPC_PORT
         self.pointcloud_enabled: bool = True
         self._running: bool = False
         self._thread: Optional[threading.Thread] = None
@@ -32,7 +34,12 @@ class RerunViewer:
             return False
         try:
             rr.init("r2_robot")
-            rr.serve_web_viewer(open=False, port=self.port)
+            server_uri = rr.serve_grpc(grpc_port=self.grpc_port)
+            rr.serve_web_viewer(
+                open_browser=False,
+                web_port=self.port,
+                connect_to=server_uri,
+            )
             self._running = True
             self._thread = threading.Thread(
                 target=self._loop, daemon=True, name="rerun-log"
@@ -85,7 +92,7 @@ class RerunViewer:
             self._fps = self._frame_count / (now - self._last_fps_time)
             self._frame_count = 0
             self._last_fps_time = now
-            rr.log("system/rerun_fps", rr.Scalar(self._fps))
+            rr.log("system/rerun_fps", rr.Scalars(self._fps))
 
     def _disparity_to_depth(self, disp: np.ndarray) -> np.ndarray:
         d16 = disp.astype(np.float32) / 16.0
