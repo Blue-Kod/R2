@@ -571,11 +571,23 @@ def start_background() -> None:
         global _ai_agent
         _ai_agent = init_agent(cwd=str(ROOT_DIR))
 
+        # Show best model from saved rankings immediately
+        try:
+            saved = _ai_agent.llm.best_models()
+            if saved:
+                _ai_agent.display.update(current_model=saved[0].get("name", ""))
+        except Exception:
+            pass
+
         def _refresh_models():
             try:
                 log("EveryLLM: refreshing model rankings...")
                 _ai_agent.llm.refresh(asynchronously=True, timeout=8.0)
                 log("EveryLLM: model rankings updated.")
+                best = _ai_agent.llm.ttft_scores()
+                if best:
+                    winner = min(best, key=best.get)
+                    _ai_agent.display.update(current_model=winner)
             except Exception as e:
                 log(f"EveryLLM refresh error: {e}")
 
@@ -762,6 +774,40 @@ def set_servo_offset(channel: int, offset: float) -> bool:
 
 def get_ai_agent():
     return _ai_agent
+
+
+def refresh_models(timeout: float = 8.0) -> list[dict]:
+    """Refresh model rankings and return the ranked list from BEST_MODELS.json."""
+    agent = _ai_agent
+    if agent is None:
+        log("AI agent not initialized")
+        return []
+    try:
+        agent.llm.refresh(asynchronously=False, timeout=timeout)
+    except Exception as e:
+        log(f"EveryLLM refresh error: {e}")
+    best = agent.llm.ttft_scores()
+    if best:
+        winner = min(best, key=best.get)
+        agent.display.update(current_model=winner)
+    return agent.llm.best_models()
+
+
+def set_reasoning(enabled: bool) -> None:
+    """Enable or disable reasoning mode on the AI agent."""
+    agent = _ai_agent
+    if agent is None:
+        log("AI agent not initialized")
+        return
+    agent.reasoning_enabled = bool(enabled)
+
+
+def get_reasoning() -> bool:
+    """Return current reasoning state."""
+    agent = _ai_agent
+    if agent is None:
+        return True
+    return agent.reasoning_enabled
 
 
 def command(text: str) -> None:

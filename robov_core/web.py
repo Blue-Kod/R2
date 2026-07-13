@@ -26,6 +26,7 @@ from robov_core.high_level import (
     set_eyes_position, get_eyes_position, get_logs,
     get_servo_angles, get_servo_angles_physical, get_servo_offsets,
     set_servo_physical, log, cleanup,
+    set_reasoning, get_reasoning,
 )
 
 from robov_core.ai import init_agent
@@ -631,11 +632,10 @@ def create_app() -> Flask:
     @require_auth
     def ai_reasoning():
         try:
-            agent = init_agent()
             if request.method == "POST":
                 data = request.get_json(silent=True) or {}
-                agent.reasoning_enabled = bool(data.get("enabled", True))
-            return jsonify({"enabled": agent.reasoning_enabled})
+                set_reasoning(bool(data.get("enabled", True)))
+            return jsonify({"enabled": get_reasoning()})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 

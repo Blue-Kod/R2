@@ -186,6 +186,12 @@ class RobotFace:
         self._jiggle_change_interval = 1  # seconds between target changes
         self._jiggle_timer = 0.0
 
+        # Command input state
+        self._cmd_buf = ""
+        self._cmd_active = False
+        self._cmd_input_rect = pygame.Rect(0, 0, 0, 0)
+        self._cmd_send_rect = pygame.Rect(0, 0, 0, 0)
+
     def _preload_all_emotions(self):
         """Загружает все PNG из папки emotions/ при старте."""
         base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "emotions")
@@ -279,16 +285,37 @@ class RobotFace:
                 if event.type == pygame.QUIT:
                     self.state.stop()
                 elif event.type == pygame.KEYDOWN:
-                    if event.key in [pygame.K_ESCAPE, pygame.K_q]:
-                        self.state.stop()
+                    if self._cmd_active:
+                        if event.key == pygame.K_ESCAPE:
+                            self._cmd_active = False
+                        elif event.key == pygame.K_BACKSPACE:
+                            self._cmd_buf = self._cmd_buf[:-1]
+                        elif event.key == pygame.K_RETURN:
+                            if self._cmd_buf.strip():
+                                self._send_command(self._cmd_buf.strip())
+                                self._cmd_buf = ""
+                        elif event.unicode and event.unicode.isprintable():
+                            self._cmd_buf += event.unicode
+                    else:
+                        if event.key in [pygame.K_ESCAPE, pygame.K_q]:
+                            self.state.stop()
                 elif event.type == pygame.MOUSEBUTTONDOWN or event.type == pygame.FINGERDOWN:
                     mx, my = event.pos
                     if event.type == pygame.FINGERDOWN:
                         mx = int(mx * sw)
                         my = int(my * sh)
-                    if self._exit_btn_rect.collidepoint(mx, my):
-                        log.info("Exit via menu")
-                        self.state.stop()
+                    if self._menu_visible:
+                        if self._exit_btn_rect.collidepoint(mx, my):
+                            log.info("Exit via menu")
+                            self.state.stop()
+                        elif self._cmd_send_rect.collidepoint(mx, my):
+                            if self._cmd_buf.strip():
+                                self._send_command(self._cmd_buf.strip())
+                                self._cmd_buf = ""
+                        elif self._cmd_input_rect.collidepoint(mx, my):
+                            self._cmd_active = True
+                        else:
+                            self._cmd_active = False
                     else:
                         # toggle menu on bottom 20% of screen
                         if my > sh * 0.8:
@@ -392,18 +419,43 @@ class RobotFace:
                 overlay.fill((0, 0, 0, 220))
                 screen.blit(overlay, (0, 0))
 
-                m_w, m_h = 400, 250
+                m_w, m_h = 400, 340
                 m_rect = pygame.Rect((sw - m_w) // 2, (sh - m_h) // 2, m_w, m_h)
                 pygame.draw.rect(screen, (25, 25, 25), m_rect)
                 pygame.draw.rect(screen, (200, 200, 200), m_rect, 2)
 
-                ip_label = font.render(f"IP: {self._get_ip()}", True, (255, 255, 255))
-                screen.blit(ip_label, (m_rect.x + 40, m_rect.y + 50))
+                y_cur = m_rect.y + 20
 
-                self._exit_btn_rect = pygame.Rect(m_rect.x + 50, m_rect.y + 130, 300, 70)
+                ip_label = font.render(f"IP: {self._get_ip()}", True, (255, 255, 255))
+                screen.blit(ip_label, (m_rect.x + 40, y_cur))
+                y_cur += 50
+
+                # Command input field
+                input_color = (50, 50, 80) if self._cmd_active else (40, 40, 40)
+                self._cmd_input_rect = pygame.Rect(m_rect.x + 20, y_cur, 280, 40)
+                pygame.draw.rect(screen, input_color, self._cmd_input_rect)
+                pygame.draw.rect(screen, (100, 140, 200) if self._cmd_active else (120, 120, 120), self._cmd_input_rect, 2)
+                placeholder = self._cmd_buf if self._cmd_buf else "Команда..."
+                cmd_color = (255, 255, 255) if self._cmd_buf else (120, 120, 120)
+                cmd_surf = overlay_font.render(placeholder[-22:], True, cmd_color)
+                screen.blit(cmd_surf, (self._cmd_input_rect.x + 8, self._cmd_input_rect.y + 6))
+                # Blinking cursor when active
+                if self._cmd_active and int(time.time() * 2) % 2 == 0:
+                    cx = self._cmd_input_rect.x + 8 + cmd_surf.get_width()
+                    pygame.draw.line(screen, (255, 255, 255), (cx, y_cur + 8), (cx, y_cur + 32), 2)
+
+                # Send button
+                self._cmd_send_rect = pygame.Rect(m_rect.x + 310, y_cur, 70, 40)
+                pygame.draw.rect(screen, (40, 100, 40), self._cmd_send_rect)
+                pygame.draw.rect(screen, (80, 200, 80), self._cmd_send_rect, 2)
+                send_txt = overlay_font.render(">>>", True, (255, 255, 255))
+                screen.blit(send_txt, send_txt.get_rect(center=self._cmd_send_rect.center))
+                y_cur += 60
+
+                # Exit button
+                self._exit_btn_rect = pygame.Rect(m_rect.x + 50, y_cur, 300, 50)
                 pygame.draw.rect(screen, (180, 40, 40), self._exit_btn_rect)
                 pygame.draw.rect(screen, (255, 100, 100), self._exit_btn_rect, 2)
-
                 txt = font.render("Exit", True, (255, 255, 255))
                 screen.blit(txt, txt.get_rect(center=self._exit_btn_rect.center))
 
@@ -441,6 +493,14 @@ class RobotFace:
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _send_command(text: str):
+        try:
+            from robov_core.high_level import command
+            command(text)
+        except Exception as e:
+            log.error(f"Command failed: {e}")
 
     @staticmethod
     def _wrap_text(font, text, max_width):

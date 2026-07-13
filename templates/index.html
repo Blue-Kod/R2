@@ -108,12 +108,8 @@
             <div title="Сервер: захват+обработка">Серв: <span id="fpsStat">0</span></div>
             <div title="Сервер: кодирование+отправка">Стрим: <span id="streamFpsStat">0</span></div>
             <div title="Реальное разрешение камеры">Cam: <span id="camResStat">-</span></div>
-            <div title="Текущая модель LLM">Модель: <span id="modelStat">-</span></div>
             <button id="updateBtn" class="update-btn">↻</button>
             <button id="exitBtn" class="exit-btn">⏻</button>
-            <label style="font-size:11px; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; border:1px solid var(--line); border-radius:12px; padding:6px 10px; background:var(--panel); white-space:nowrap;">
-                <input type="checkbox" id="reasoningToggle" checked style="accent-color:#44944a; width:14px; height:14px;"> Рассуждение
-            </label>
         </div>
     </header>
 
@@ -502,31 +498,6 @@ function attachEvents() {
     }
     sendRobotBtn.onclick = sendRobotCommand;
     robotCmdInput.onkeydown = (e) => { if (e.key === 'Enter') sendRobotCommand(); };
-
-    // Reasoning toggle
-    const reasoningToggle = document.getElementById('reasoningToggle');
-    async function loadReasoningState() {
-        try { const r = await fetch('/api/ai/reasoning'); const d = await r.json(); reasoningToggle.checked = d.enabled; } catch(e) {}
-    }
-    loadReasoningState();
-    // Load initial model name
-    (async () => {
-        try { const r = await fetch('/api/ai/status'); const d = await r.json(); if (d.current_model) document.getElementById('modelStat').textContent = d.current_model; } catch(_) {}
-    })();
-    reasoningToggle.onchange = async () => {
-        try { await fetch('/api/ai/reasoning', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:reasoningToggle.checked})}); } catch(e) {}
-    };
-
-    // AI SSE — model name & status
-    try {
-        const aiEvt = new EventSource('/api/ai/stream');
-        aiEvt.onmessage = (e) => {
-            try {
-                const d = JSON.parse(e.data);
-                if (d.current_model) document.getElementById('modelStat').textContent = d.current_model;
-            } catch(_) {}
-        };
-    } catch(_) {}
 
     terminalInput.onkeydown = (e) => {
         if (e.key === 'Enter') {
