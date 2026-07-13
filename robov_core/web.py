@@ -27,6 +27,7 @@ from robov_core.high_level import (
     get_servo_angles, get_servo_angles_physical, get_servo_offsets,
     set_servo_physical, log, cleanup,
     set_reasoning, get_reasoning,
+    get_rerun_viewer,
 )
 
 from robov_core.ai import init_agent
@@ -601,6 +602,31 @@ def create_app() -> Flask:
             return raw, 200, {"Content-Type": "text/plain; charset=utf-8"}
         except Exception as e:
             return f"Ошибка загрузки справки: {e}", 500
+
+    # --- Visualization ---
+
+    @app.route("/view")
+    @require_auth
+    def view_page():
+        return render_template("view.html")
+
+    @app.route("/api/rerun/status")
+    @require_auth
+    def rerun_status():
+        viewer = get_rerun_viewer()
+        if viewer is None:
+            return jsonify({"available": False, "running": False})
+        return jsonify(viewer.status())
+
+    @app.route("/api/rerun/pointcloud", methods=["POST"])
+    @require_auth
+    def rerun_pointcloud():
+        viewer = get_rerun_viewer()
+        if viewer is None:
+            return jsonify({"error": "Rerun not available"}), 503
+        data = request.get_json(silent=True) or {}
+        viewer.pointcloud_enabled = bool(data.get("enabled", True))
+        return jsonify({"status": "ok", "pointcloud_enabled": viewer.pointcloud_enabled})
 
     # --- AI Agent ---
 

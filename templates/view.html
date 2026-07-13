@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>R2 — Визуализация</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #0a0a0a; --panel: #121212; --panel-2: #151515;
+            --text: #f0f0f0; --muted: #9c9c9c; --line: #2a2a2a;
+            --accent: #44944a; --danger: #8b0000;
+        }
+        html, body { height: 100%; background: var(--bg); }
+        body { overflow: hidden; color: var(--text); font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
+        .layout { width: 100%; height: 100vh; display: flex; flex-direction: column; gap: 12px; overflow: hidden; padding: 16px; }
+        .topbar { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; flex-shrink: 0; }
+        .nav-links { display: flex; gap: 8px; }
+        .nav-links a { color: var(--text); text-decoration: none; border: 1px solid var(--line); background: var(--panel); padding: 8px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; transition: 0.2s; }
+        .nav-links a:hover { background: #1f1f1f; border-color: #3a3a3a; }
+        .nav-links a.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .stats { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+        .stats div { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 12px; padding: 6px 12px; background: var(--panel); }
+        .stats span { color: var(--text); font-weight: 600; margin-left: 4px; }
+        .viewer-wrap { flex: 1; min-height: 0; border-radius: 20px; border: 1px solid var(--line); background: #070707; overflow: hidden; position: relative; }
+        .viewer-wrap iframe { width: 100%; height: 100%; border: none; }
+        .controls { position: absolute; top: 12px; right: 12px; z-index: 10; display: flex; gap: 8px; }
+        .ctrl-btn {
+            background: rgba(18, 18, 18, 0.9); border: 1px solid var(--line); color: var(--text);
+            border-radius: 12px; padding: 8px 14px; font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: 0.2s; backdrop-filter: blur(8px);
+        }
+        .ctrl-btn:hover { background: rgba(30, 30, 30, 0.95); border-color: #3a3a3a; }
+        .ctrl-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .status-bar {
+            position: absolute; bottom: 12px; left: 12px; z-index: 10;
+            display: flex; gap: 10px; align-items: center;
+        }
+        .status-badge {
+            background: rgba(18, 18, 18, 0.9); border: 1px solid var(--line);
+            border-radius: 10px; padding: 5px 12px; font-size: 11px;
+            color: var(--muted); backdrop-filter: blur(8px);
+        }
+        .status-badge.on { border-color: var(--accent); color: var(--accent); }
+        .status-badge.off { border-color: var(--danger); color: #e06c75; }
+        .loading-overlay {
+            position: absolute; inset: 0; z-index: 5;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: #070707; gap: 12px;
+        }
+        .loading-overlay.hidden { display: none; }
+        .spinner { width: 32px; height: 32px; border: 3px solid #2a2a2a; border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { color: var(--muted); font-size: 13px; }
+        @media (max-width: 768px) {
+            .layout { padding: 8px; gap: 8px; }
+            .controls { top: 8px; right: 8px; }
+            .ctrl-btn { padding: 6px 10px; font-size: 11px; }
+        }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <header class="topbar">
+        <div class="nav-links">
+            <a href="/">Главная</a>
+            <a href="/file_manager">Файлы</a>
+            <a href="/view" class="active">Визуализация</a>
+        </div>
+        <div class="stats">
+            <div>Rerun: <span id="rerunFps">0</span> FPS</div>
+            <div>Точки: <span id="pointCount">--</span></div>
+        </div>
+    </header>
+
+    <div class="viewer-wrap" id="viewerWrap">
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+            <div class="loading-text">Подключение к Rerun viewer...</div>
+        </div>
+
+        <div class="controls">
+            <button class="ctrl-btn active" id="btnPointcloud" title="Вкл/выкл 3D облако точек">PointCloud</button>
+            <button class="ctrl-btn" id="btnReset" title="Сбросить вид камеры">Reset View</button>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-badge off" id="statusBadge">Rerun: --</div>
+        </div>
+
+        <iframe id="rerunFrame" allow="clipboard-write; clipboard-read;"></iframe>
+    </div>
+</div>
+
+<script>
+const iframe = document.getElementById('rerunFrame');
+const loading = document.getElementById('loadingOverlay');
+const statusBadge = document.getElementById('statusBadge');
+const btnPointcloud = document.getElementById('btnPointcloud');
+const btnReset = document.getElementById('btnReset');
+const rerunFpsEl = document.getElementById('rerunFps');
+
+let rerunReady = false;
+let pollTimer = null;
+
+async function fetchStatus() {
+    try {
+        const r = await fetch('/api/rerun/status');
+        const d = await r.json();
+        if (d.available && d.running) {
+            const host = location.hostname;
+            const url = `http://${host}:${d.port}`;
+            if (!rerunReady) {
+                iframe.src = url;
+                iframe.onload = () => {
+                    loading.classList.add('hidden');
+                    rerunReady = true;
+                };
+            }
+            statusBadge.textContent = `Rerun: ${d.port}`;
+            statusBadge.className = 'status-badge on';
+            rerunFpsEl.textContent = d.fps || 0;
+            btnPointcloud.classList.toggle('active', d.pointcloud_enabled);
+        } else if (!d.available) {
+            statusBadge.textContent = 'Rerun: не установлен';
+            statusBadge.className = 'status-badge off';
+            loading.innerHTML = '<div style="color:#e06c75;font-size:14px;">rerun-sdk не установлен</div><div style="color:var(--muted);font-size:12px;margin-top:8px;">pip install rerun-sdk</div>';
+        }
+    } catch(e) {
+        statusBadge.textContent = 'Rerun: ошибка';
+        statusBadge.className = 'status-badge off';
+    }
+}
+
+btnPointcloud.onclick = async () => {
+    const enabled = !btnPointcloud.classList.contains('active');
+    try {
+        await fetch('/api/rerun/pointcloud', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled})
+        });
+        btnPointcloud.classList.toggle('active', enabled);
+    } catch(e) {}
+};
+
+btnReset.onclick = () => {
+    if (iframe.contentWindow) {
+        iframe.contentWindow.postMessage({type: 'reset_view'}, '*');
+    }
+};
+
+fetchStatus();
+pollTimer = setInterval(fetchStatus, 3000);
+</script>
+</body>
+</html>

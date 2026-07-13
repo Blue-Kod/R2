@@ -103,6 +103,7 @@ _tts_sample_rate: int = 22050
 _tts_lock: threading.Lock = threading.Lock()
 
 _ai_agent = None
+_rerun_viewer = None
 
 _TTS_MODEL_DIR = os.path.join(ROOT_DIR, "models")
 _TTS_MODEL_NAME = "ru_RU-ruslan-medium"
@@ -562,6 +563,20 @@ def start_background() -> None:
     if _shell_thread:
         _all_threads.append(_shell_thread)
 
+    # Start Rerun 3D visualization viewer
+    if _camera:
+        try:
+            from robov_core.rerun_viewer import RerunViewer
+            global _rerun_viewer
+            _rerun_viewer = RerunViewer(_camera)
+            if _rerun_viewer.start():
+                log(f"Rerun viewer started on port {_rerun_viewer.port}")
+            else:
+                log("Rerun viewer failed to start (rerun-sdk not installed?)")
+                _rerun_viewer = None
+        except Exception as e:
+            log(f"Rerun init error: {e}")
+
     from robov_core.web import create_app
     app = create_app()
     web_thread = threading.Thread(
@@ -662,6 +677,9 @@ def cleanup() -> None:
     log("Starting clean shutdown...")
     _shutdown_requested = True
     _shell_running = False
+
+    if _rerun_viewer:
+        _rerun_viewer.stop()
 
     if _camera:
         _camera.stop_continuous_capture()
@@ -800,6 +818,10 @@ def set_servo_offset(channel: int, offset: float) -> bool:
 
 def get_ai_agent():
     return _ai_agent
+
+
+def get_rerun_viewer():
+    return _rerun_viewer
 
 
 def refresh_models(timeout: float = 8.0) -> list[dict]:

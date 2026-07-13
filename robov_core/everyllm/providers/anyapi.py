@@ -12,7 +12,7 @@ class AnyApiProvider(BaseProvider):
     model_map = {
         "anyapi/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "anyapi/nvidia/nemotron-3-ultra-550b-a55b:free": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "anyapi/nvidia/nemotron-nano-9b-v2:free": "nvidia/nemotron-nano-9b-v2:free"
+        # Not so smart "anyapi/nvidia/nemotron-nano-9b-v2:free": "nvidia/nemotron-nano-9b-v2:free"
     }
 
     def __init__(self, api_key: str):

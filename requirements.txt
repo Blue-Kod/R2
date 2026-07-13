@@ -45,4 +45,7 @@ onnxruntime>=1.16.0
 
 # AI / LLM (EveryLLM backend)
 g4f>=7.8.0
+
+# 3D Visualization (Rerun viewer)
+rerun-sdk>=0.18.0
 openai>=1.0.0

@@ -1,0 +1,132 @@
+import threading
+import time
+from typing import Optional
+
+import cv2
+import numpy as np
+
+try:
+    import rerun as rr
+    _HAS_RERUN = True
+except ImportError:
+    _HAS_RERUN = False
+
+
+class RerunViewer:
+    WEB_VIEWER_PORT = 9876
+
+    def __init__(self, camera, port: int = WEB_VIEWER_PORT):
+        self.camera = camera
+        self.port = port
+        self.pointcloud_enabled: bool = True
+        self._running: bool = False
+        self._thread: Optional[threading.Thread] = None
+        self._downscale: int = 2
+        self._max_points: int = 50000
+        self._fps: float = 0.0
+        self._frame_count: int = 0
+        self._last_fps_time: float = time.time()
+
+    def start(self) -> bool:
+        if not _HAS_RERUN:
+            return False
+        try:
+            rr.init("r2_robot")
+            rr.serve_web_viewer(open=False, port=self.port)
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._loop, daemon=True, name="rerun-log"
+            )
+            self._thread.start()
+            return True
+        except Exception:
+            return False
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._thread = None
+
+    def _loop(self) -> None:
+        while self._running:
+            try:
+                self._log_frame()
+            except Exception:
+                pass
+            time.sleep(0.05)
+
+    def _log_frame(self) -> None:
+        data = self.camera.capture_frame_with_depth()
+        if data is None:
+            return
+
+        left = data["left_frame"]
+        disp = data["disparity_map"]
+
+        h, w = left.shape[:2]
+        nw, nh = w // self._downscale, h // self._downscale
+        left_small = cv2.resize(left, (nw, nh))
+        disp_small = cv2.resize(disp, (nw, nh))
+
+        rr.log("camera/left", rr.Image(cv2.cvtColor(left_small, cv2.COLOR_BGR2RGB)))
+
+        depth = self._disparity_to_depth(disp_small)
+        rr.log("camera/depth", rr.DepthImage(depth.astype(np.float32)))
+
+        if self.pointcloud_enabled:
+            points, colors = self._build_pointcloud(disp_small, left_small)
+            if len(points) > 0:
+                rr.log("camera/pointcloud", rr.Points3D(points, colors=colors))
+
+        self._frame_count += 1
+        now = time.time()
+        if now - self._last_fps_time >= 1.0:
+            self._fps = self._frame_count / (now - self._last_fps_time)
+            self._frame_count = 0
+            self._last_fps_time = now
+            rr.log("system/rerun_fps", rr.Scalar(self._fps))
+
+    def _disparity_to_depth(self, disp: np.ndarray) -> np.ndarray:
+        d16 = disp.astype(np.float32) / 16.0
+        f_eff = self.camera.focal_length * disp.shape[0] / self.camera.imSize[1]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            depth = np.where(
+                d16 > 1.0,
+                f_eff * self.camera.baseline / d16,
+                0.0,
+            ) * self.camera.depth_scale
+        return np.clip(depth, 0, 50000)
+
+    def _build_pointcloud(self, disp: np.ndarray, image: np.ndarray):
+        disp_float = disp.astype(np.float32) / 16.0
+        points_3d = cv2.reprojectImageTo3D(disp_float, self.camera.Q)
+
+        valid = disp_float > 1.0
+        points = points_3d[valid] * self.camera.depth_scale / 1000.0
+
+        colors_bgr = image[valid]
+        colors_rgb = cv2.cvtColor(
+            colors_bgr.reshape(-1, 1, 3), cv2.COLOR_BGR2RGB
+        ).reshape(-1, 3)
+        colors = colors_rgb.astype(np.float32) / 255.0
+
+        if len(points) > self._max_points:
+            idx = np.random.choice(len(points), self._max_points, replace=False)
+            points = points[idx]
+            colors = colors[idx]
+
+        return points.astype(np.float32), colors.astype(np.float32)
+
+    @property
+    def fps(self) -> float:
+        return self._fps
+
+    def status(self) -> dict:
+        return {
+            "running": self._running and _HAS_RERUN,
+            "available": _HAS_RERUN,
+            "port": self.port,
+            "pointcloud_enabled": self.pointcloud_enabled,
+            "fps": round(self._fps, 1),
+        }
