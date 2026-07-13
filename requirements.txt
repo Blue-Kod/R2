@@ -15,14 +15,14 @@ ptyprocess>=0.7.0
 
 # OpenCV - use opencv-python-headless for server environments (no GUI deps)
 # For Orange Pi with display, use opencv-python instead
-opencv-python>=4.8.0
-opencv-contrib-python>=4.8.0
+opencv-python==4.13.0.92
+opencv-contrib-python==4.13.0.92
 
 # NumPy - pinned for ARM compatibility
 numpy>=1.24.0,<2.0.0
 
 # Hardware I2C control for PCA9685 servo driver
-PCA9685-smbus2>=1.0.0
+PCA9685-smbus2>=0.0.6
 
 # Display/graphics
 pygame>=2.5.0
