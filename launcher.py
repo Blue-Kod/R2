@@ -63,6 +63,14 @@ TTS_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU
 TTS_MODEL_URL = f"{TTS_HF_BASE}/{TTS_MODEL_NAME}.onnx"
 TTS_JSON_URL = f"{TTS_HF_BASE}/{TTS_MODEL_NAME}.onnx.json"
 
+# LAS2 stereo depth model
+LAS2_DIR = "models/las2"
+LAS2_WEIGHT_DIR = "models/las2/checkpoints"
+LAS2_HF_REPO = "tomtomtommi/LiteAnyStereoV2"
+LAS2_WEIGHT_FILENAME = "LAS2_S.pth"
+LAS2_ONNX_FILENAME = "las2_s_640x384.onnx"
+LAS2_ONNX_PATH = "models/las2_s_640x384.onnx"
+
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -208,6 +216,83 @@ def ensure_tts_model():
     else:
         log_message("[TTS] Model download incomplete - TTS may not work.")
     return ok
+
+
+def setup_las():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    onnx_path = os.path.join(script_dir, LAS2_ONNX_PATH)
+    weight_dir = os.path.join(script_dir, LAS2_WEIGHT_DIR)
+    weight_path = os.path.join(weight_dir, LAS2_WEIGHT_FILENAME)
+
+    if os.path.isfile(onnx_path):
+        log_message("[LAS2] ONNX model found, skipping setup.")
+        return True
+
+    log_message("[LAS2] Starting LAS2-S setup...")
+
+    if not os.path.isfile(weight_path):
+        if not is_internet_available(timeout=5):
+            log_message("[LAS2] No internet — cannot download weights.")
+            return False
+        log_message("[LAS2] Downloading LAS2_S.pth from HuggingFace...")
+        os.makedirs(weight_dir, exist_ok=True)
+        weight_url = f"https://huggingface.co/{LAS2_HF_REPO}/resolve/main/{LAS2_WEIGHT_FILENAME}"
+        if not _download_file(weight_url, weight_path):
+            log_message("[LAS2] Weight download failed.")
+            return False
+
+    log_message("[LAS2] Installing torch for ONNX export...")
+    env = os.environ.copy()
+    env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "torch", "torchvision", "timm", "onnx",
+             "--index-url", "https://download.pytorch.org/whl/cpu"],
+            capture_output=True, text=True, timeout=600, env=env,
+        )
+        if result.returncode != 0:
+            log_message(f"[LAS2] torch install failed: {result.stderr}")
+            return False
+    except Exception as e:
+        log_message(f"[LAS2] torch install error: {e}")
+        return False
+
+    log_message("[LAS2] Exporting ONNX model (640x384)...")
+    export_script = os.path.join(script_dir, LAS2_DIR, "export_onnx.py")
+    try:
+        result = subprocess.run(
+            [sys.executable, export_script,
+             "--version", "las2", "--model_size", "s",
+             "--restore_ckpt", weight_path,
+             "--width", "640", "--height", "384", "--max_disp", "192",
+             "--output_name", onnx_path],
+            capture_output=True, text=True, timeout=300,
+            cwd=os.path.join(script_dir, LAS2_DIR), env=env,
+        )
+        if result.returncode != 0:
+            log_message(f"[LAS2] ONNX export failed: {result.stderr}")
+            return False
+        if not os.path.isfile(onnx_path):
+            log_message("[LAS2] ONNX export did not produce output file.")
+            return False
+    except Exception as e:
+        log_message(f"[LAS2] ONNX export error: {e}")
+        return False
+
+    log_message("[LAS2] Removing torch (no longer needed)...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y",
+             "torch", "torchvision", "timm", "onnx"],
+            capture_output=True, timeout=60, env=env,
+        )
+    except Exception:
+        pass
+
+    onnx_mb = os.path.getsize(onnx_path) / (1024 * 1024)
+    log_message(f"[LAS2] Setup complete. ONNX model: {onnx_mb:.1f} MB")
+    return True
 
 def install_apt_dependencies():
     """
@@ -696,6 +781,9 @@ def main():
 
         log_message("[L] Ensuring TTS model is available...")
         ensure_tts_model()
+
+        log_message("[L] Setting up LAS2 stereo depth model...")
+        setup_las()
     else:
         log_message("[*] No internet, skipping update.")
 

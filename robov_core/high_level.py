@@ -824,6 +824,36 @@ def get_rerun_viewer():
     return _rerun_viewer
 
 
+def get_depth_provider():
+    if _camera is None:
+        return None
+    return _camera.depth_provider.name if _camera.depth_provider else None
+
+
+def set_depth_provider(name: str) -> bool:
+    if _camera is None:
+        return False
+    from robov_core.depth_providers import (
+        StereoSGBMDepthProvider, LAS2DepthProvider,
+    )
+    name = name.strip().upper()
+    if name == "SGBM":
+        provider = StereoSGBMDepthProvider()
+    elif name == "LAS2":
+        onnx_path = ROOT_DIR / "models" / "las2_s_640x384.onnx"
+        if not onnx_path.exists():
+            log(f"LAS2 ONNX model not found at {onnx_path}")
+            return False
+        provider = LAS2DepthProvider()
+        provider.setup(onnx_path=str(onnx_path))
+    else:
+        log(f"Unknown depth provider: {name}")
+        return False
+    _camera.set_depth_provider(provider)
+    log(f"Depth provider switched to {provider.name}")
+    return True
+
+
 def refresh_models(timeout: float = 8.0) -> list[dict]:
     """Refresh model rankings and return the ranked list from BEST_MODELS.json."""
     agent = _ai_agent

@@ -28,6 +28,7 @@ from robov_core.high_level import (
     set_servo_physical, log, cleanup,
     set_reasoning, get_reasoning,
     get_rerun_viewer,
+    get_depth_provider, set_depth_provider,
 )
 
 from robov_core.ai import init_agent
@@ -282,6 +283,20 @@ def create_app() -> Flask:
             depth_scale=data.get("depth_scale"),
         )
         return jsonify({"status": "ok"})
+
+    @app.route("/api/camera/depth_provider", methods=["GET", "POST"])
+    @require_auth
+    def camera_depth_provider():
+        if request.method == "GET":
+            name = get_depth_provider()
+            return jsonify({"provider": name or "unknown"})
+        data = request.get_json(silent=True) or {}
+        provider_name = str(data.get("provider", "")).strip()
+        if not provider_name:
+            return jsonify({"error": "Missing 'provider' field"}), 400
+        if set_depth_provider(provider_name):
+            return jsonify({"status": "ok", "provider": provider_name.upper()})
+        return jsonify({"error": f"Failed to switch to {provider_name}"}), 400
 
     # --- Servo ---
 

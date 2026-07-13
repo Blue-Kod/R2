@@ -10,7 +10,7 @@ import numpy as np
 os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 
-from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, DepthResult
+from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, LAS2DepthProvider, DepthResult
 
 
 class CameraInitError(Exception):
@@ -57,7 +57,7 @@ class StereoCamera:
         self._setup_rectification()
         self.focal_length = self.P1[0, 0]
         self.baseline = abs(float(self.T[0]))
-        self.depth_provider: DepthProvider = StereoSGBMDepthProvider()
+        self.depth_provider: DepthProvider = self._create_default_provider()
         self._init_provider()
 
     def _load_camera_parameters(self) -> None:
@@ -85,6 +85,21 @@ class StereoCamera:
         self.rMapX, self.rMapY = cv2.fisheye.initUndistortRectifyMap(
             self.Kr, self.Dr, self.R2, self.P2, self.imSize, cv2.CV_32FC1
         )
+
+    @staticmethod
+    def _create_default_provider() -> DepthProvider:
+        from pathlib import Path
+        import os
+        script_dir = Path(__file__).resolve().parent.parent
+        onnx_path = script_dir / "models" / "las2_s_640x384.onnx"
+        if os.path.isfile(str(onnx_path)):
+            try:
+                p = LAS2DepthProvider()
+                p.setup(onnx_path=str(onnx_path))
+                return p
+            except Exception:
+                pass
+        return StereoSGBMDepthProvider()
 
     def _init_provider(self) -> None:
         self.depth_provider.setup(
@@ -143,11 +158,9 @@ class StereoCamera:
         return imgL, imgR
 
     def compute_disparity(self, left_frame: np.ndarray, right_frame: np.ndarray) -> np.ndarray:
-        grayL = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
-        grayR = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
-        grayL = cv2.resize(grayL, self.img_size)
-        grayR = cv2.resize(grayR, self.img_size)
-        result = self.depth_provider.compute(grayL, grayR)
+        left_d = cv2.resize(left_frame, self.img_size)
+        right_d = cv2.resize(right_frame, self.img_size)
+        result = self.depth_provider.compute(left_d, right_d)
         return result.disparity
 
     def get_depth_at_point(self, disparity_map: np.ndarray, x: Optional[int] = None, y: Optional[int] = None) -> float:
@@ -280,13 +293,10 @@ class StereoCamera:
             frame = imgL if self.show_left else imgR
             frame = cv2.resize(frame, self.img_size)
 
-            grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
-            grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
+            left_d = cv2.resize(imgL, self.img_size, interpolation=cv2.INTER_LINEAR)
+            right_d = cv2.resize(imgR, self.img_size, interpolation=cv2.INTER_LINEAR)
 
-            grayL_d = cv2.resize(grayL, self.img_size, interpolation=cv2.INTER_LINEAR)
-            grayR_d = cv2.resize(grayR, self.img_size, interpolation=cv2.INTER_LINEAR)
-
-            result = self.depth_provider.compute(grayL_d, grayR_d)
+            result = self.depth_provider.compute(left_d, right_d)
             disp_final = result.disparity
             self.disp_buffer.append(disp_final.copy())
             self._latest_left = frame.copy()
