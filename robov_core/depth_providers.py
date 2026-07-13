@@ -45,7 +45,7 @@ class StereoSGBMDepthProvider(DepthProvider):
         self._wls_enabled: bool = True
 
     def setup(self, **kwargs) -> None:
-        num_disp: int = kwargs.get("num_disp", 160)
+        num_disp: int = kwargs.get("num_disp", 192)
         window_size: int = kwargs.get("window_size", 11)
         min_disp: int = kwargs.get("min_disp", 0)
         self._wls_enabled = kwargs.get("wls_enabled", True)
@@ -58,11 +58,11 @@ class StereoSGBMDepthProvider(DepthProvider):
             blockSize=window_size,
             P1=8 * 3 * window_size ** 2,
             P2=32 * 3 * window_size ** 2,
-            disp12MaxDiff=1,
-            uniquenessRatio=15,
-            speckleWindowSize=200,
+            disp12MaxDiff=2,
+            uniquenessRatio=10,
+            speckleWindowSize=100,
             speckleRange=2,
-            preFilterCap=63,
+            preFilterCap=31,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
         )
 
@@ -90,6 +90,12 @@ class StereoSGBMDepthProvider(DepthProvider):
             disp[disp < 0] = 0
 
         disp = cv2.medianBlur(disp, 3)
+
+        disp_guided = cv2.ximgproc.guidedFilter(grayL, disp.astype(np.float32) / 16.0, radius=5, eps=100)
+        disp = (disp_guided * 16.0).astype(np.int16)
+
+        mask = (disp == 0).astype(np.uint8)
+        disp = cv2.inpaint(disp.astype(np.float32), mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
         return DepthResult(disparity=disp)
 
     @property
