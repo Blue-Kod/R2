@@ -186,6 +186,8 @@ class RobotFace:
         self._jiggle_change_interval = 1  # seconds between target changes
         self._jiggle_timer = 0.0
 
+        self._menu_visible = False
+
         # Command input state
         self._cmd_buf = ""
         self._cmd_active = False

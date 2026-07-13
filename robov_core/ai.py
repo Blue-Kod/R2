@@ -1052,11 +1052,12 @@ class R2Agent:
                             )
                         answer_buf += content
                         speaker.feed(content)
+                        cur = speaker.get_current_sentence()
                         self.display.update(
                             answer_text=answer_buf,
                             is_speaking=True,
-                            ticker_text=answer_buf,
-                            ticker_duration=max(5.0, len(answer_buf) / 15.0 + 2.0),
+                            ticker_text=cur or answer_buf,
+                            ticker_duration=max(3.0, len(cur or answer_buf) / 15.0 + 1.0),
                         )
                 streamed_ok = True
             except Exception as e:

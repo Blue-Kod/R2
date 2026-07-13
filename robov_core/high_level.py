@@ -192,7 +192,7 @@ def _download_tts_model():
         except Exception as e:
             log(f"Failed to download {ext}: {e}")
 
-_MIN_WORD_LEN = 5
+_SENTENCE_END = re.compile(r"[.!?…]\s")
 
 
 def _strip_speech(text: str) -> str:
@@ -216,11 +216,13 @@ def _strip_speech(text: str) -> str:
     return text.strip()
 
 class StreamingSpeaker:
-    """Buffers LLM tokens and speaks complete word-chunks in a background thread."""
+    """Buffers LLM tokens and speaks complete sentences in a background thread."""
 
     def __init__(self):
         self._buf = ""
         self._queue: queue.Queue = queue.Queue()
+        self._current_sentence: str = ""
+        self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
         self._thread.start()
 
@@ -238,36 +240,41 @@ class StreamingSpeaker:
 
     def reset(self) -> None:
         self._buf = ""
+        with self._lock:
+            self._current_sentence = ""
         self._queue.put(None)
         self._queue = queue.Queue()
         self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
         self._thread.start()
 
+    def get_current_sentence(self) -> str:
+        with self._lock:
+            return self._current_sentence
+
     def _try_split(self) -> None:
         while True:
-            if " " not in self._buf:
+            m = _SENTENCE_END.search(self._buf)
+            if not m:
                 return
-            last_space = self._buf.rfind(" ")
-            prefix = self._buf[:last_space]
-            if not prefix:
-                return
-            words = prefix.split()
-            if any(len(w) >= _MIN_WORD_LEN for w in words):
-                self._queue.put(prefix.strip())
-                self._buf = self._buf[last_space + 1:]
-                continue
-            return
+            end = m.end()
+            sentence = self._buf[:end].strip()
+            if sentence:
+                self._queue.put(sentence)
+            self._buf = self._buf[end:]
 
     @staticmethod
     def _clean(text: str) -> str:
         return _strip_speech(text)
 
-    @staticmethod
-    def _worker(q: queue.Queue) -> None:
+    def _worker(self, q: queue.Queue) -> None:
         while True:
             chunk = q.get()
             if chunk is None:
+                with self._lock:
+                    self._current_sentence = ""
                 break
+            with self._lock:
+                self._current_sentence = chunk
             cleaned = StreamingSpeaker._clean(chunk)
             if cleaned:
                 speak(cleaned)
@@ -582,8 +589,13 @@ def start_background() -> None:
         def _refresh_models():
             try:
                 log("EveryLLM: refreshing model rankings...")
-                _ai_agent.llm.refresh(asynchronously=True, timeout=8.0)
-                log("EveryLLM: model rankings updated.")
+                results = _ai_agent.llm.refresh(asynchronously=True, timeout=8.0)
+                ok = sum(1 for r in results.values() if r.get("ok"))
+                fail = sum(1 for r in results.values() if not r.get("ok"))
+                log(f"EveryLLM: refresh done — {ok} ok, {fail} failed out of {len(results)}")
+                for name, r in results.items():
+                    if not r.get("ok"):
+                        log(f"  FAIL: {name} — {r.get('error', 'unknown')}")
                 best = _ai_agent.llm.ttft_scores()
                 if best:
                     winner = min(best, key=best.get)
@@ -783,7 +795,13 @@ def refresh_models(timeout: float = 8.0) -> list[dict]:
         log("AI agent not initialized")
         return []
     try:
-        agent.llm.refresh(asynchronously=False, timeout=timeout)
+        results = agent.llm.refresh(asynchronously=False, timeout=timeout)
+        ok = sum(1 for r in results.values() if r.get("ok"))
+        fail = sum(1 for r in results.values() if not r.get("ok"))
+        log(f"EveryLLM: refresh done — {ok} ok, {fail} failed out of {len(results)}")
+        for name, r in results.items():
+            if not r.get("ok"):
+                log(f"  FAIL: {name} — {r.get('error', 'unknown')}")
     except Exception as e:
         log(f"EveryLLM refresh error: {e}")
     best = agent.llm.ttft_scores()
