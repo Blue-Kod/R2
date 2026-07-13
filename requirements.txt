@@ -39,7 +39,7 @@ sounddevice>=0.4.6
 # Scientific computing - heavy, install only if needed
 scipy>=1.11.0
 
-# Russian TTS (Piper Neural TTS)
+# Piper Neural TTS
 piper-tts>=1.4.0
 onnxruntime>=1.16.0
 
