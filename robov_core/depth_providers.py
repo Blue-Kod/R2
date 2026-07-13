@@ -121,7 +121,12 @@ class LAS2DepthProvider(DepthProvider):
         onnx_path: str = kwargs.get("onnx_path", "")
         self._max_disp: int = kwargs.get("max_disp", 192)
 
-        if not onnx_path or not os.path.isfile(onnx_path):
+        if not onnx_path:
+            if self._session is not None:
+                return
+            raise FileNotFoundError("LAS2 ONNX model path not provided")
+
+        if not os.path.isfile(onnx_path):
             raise FileNotFoundError(f"LAS2 ONNX model not found: {onnx_path}")
 
         self._session = ort.InferenceSession(
@@ -130,7 +135,7 @@ class LAS2DepthProvider(DepthProvider):
         )
 
         inp = self._session.get_inputs()[0]
-        parts = inp.shape  # e.g. [1, 3, 384, 640]
+        parts = inp.shape
         if len(parts) == 4:
             self._input_h = int(parts[2])
             self._input_w = int(parts[3])

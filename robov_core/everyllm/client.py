@@ -15,17 +15,9 @@ from .keys import load_keys
 from .auto import TTFTTracker, AutoRouter, get_capabilities, VISION_TEST_IMAGE, VISION_PROMPT
 from .tools import builtin_tools, execute_tool
 from .providers import (
-    PollinationsProvider,
-    AnyProvider,
-    G4fSpaceProvider,
     AgnesProvider,
     GlmProvider,
     OpenCodeProvider,
-    YqcloudProvider,
-    PerplexityProvider,
-    FeloProvider,
-    WeWordleProvider,
-    CohereProvider,
     AnyApiProvider,
 )
 
@@ -111,19 +103,6 @@ class EveryLLM:
         self.chat = _Chat(self)
 
     def _init_providers(self):
-        for provider_cls in (PollinationsProvider, AnyProvider, G4fSpaceProvider,
-                             YqcloudProvider, PerplexityProvider, FeloProvider,
-                             WeWordleProvider, CohereProvider):
-            p = provider_cls()
-            self._all_providers.append(p)
-            for model in p.supported_models:
-                self._model_registry[model] = p
-                caps = get_capabilities(model)
-                self._tracker.set_capabilities(
-                    model, caps["vision"], caps["thinking"],
-                    caps.get("configurable_thinking", False),
-                )
-
         key_providers = [
             (AgnesProvider, "agnes"),
             (GlmProvider, "glm"),
