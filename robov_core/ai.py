@@ -865,6 +865,7 @@ class R2Agent:
         self.max_rounds = max_rounds
         self.max_tokens = max_tokens
         self._current_model: Optional[str] = None
+        self._prev_history: list[dict] = []
 
         self.memory = Memory(self.cwd)
         self.executor = ToolExecutor(self.cwd, _detect_shell(), self.memory)
@@ -1001,10 +1002,9 @@ class R2Agent:
 
         cwd = self.cwd
         system = build_system_prompt(cwd)
-        self.history = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ]
+        self.history = [{"role": "system", "content": system}]
+        self.history.extend(self._prev_history)
+        self.history.append({"role": "user", "content": prompt})
 
         response_text = ""
         prev_think = ""
@@ -1052,12 +1052,14 @@ class R2Agent:
                             )
                         answer_buf += content
                         speaker.feed(content)
+                        spoken = speaker.get_spoken_text()
                         cur = speaker.get_current_sentence()
+                        ticker_display = (spoken + cur).strip() or answer_buf
                         self.display.update(
                             answer_text=answer_buf,
                             is_speaking=True,
-                            ticker_text=cur or answer_buf,
-                            ticker_duration=max(3.0, len(cur or answer_buf) / 15.0 + 1.0),
+                            ticker_text=ticker_display,
+                            ticker_duration=max(5.0, len(ticker_display) / 15.0 + 2.0),
                         )
                 streamed_ok = True
             except Exception as e:
@@ -1165,6 +1167,15 @@ class R2Agent:
             is_idle=True, is_thinking=False,
         )
 
+        # Save conversation history for next turn
+        if response_text and not self._cancel_event.is_set():
+            clean = self._strip_tags(response_text).strip()
+            self._prev_history.append({"role": "user", "content": prompt})
+            self._prev_history.append({"role": "assistant", "content": clean or response_text})
+            # Keep last 20 exchanges to avoid context overflow
+            if len(self._prev_history) > 40:
+                self._prev_history = self._prev_history[-40:]
+
     # ------------------------------------------------------------------
     # Action extraction (from EveryLLM harness.py)
     # ------------------------------------------------------------------
@@ -1268,6 +1279,7 @@ class R2Agent:
 
     def reset(self) -> None:
         self.history = []
+        self._prev_history = []
 
 
 # ---------------------------------------------------------------------------

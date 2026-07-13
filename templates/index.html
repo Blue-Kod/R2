@@ -117,13 +117,6 @@
         <aside class="panel">
             <div class="panel-title">Сервоприводы</div>
             <div class="servo-controls">
-                <div style="margin-bottom:14px;">
-                    <div class="panel-title" style="margin-bottom:8px;">Команда роботу</div>
-                    <div style="display:flex; gap:6px;">
-                        <input type="text" id="robotCommand" placeholder="Привет!" style="flex:1; background:#111; border:1px solid #2c2c2c; color:#fff; border-radius:12px; padding:8px 12px; font-size:13px; outline:none;">
-                        <button id="sendRobotCmd" style="background:#44944a; color:white; border:none; border-radius:12px; padding:8px 14px; cursor:pointer; font-size:13px; font-weight:500;">▶</button>
-                    </div>
-                </div>
                 <div class="servo-row"><label>(00) Шея:</label><input type="range" id="servo0" min="0" max="180" value="90"><span id="servo0_val">90°</span></div>
                 <div class="servo-row"><label>(01) Пр. плечо:</label><input type="range" id="servo1" min="0" max="270" value="135"><span id="servo1_val">135°</span></div>
                 <div class="servo-row"><label>(02) Лев. плечо:</label><input type="range" id="servo2" min="0" max="270" value="135"><span id="servo2_val">135°</span></div>
@@ -482,22 +475,6 @@ function attachEvents() {
     depthEnabledChk.onchange = sendCameraParams;
     hudEnabledChk.onchange = sendCameraParams;
     wlsEnabledChk.onchange = sendCameraParams;
-
-    // Robot command input
-    const robotCmdInput = document.getElementById('robotCommand');
-    const sendRobotBtn = document.getElementById('sendRobotCmd');
-    async function sendRobotCommand() {
-        const text = robotCmdInput.value.trim();
-        if (!text) return;
-        sendRobotBtn.disabled = true;
-        try {
-            await fetch('/api/ai/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:text})});
-            robotCmdInput.value = '';
-        } catch(e) {}
-        finally { sendRobotBtn.disabled = false; }
-    }
-    sendRobotBtn.onclick = sendRobotCommand;
-    robotCmdInput.onkeydown = (e) => { if (e.key === 'Enter') sendRobotCommand(); };
 
     terminalInput.onkeydown = (e) => {
         if (e.key === 'Enter') {

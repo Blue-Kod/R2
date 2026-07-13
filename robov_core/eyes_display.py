@@ -543,8 +543,23 @@ class RobotFace:
             self._onboard_proc = subprocess.Popen(
                 ["onboard", "--x-layout", "us"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
             pygame.event.set_grab(False)
+            # Lower Pygame window so onboard can appear above it
+            try:
+                import subprocess as _sp
+                # Find our Pygame window by title
+                wid = _sp.check_output(
+                    ["xdotool", "search", "--name", "pygame"],
+                    stderr=_sp.DEVNULL,
+                ).decode().strip()
+                if wid:
+                    first_wid = wid.split("\n")[0]
+                    _sp.run(["wmctrl", "-i", "-r", first_wid, "-b", "remove,above"],
+                            stderr=_sp.DEVNULL, stdout=_sp.DEVNULL)
+            except Exception:
+                pass
             log.info("On-screen keyboard started")
         except FileNotFoundError:
             log.warning("onboard not found, on-screen keyboard unavailable")
@@ -567,6 +582,19 @@ class RobotFace:
             except Exception:
                 pass
         pygame.event.set_grab(True)
+        # Restore Pygame window on top
+        try:
+            import subprocess as _sp
+            wid = _sp.check_output(
+                ["xdotool", "search", "--name", "pygame"],
+                stderr=_sp.DEVNULL,
+            ).decode().strip()
+            if wid:
+                first_wid = wid.split("\n")[0]
+                _sp.run(["wmctrl", "-i", "-r", first_wid, "-b", "add,above"],
+                        stderr=_sp.DEVNULL, stdout=_sp.DEVNULL)
+        except Exception:
+            pass
         log.info("On-screen keyboard stopped")
 
     @staticmethod

@@ -222,6 +222,7 @@ class StreamingSpeaker:
         self._buf = ""
         self._queue: queue.Queue = queue.Queue()
         self._current_sentence: str = ""
+        self._spoken_buf: str = ""
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
         self._thread.start()
@@ -242,6 +243,7 @@ class StreamingSpeaker:
         self._buf = ""
         with self._lock:
             self._current_sentence = ""
+            self._spoken_buf = ""
         self._queue.put(None)
         self._queue = queue.Queue()
         self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
@@ -250,6 +252,10 @@ class StreamingSpeaker:
     def get_current_sentence(self) -> str:
         with self._lock:
             return self._current_sentence
+
+    def get_spoken_text(self) -> str:
+        with self._lock:
+            return self._spoken_buf
 
     def _try_split(self) -> None:
         while True:
@@ -278,6 +284,8 @@ class StreamingSpeaker:
             cleaned = StreamingSpeaker._clean(chunk)
             if cleaned:
                 speak(cleaned)
+                with self._lock:
+                    self._spoken_buf += cleaned + " "
 
 
 def log(message: str) -> None:
@@ -571,6 +579,12 @@ def start_background() -> None:
         _display_thread = threading.Thread(target=_display_worker, daemon=True, name="r2-display-thread")
         _display_thread.start()
         _all_threads.append(_display_thread)
+
+    # Initialize TTS early so it's ready when needed
+    try:
+        _init_tts()
+    except Exception as e:
+        log(f"TTS init error: {e}")
 
     # Initialize AI agent
     try:
