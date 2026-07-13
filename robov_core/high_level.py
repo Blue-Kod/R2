@@ -568,7 +568,7 @@ def start_background() -> None:
         try:
             from robov_core.rerun_viewer import RerunViewer
             global _rerun_viewer
-            _rerun_viewer = RerunViewer(_camera)
+            _rerun_viewer = RerunViewer(_camera, log_fn=log)
             if _rerun_viewer.start():
                 log(f"Rerun viewer started on port {_rerun_viewer.port}")
             else:

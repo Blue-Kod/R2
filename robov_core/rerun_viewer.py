@@ -11,12 +11,14 @@ try:
 except ImportError:
     _HAS_RERUN = False
 
+_LOG_TAG = "[RerunViewer]"
+
 
 class RerunViewer:
     WEB_VIEWER_PORT = 9876
     GRPC_PORT = 9877
 
-    def __init__(self, camera, port: int = WEB_VIEWER_PORT):
+    def __init__(self, camera, port: int = WEB_VIEWER_PORT, log_fn=None):
         self.camera = camera
         self.port = port
         self.grpc_port: int = self.GRPC_PORT
@@ -28,9 +30,15 @@ class RerunViewer:
         self._fps: float = 0.0
         self._frame_count: int = 0
         self._last_fps_time: float = time.time()
+        self._log_fn = log_fn or print
+        self._logged_null_once: bool = False
+
+    def _log(self, msg: str) -> None:
+        self._log_fn(f"{_LOG_TAG} {msg}")
 
     def start(self) -> bool:
         if not _HAS_RERUN:
+            self._log("rerun-sdk not installed")
             return False
         try:
             rr.init("r2_robot")
@@ -40,14 +48,25 @@ class RerunViewer:
                 web_port=self.port,
                 connect_to=server_uri,
             )
+            self._log(f"gRPC on :{self.grpc_port}, web on :{self.port}")
+
+            self._send_test_frame()
+
             self._running = True
             self._thread = threading.Thread(
                 target=self._loop, daemon=True, name="rerun-log"
             )
             self._thread.start()
             return True
-        except Exception:
+        except Exception as e:
+            self._log(f"start failed: {e}")
             return False
+
+    def _send_test_frame(self) -> None:
+        img = np.zeros((120, 160, 3), dtype=np.uint8)
+        cv2.putText(img, "R2 Connected", (10, 70),
+                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        rr.log("camera/status", rr.Image(img))
 
     def stop(self) -> None:
         self._running = False
@@ -59,14 +78,21 @@ class RerunViewer:
         while self._running:
             try:
                 self._log_frame()
-            except Exception:
-                pass
+            except Exception as e:
+                self._log(f"_log_frame error: {e}")
             time.sleep(0.05)
 
     def _log_frame(self) -> None:
         data = self.camera.capture_frame_with_depth()
         if data is None:
+            if not self._logged_null_once:
+                self._log("camera returned None — no frame logged yet")
+                self._logged_null_once = True
             return
+
+        if self._logged_null_once:
+            self._log("camera OK — streaming frames")
+            self._logged_null_once = False
 
         left = data["left_frame"]
         disp = data["disparity_map"]
