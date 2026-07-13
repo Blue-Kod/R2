@@ -220,7 +220,7 @@ class RKNNDepthProvider(DepthProvider):
         elif self._core_mask == 3:
             core_mask = RKNNLite.NPU_CORE_2
 
-        if self._rknn.init_runtime(target='rk3588', core_mask=core_mask) != 0:
+        if self._rknn.init_runtime(core_mask=core_mask) != 0:
             raise RuntimeError("Failed to init RKNN runtime")
 
         self._rknn_sdk_version = self._rknn.get_sdk_version()
