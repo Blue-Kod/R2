@@ -195,6 +195,7 @@ class RobotFace:
         self._cmd_input_rect = pygame.Rect(0, 0, 0, 0)
         self._cmd_send_rect = pygame.Rect(0, 0, 0, 0)
         self._close_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self._shutdown_btn_rect = pygame.Rect(0, 0, 0, 0)
         self._onboard_proc = None
 
     def _preload_all_emotions(self):
@@ -270,16 +271,26 @@ class RobotFace:
         pygame.mouse.set_visible(True)
         clock = pygame.time.Clock()
 
+        # Remove always-on-top so onboard keyboard can appear above
+        try:
+            import subprocess as _sp
+            wid = _sp.check_output(
+                ["xdotool", "search", "--name", "pygame"],
+                stderr=_sp.DEVNULL,
+            ).decode().strip()
+            if wid:
+                first_wid = wid.split("\n")[0]
+                _sp.run(["wmctrl", "-i", "-r", first_wid, "-b", "remove,above"],
+                        stderr=_sp.DEVNULL, stdout=_sp.DEVNULL)
+        except Exception:
+            pass
+
         # Preload default and normal textures (display is ready)
         self._preload_all_emotions()
         
         font = pygame.font.SysFont("Arial", 28, bold=True)
         overlay_font = pygame.font.SysFont("Consolas", 28)
-        ticker_font = pygame.font.SysFont("Arial", 36, bold=True)
-
-        # Ticker state
-        ticker_offset = 0.0
-        _prev_ticker_text = ""
+        subtitle_font = pygame.font.SysFont("Arial", 32, bold=True)
 
         while self.state.is_running():
             # delta time in seconds
@@ -319,6 +330,8 @@ class RobotFace:
                             self.state._menu_visible = False
                             self._cmd_active = False
                             self._stop_onboard()
+                        elif self._shutdown_btn_rect.collidepoint(mx, my):
+                            self._shutdown()
                         elif self._cmd_send_rect.collidepoint(mx, my):
                             if self._cmd_buf.strip():
                                 self._send_command(self._cmd_buf.strip())
@@ -410,23 +423,22 @@ class RobotFace:
             y_offset = (sh - target_height) // 2 + int(self._jiggle_y)
             screen.blit(scaled_tex, (x_offset, y_offset))
 
-            # --- Ticker bar (scrolling answer text) ---
+            # --- Subtitle overlay (centered, 10% above bottom) ---
             if ai_state:
                 ticker_text = ai_state.get("ticker_text", "")
-                ticker_duration = ai_state.get("ticker_duration", 0)
-                if ticker_text != _prev_ticker_text:
-                    ticker_offset = 0.0
-                    _prev_ticker_text = ticker_text
-                if ticker_text and ticker_duration > 0:
-                    text_surf = ticker_font.render(ticker_text, True, (255, 255, 255))
-                    text_h = text_surf.get_height()
-                    text_w = text_surf.get_width()
-                    total_dist = sw + text_w
-                    ticker_offset += (total_dist / ticker_duration) * dt
-                    if ticker_offset <= total_dist:
-                        tx = sw - int(ticker_offset)
-                        ty = sh - max(42, int(sh * 0.10)) + (max(42, int(sh * 0.10)) - text_h) // 2
-                        screen.blit(text_surf, (tx, ty))
+                if ticker_text:
+                    max_w = int(sw * 0.85)
+                    lines = self._wrap_text(subtitle_font, ticker_text, max_w)[:5]
+                    line_h = subtitle_font.get_height() + 4
+                    total_h = len(lines) * line_h
+                    base_y = sh - int(sh * 0.10) - total_h
+                    for i, line in enumerate(lines):
+                        surf = subtitle_font.render(line, True, (255, 255, 255))
+                        shadow = subtitle_font.render(line, True, (0, 0, 0))
+                        lx = (sw - surf.get_width()) // 2
+                        ly = base_y + i * line_h
+                        screen.blit(shadow, (lx + 2, ly + 2))
+                        screen.blit(surf, (lx, ly))
 
             # Menu overlay (simplified – touch bottom area toggles)
             if getattr(self, '_menu_visible', False):
@@ -434,8 +446,8 @@ class RobotFace:
                 overlay.fill((0, 0, 0, 220))
                 screen.blit(overlay, (0, 0))
 
-                m_w, m_h = 400, 400
-                m_rect = pygame.Rect((sw - m_w) // 2, (sh - m_h) // 2, m_w, m_h)
+                m_w, m_h = 400, 460
+                m_rect = pygame.Rect((sw - m_w) // 2, 10, m_w, m_h)
                 pygame.draw.rect(screen, (25, 25, 25), m_rect)
                 pygame.draw.rect(screen, (200, 200, 200), m_rect, 2)
 
@@ -481,6 +493,14 @@ class RobotFace:
                 pygame.draw.rect(screen, (100, 120, 200), self._close_btn_rect, 2)
                 close_txt = font.render("Close", True, (255, 255, 255))
                 screen.blit(close_txt, close_txt.get_rect(center=self._close_btn_rect.center))
+                y_cur += 55
+
+                # Shutdown button
+                self._shutdown_btn_rect = pygame.Rect(m_rect.x + 50, y_cur, 300, 45)
+                pygame.draw.rect(screen, (100, 30, 30), self._shutdown_btn_rect)
+                pygame.draw.rect(screen, (200, 60, 60), self._shutdown_btn_rect, 2)
+                shd_txt = font.render("Shutdown", True, (255, 255, 255))
+                screen.blit(shd_txt, shd_txt.get_rect(center=self._shutdown_btn_rect.center))
 
             # --- Current LLM model (top-right corner) ---
             if ai_state:
@@ -536,6 +556,14 @@ class RobotFace:
         except Exception as e:
             log.error(f"Command failed: {e}")
 
+    @staticmethod
+    def _shutdown():
+        log.info("Shutdown requested")
+        try:
+            subprocess.Popen(["sudo", "shutdown", "-H", "now"])
+        except Exception as e:
+            log.error(f"Shutdown failed: {e}")
+
     def _start_onboard(self):
         if self._onboard_proc is not None:
             return
@@ -546,20 +574,6 @@ class RobotFace:
                 start_new_session=True,
             )
             pygame.event.set_grab(False)
-            # Lower Pygame window so onboard can appear above it
-            try:
-                import subprocess as _sp
-                # Find our Pygame window by title
-                wid = _sp.check_output(
-                    ["xdotool", "search", "--name", "pygame"],
-                    stderr=_sp.DEVNULL,
-                ).decode().strip()
-                if wid:
-                    first_wid = wid.split("\n")[0]
-                    _sp.run(["wmctrl", "-i", "-r", first_wid, "-b", "remove,above"],
-                            stderr=_sp.DEVNULL, stdout=_sp.DEVNULL)
-            except Exception:
-                pass
             log.info("On-screen keyboard started")
         except FileNotFoundError:
             log.warning("onboard not found, on-screen keyboard unavailable")
@@ -582,19 +596,6 @@ class RobotFace:
             except Exception:
                 pass
         pygame.event.set_grab(True)
-        # Restore Pygame window on top
-        try:
-            import subprocess as _sp
-            wid = _sp.check_output(
-                ["xdotool", "search", "--name", "pygame"],
-                stderr=_sp.DEVNULL,
-            ).decode().strip()
-            if wid:
-                first_wid = wid.split("\n")[0]
-                _sp.run(["wmctrl", "-i", "-r", first_wid, "-b", "add,above"],
-                        stderr=_sp.DEVNULL, stdout=_sp.DEVNULL)
-        except Exception:
-            pass
         log.info("On-screen keyboard stopped")
 
     @staticmethod
