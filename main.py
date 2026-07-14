@@ -19,5 +19,9 @@ if __name__ == "__main__":
         print(f"R2 Robot v{APP_VERSION}")
     else:
         start_background()
-        while True:
-            time.sleep(1)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            from robov_core.high_level import cleanup
+            cleanup()

@@ -43,10 +43,9 @@ class StereoSGBMDepthProvider(DepthProvider):
         self.right_matcher = None
         self.wls_filter = None
         self._wls_enabled: bool = True
-        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
     def setup(self, **kwargs) -> None:
-        num_disp: int = kwargs.get("num_disp", 192)
+        num_disp: int = kwargs.get("num_disp", 160)
         window_size: int = kwargs.get("window_size", 11)
         min_disp: int = kwargs.get("min_disp", 0)
         self._wls_enabled = kwargs.get("wls_enabled", True)
@@ -58,12 +57,12 @@ class StereoSGBMDepthProvider(DepthProvider):
             numDisparities=num_disp,
             blockSize=window_size,
             P1=8 * 3 * window_size ** 2,
-            P2=48 * 3 * window_size ** 2,
-            disp12MaxDiff=-1,
-            uniquenessRatio=7,
-            speckleWindowSize=100,
-            speckleRange=1,
-            preFilterCap=31,
+            P2=32 * 3 * window_size ** 2,
+            disp12MaxDiff=1,
+            uniquenessRatio=15,
+            speckleWindowSize=200,
+            speckleRange=2,
+            preFilterCap=63,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
         )
 
@@ -78,30 +77,16 @@ class StereoSGBMDepthProvider(DepthProvider):
             self.right_matcher = None
             self.wls_filter = None
 
-    def compute(self, left: np.ndarray, right: np.ndarray) -> DepthResult:
-        grayL = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
-        grayR = cv2.cvtColor(right, cv2.COLOR_BGR2GRAY)
-
-        grayL = self._clahe.apply(grayL)
-        grayR = self._clahe.apply(grayR)
-
-        disp = self.left_matcher.compute(grayL, grayR)
+    def compute(self, left_gray: np.ndarray, right_gray: np.ndarray) -> DepthResult:
+        disp = self.left_matcher.compute(left_gray, right_gray)
         disp[disp < 0] = 0
 
         if self._wls_enabled and self.right_matcher and self.wls_filter:
-            disp_r = self.right_matcher.compute(grayR, grayL)
-            disp = self.wls_filter.filter(disp, grayL, disparity_map_right=disp_r)
+            disp_r = self.right_matcher.compute(right_gray, left_gray)
+            disp = self.wls_filter.filter(disp, left_gray, disparity_map_right=disp_r)
             disp[disp < 0] = 0
 
         disp = cv2.medianBlur(disp, 3)
-
-        disp_guided = cv2.ximgproc.guidedFilter(
-            grayL, disp.astype(np.float32) / 16.0, radius=5, eps=2.0
-        )
-        disp = (disp_guided * 16.0).astype(np.int16)
-
-        mask = (disp == 0).astype(np.uint8)
-        disp = cv2.inpaint(disp.astype(np.float32), mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
         return DepthResult(disparity=disp)
 
     @property

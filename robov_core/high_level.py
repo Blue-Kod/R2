@@ -678,6 +678,8 @@ def cleanup() -> None:
     _shutdown_requested = True
     _shell_running = False
 
+    stop_display()
+
     if _rerun_viewer:
         _rerun_viewer.stop()
 

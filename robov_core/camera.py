@@ -26,7 +26,7 @@ class StereoCamera:
         self.camera_param_file: str = camera_param_file
         self.camera_source: int = source
         self.cap: Optional[cv2.VideoCapture] = None
-        self.disp_buffer: deque = deque(maxlen=1)
+        self.disp_buffer: deque = deque(maxlen=5)
         self.lock: threading.Lock = threading.Lock()
 
         self.img_size: Tuple[int, int] = (640, 360)
@@ -52,8 +52,6 @@ class StereoCamera:
         self._latest_left: Optional[np.ndarray] = None
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
-        self._ema_disp: Optional[np.ndarray] = None
-        self._ema_alpha: float = 0.8
 
         self._load_camera_parameters()
         self._setup_rectification()
@@ -149,9 +147,11 @@ class StereoCamera:
         return imgL, imgR
 
     def compute_disparity(self, left_frame: np.ndarray, right_frame: np.ndarray) -> np.ndarray:
-        left_d = cv2.resize(left_frame, self.img_size)
-        right_d = cv2.resize(right_frame, self.img_size)
-        result = self.depth_provider.compute(left_d, right_d)
+        grayL = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
+        grayR = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
+        grayL = cv2.resize(grayL, self.img_size)
+        grayR = cv2.resize(grayR, self.img_size)
+        result = self.depth_provider.compute(grayL, grayR)
         return result.disparity
 
     def get_depth_at_point(self, disparity_map: np.ndarray, x: Optional[int] = None, y: Optional[int] = None) -> float:
@@ -192,11 +192,12 @@ class StereoCamera:
         self.disp_buffer.clear()
 
     def get_shared_depth(self):
-        if len(self.disp_buffer) == 0:
+        if len(self.disp_buffer) < 2:
             return None, None
+        avg_disp = np.mean(list(self.disp_buffer), axis=0).astype(np.int16)
         with self.lock:
             left = self._latest_left
-        return left, self.disp_buffer[-1].copy()
+        return left, avg_disp
 
     def get_frame(self) -> np.ndarray:
         if not self.cap or not self.cap.isOpened():
@@ -283,18 +284,13 @@ class StereoCamera:
             frame = imgL if self.show_left else imgR
             frame = cv2.resize(frame, self.img_size)
 
-            left_d = cv2.resize(imgL, self.img_size, interpolation=cv2.INTER_LINEAR)
-            right_d = cv2.resize(imgR, self.img_size, interpolation=cv2.INTER_LINEAR)
+            grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
+            grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
+            grayL_d = cv2.resize(grayL, self.img_size, interpolation=cv2.INTER_LINEAR)
+            grayR_d = cv2.resize(grayR, self.img_size, interpolation=cv2.INTER_LINEAR)
 
-            result = self.depth_provider.compute(left_d, right_d)
+            result = self.depth_provider.compute(grayL_d, grayR_d)
             disp_final = result.disparity
-
-            if self._ema_disp is None:
-                self._ema_disp = disp_final.astype(np.float32)
-            else:
-                cv2.accumulateWeighted(disp_final.astype(np.float32), self._ema_disp, self._ema_alpha)
-                disp_final = self._ema_disp.astype(np.int16)
-
             self.disp_buffer.append(disp_final.copy())
             self._latest_left = frame.copy()
 

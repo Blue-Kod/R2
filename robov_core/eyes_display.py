@@ -351,6 +351,7 @@ class RobotFace:
                                 self._pygame_keyboard.hide()
                         elif self._shutdown_btn_rect.collidepoint(mx, my):
                             self._shutdown()
+                            self.state.stop()
                         elif self._cmd_send_rect.collidepoint(mx, my):
                             if self._cmd_buf.strip():
                                 self._send_command(self._cmd_buf.strip())
@@ -577,7 +578,7 @@ class RobotFace:
         log.info("Launching system shutdown")
         try:
             subprocess.Popen(
-                ["sudo", "shutdown", "-H", "now"],
+                ["sudo", "shutdown", "-P", "now"],
                 start_new_session=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
