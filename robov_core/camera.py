@@ -10,7 +10,7 @@ import numpy as np
 os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 
-from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, LAS2DepthProvider, RKNNDepthProvider, DepthResult
+from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, DepthResult
 
 
 class CameraInitError(Exception):
@@ -26,7 +26,7 @@ class StereoCamera:
         self.camera_param_file: str = camera_param_file
         self.camera_source: int = source
         self.cap: Optional[cv2.VideoCapture] = None
-        self.disp_buffer: deque = deque(maxlen=5)
+        self.disp_buffer: deque = deque(maxlen=2)
         self.lock: threading.Lock = threading.Lock()
 
         self.img_size: Tuple[int, int] = (640, 360)
@@ -300,8 +300,6 @@ class StereoCamera:
                 depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
                 cv2.addWeighted(frame, 1 - self.alpha_depth, depth_vis, self.alpha_depth, 0, dst=frame)
 
-            if self.hud_enabled:
-                frame = self._render_hud(frame, disp_final, center_only=False)
         else:
             rawL = raw[:, :half_w]
             rawR = raw[:, half_w:]
@@ -309,88 +307,6 @@ class StereoCamera:
             frame = cv2.resize(side, self.img_size)
 
         return frame
-
-    def _render_hud(self, frame: np.ndarray, disp_raw: np.ndarray, center_only: bool = False) -> np.ndarray:
-        h, w = frame.shape[:2]
-        dh, dw = disp_raw.shape[:2]
-        result = frame.copy()
-
-        f_eff = self.focal_length * dh / self.imSize[1]
-        d16 = disp_raw.astype(np.float32) / 16.0
-
-        with np.errstate(divide='ignore'):
-            Z = np.where(d16 > 1.0, f_eff * self.baseline / d16, 0.0) * self.depth_scale
-        Z = np.clip(Z, 0, 50000)
-
-        fx = dw // 2
-        fy = dh // 2
-
-        center_z = float(Z[fy, fx])
-
-        if center_only:
-            nearest_z = center_z
-            nearest_idx = h // 2
-        else:
-            box_hw = dw // 8
-            box_hh = dh // 8
-            x1 = max(0, fx - box_hw)
-            x2 = min(dw, fx + box_hw)
-            y1 = max(0, fy - box_hh)
-            y2 = min(dh, fy + box_hh)
-
-            region = Z[y1:y2, x1:x2]
-            valid = region > 0
-            if np.any(valid):
-                nearest_z = float(np.min(region[valid]))
-                min_idx = np.unravel_index(np.argmin(np.where(valid, region, np.inf)), region.shape)
-                nearest_idx = int((y1 + min_idx[0]) * h / dh)
-            else:
-                nearest_z = 0.0
-                nearest_idx = -1
-
-        font = cv2.FONT_HERSHEY_SIMPLEX
-
-        def draw_text_box(img, lines, x, y, font_scale=0.45, pad=6):
-            line_h = 18
-            max_w = max(cv2.getTextSize(l, font, font_scale, 1)[0][0] for l in lines)
-            box_h = len(lines) * line_h + pad * 2
-            x1 = x
-            y1 = y
-            x2 = x1 + max_w + pad * 2
-            y2 = y1 + box_h
-            cv2.rectangle(img, (x1, y1), (x2, y2), (10, 10, 10), -1)
-            cv2.rectangle(img, (x1, y1), (x2, y2), (42, 42, 42), 1)
-            for i, line in enumerate(lines):
-                ty = y1 + pad + i * line_h + 12
-                cv2.putText(img, line, (x1 + pad, ty), font, font_scale, (240, 240, 240), 1)
-
-        def fmt(d):
-            if d <= 0:
-                return "--"
-            if d >= 10000:
-                return f"{d/1000:.1f} m"
-            return f"{d:.0f} mm"
-
-        draw_text_box(result, [f"Center: {fmt(center_z)}", f"Near: {fmt(nearest_z)}"], 12, h - 56)
-
-        overlay = result.copy()
-        half_fov = self.camera_fov // 2
-        for offset in range(-half_fov, half_fov + 1, 20):
-            x = int((offset + half_fov) / self.camera_fov * w)
-            text = "0" if offset == 0 else str(offset)
-            cv2.putText(overlay, text, (x - 6, 16), font, 0.4, (0, 255, 0), 1)
-            cv2.line(overlay, (x, 24), (x, h), (0, 255, 0), 1)
-
-        for i in range(1, 4):
-            y = int(h * i / 4)
-            cv2.line(overlay, (0, y), (w, y), (0, 255, 0), 1)
-
-        cv2.addWeighted(overlay, 0.35, result, 0.65, 0, dst=result)
-
-        if nearest_z > 0 and nearest_idx >= 0:
-            cv2.circle(result, (w // 2, nearest_idx), 4, (0, 255, 255), -1)
-
-        return result
 
     def _capture_loop(self) -> None:
         while self._capture_running:

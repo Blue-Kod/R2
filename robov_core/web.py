@@ -631,6 +631,7 @@ def create_app() -> Flask:
         viewer = get_rerun_viewer()
         if viewer is None:
             return jsonify({"available": False, "running": False})
+        viewer.ensure_active()
         return jsonify(viewer.status())
 
     @app.route("/api/rerun/pointcloud", methods=["POST"])
@@ -642,6 +643,25 @@ def create_app() -> Flask:
         data = request.get_json(silent=True) or {}
         viewer.pointcloud_enabled = bool(data.get("enabled", True))
         return jsonify({"status": "ok", "pointcloud_enabled": viewer.pointcloud_enabled})
+
+    @app.route("/api/cursor_xyz", methods=["POST"])
+    @require_auth
+    def cursor_xyz():
+        camera = get_stereo_camera()
+        if camera is None:
+            return jsonify({"error": "Camera not available"}), 503
+        data = request.get_json(silent=True) or {}
+        x = int(data.get("x", 0))
+        y = int(data.get("y", 0))
+        coords = camera.get_real_coords(x, y)
+        if coords is None:
+            return jsonify({"x": 0, "y": 0, "z": 0, "valid": False})
+        return jsonify({
+            "x": round(coords["x"], 3),
+            "y": round(coords["y"], 3),
+            "z": round(coords["z"], 3),
+            "valid": True,
+        })
 
     # --- AI Agent ---
 

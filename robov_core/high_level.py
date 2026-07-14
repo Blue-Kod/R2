@@ -563,14 +563,14 @@ def start_background() -> None:
     if _shell_thread:
         _all_threads.append(_shell_thread)
 
-    # Start Rerun 3D visualization viewer
+    # Start Rerun 3D visualization viewer (lazy — starts logging when web viewer connects)
     if _camera:
         try:
             from robov_core.rerun_viewer import RerunViewer
             global _rerun_viewer
             _rerun_viewer = RerunViewer(_camera, log_fn=log)
             if _rerun_viewer.start():
-                log(f"Rerun viewer started on port {_rerun_viewer.port}")
+                log(f"Rerun viewer ready on port {_rerun_viewer.port} (auto-starts on /view)")
             else:
                 log("Rerun viewer failed to start (rerun-sdk not installed?)")
                 _rerun_viewer = None
@@ -842,31 +842,10 @@ def get_depth_provider():
 def set_depth_provider(name: str) -> bool:
     if _camera is None:
         return False
-    from robov_core.depth_providers import (
-        StereoSGBMDepthProvider, LAS2DepthProvider, RKNNDepthProvider,
-    )
+    from robov_core.depth_providers import StereoSGBMDepthProvider
     name = name.strip().upper()
     if name == "SGBM":
         provider = StereoSGBMDepthProvider()
-    elif name == "LAS2":
-        onnx_path = ROOT_DIR / "models" / "las2_s_640x384.onnx"
-        if not onnx_path.exists():
-            log(f"LAS2 ONNX model not found at {onnx_path}")
-            return False
-        provider = LAS2DepthProvider()
-        provider.setup(onnx_path=str(onnx_path))
-    elif name == "RKNN":
-        rknn_path = ROOT_DIR / "models" / "las2_s_640x384.rknn"
-        onnx_path = ROOT_DIR / "models" / "las2_s_640x384.onnx"
-        if not rknn_path.exists():
-            log(f"RKNN model not found at {rknn_path}")
-            return False
-        provider = RKNNDepthProvider()
-        try:
-            provider.setup(rknn_path=str(rknn_path), onnx_path=str(onnx_path))
-        except Exception as e:
-            log(f"RKNN setup failed: {e}")
-            return False
     else:
         log(f"Unknown depth provider: {name}")
         return False

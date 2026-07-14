@@ -17,6 +17,7 @@ _LOG_TAG = "[RerunViewer]"
 class RerunViewer:
     WEB_VIEWER_PORT = 9876
     GRPC_PORT = 9877
+    IDLE_TIMEOUT = 5.0
 
     def __init__(self, camera, port: int = WEB_VIEWER_PORT, log_fn=None):
         self.camera = camera
@@ -32,6 +33,9 @@ class RerunViewer:
         self._last_fps_time: float = time.time()
         self._log_fn = log_fn or print
         self._logged_null_once: bool = False
+        self._server_started: bool = False
+        self._last_activity: float = 0.0
+        self._idle_thread: Optional[threading.Thread] = None
 
     def _log(self, msg: str) -> None:
         self._log_fn(f"{_LOG_TAG} {msg}")
@@ -51,19 +55,47 @@ class RerunViewer:
 
             rr.log("camera", rr.ViewCoordinates.RDF, static=True)
 
-            self._running = True
-            self._thread = threading.Thread(
-                target=self._loop, daemon=True, name="rerun-log"
-            )
-            self._thread.start()
+            self._server_started = True
+            self._start_idle_checker()
             return True
         except Exception as e:
             self._log(f"start failed: {e}")
             return False
 
+    def ensure_active(self) -> None:
+        self._last_activity = time.time()
+        if not self._running and self._server_started:
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._loop, daemon=True, name="rerun-log"
+            )
+            self._thread.start()
+            self._log("Rerun logging resumed (viewer connected)")
+
+    def _start_idle_checker(self) -> None:
+        if self._idle_thread and self._idle_thread.is_alive():
+            return
+        self._idle_thread = threading.Thread(
+            target=self._idle_loop, daemon=True, name="rerun-idle"
+        )
+        self._idle_thread.start()
+
+    def _idle_loop(self) -> None:
+        while self._server_started:
+            time.sleep(1.0)
+            if self._running and self._last_activity > 0:
+                elapsed = time.time() - self._last_activity
+                if elapsed > self.IDLE_TIMEOUT:
+                    self._running = False
+                    if self._thread and self._thread.is_alive():
+                        self._thread.join(timeout=2.0)
+                    self._thread = None
+                    self._log("Rerun logging stopped (idle timeout)")
+
 
     def stop(self) -> None:
         self._running = False
+        self._server_started = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
         self._thread = None
@@ -178,7 +210,7 @@ class RerunViewer:
     def status(self) -> dict:
         return {
             "running": self._running and _HAS_RERUN,
-            "available": _HAS_RERUN,
+            "available": _HAS_RERUN and self._server_started,
             "port": self.port,
             "grpc_port": self.grpc_port,
             "pointcloud_enabled": self.pointcloud_enabled,
