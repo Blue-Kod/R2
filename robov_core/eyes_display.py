@@ -19,8 +19,6 @@ import socket
 import time
 import random
 
-os.environ['SDL_VIDEO_CENTERED'] = '1'
-
 try:
     import pygame
 except ImportError:
@@ -271,7 +269,8 @@ class RobotFace:
         info = pygame.display.Info()
         sw, sh = info.current_w, info.current_h
 
-        screen = pygame.display.set_mode((sw, sh), pygame.FULLSCREEN)
+        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        sw, sh = screen.get_size()
         pygame.event.set_grab(True)
         pygame.mouse.set_visible(True)
         clock = pygame.time.Clock()

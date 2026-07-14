@@ -91,14 +91,12 @@ class StereoSGBMDepthProvider(DepthProvider):
         if self._wls_enabled and self.right_matcher and self.wls_filter:
             disp_r = self.right_matcher.compute(grayR, grayL)
             disp = self.wls_filter.filter(disp, grayL, disparity_map_right=disp_r)
-            conf = self.wls_filter.getConfidenceMap()
-            disp[conf < 128] = 0
             disp[disp < 0] = 0
 
         disp = cv2.medianBlur(disp, 3)
 
         disp_guided = cv2.ximgproc.guidedFilter(
-            grayL, disp.astype(np.float32) / 16.0, radius=3, eps=0.5
+            grayL, disp.astype(np.float32) / 16.0, radius=5, eps=2.0
         )
         disp = (disp_guided * 16.0).astype(np.int16)
 
