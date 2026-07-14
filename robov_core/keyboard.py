@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Pygame on-screen keyboard with Russian/English support.
+Designed for 600-1024px wide touchscreen displays.
 """
 
 import pygame
 
-# Keyboard layouts
 LAYOUTS = {
     "en": {
         "name": "EN",
@@ -32,7 +32,7 @@ LAYOUTS = {
             ["я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "."],
         ],
         "shift_map": {
-            "1": "!", "2": "\"", "3": "№", "4": ";", "5": "%",
+            "1": "!", "2": "\"", "3": "N", "4": ";", "5": "%",
             "6": ":", "7": "?", "8": "*", "9": "(", "0": ")",
             "-": "_", "=": "+",
         },
@@ -47,120 +47,128 @@ class PygameKeyboard:
         self.visible = False
         self.layout = "en"
         self.shift = False
-        self.input_callback = None  # Called with entered character
+        self.input_callback = None
 
         self._btn_color = (60, 60, 80)
         self._btn_active_color = (80, 100, 140)
         self._btn_special_color = (40, 60, 100)
+        self._btn_close_color = (140, 40, 40)
         self._btn_border_color = (100, 120, 160)
         self._text_color = (255, 255, 255)
 
-        self._keys = []  # List of (Rect, char_or_action)
+        self._keys = []
         self._build_layout()
 
     def set_callback(self, callback):
         self.input_callback = callback
 
+    def _get_font(self):
+        for name in ("DejaVuSans", "DejaVu Sans", "Liberation Sans", "Arial", "FreeSans"):
+            try:
+                f = pygame.font.SysFont(name, 20, bold=True)
+                if f:
+                    return f
+            except Exception:
+                continue
+        return pygame.font.Font(None, 24)
+
     def _build_layout(self):
         self._keys = []
-        font = pygame.font.SysFont("Arial", 20, bold=True)
+        font = self._get_font()
         layout_data = LAYOUTS[self.layout]
 
-        kb_x = 10
-        kb_y = self.screen_h - 260
-        key_w = (self.screen_w - 20) // 12
-        key_h = 38
+        kb_margin = 6
         gap = 3
+        key_h = 38
 
-        # Row 0: numbers
+        max_keys = max(len(row) for row in layout_data["rows"])
+        key_w = (self.screen_w - kb_margin * 2 - (max_keys - 1) * gap) // max_keys
+
+        kb_y = self.screen_h - 260
+
+        def make_row(y, row_keys, x_offset_cols=0):
+            x_start = kb_margin + x_offset_cols * (key_w + gap)
+            for i, ch in enumerate(row_keys):
+                x = x_start + i * (key_w + gap)
+                if x + key_w > self.screen_w - kb_margin:
+                    break
+                rect = pygame.Rect(x, y, key_w, key_h)
+                display = ch
+                if self.shift and ch in layout_data.get("shift_map", {}):
+                    display = layout_data["shift_map"][ch]
+                self._keys.append((rect, ch, display))
+
+        # Row 0: numbers (left-aligned)
         y = kb_y
-        row = layout_data["rows"][0]
-        for i, ch in enumerate(row):
-            x = kb_x + i * (key_w + gap)
-            rect = pygame.Rect(x, y, key_w, key_h)
-            display = ch
-            if self.shift and ch in layout_data.get("shift_map", {}):
-                display = layout_data["shift_map"][ch]
-            self._keys.append((rect, ch, display))
+        make_row(y, layout_data["rows"][0])
 
-        # Row 1: top letter row
-        y += key_h + gap
-        row = layout_data["rows"][1]
-        x_offset = key_w // 2
-        for i, ch in enumerate(row):
-            x = kb_x + x_offset + i * (key_w + gap)
-            rect = pygame.Rect(x, y, key_w, key_h)
-            display = ch.upper() if self.shift else ch
-            self._keys.append((rect, ch, display))
+        # Backspace: rightmost 2 columns of row 0
+        bs_w = key_w * 2 + gap
+        bs_x = self.screen_w - kb_margin - bs_w
+        self._keys.append((
+            pygame.Rect(bs_x, y, bs_w, key_h),
+            "backspace", "BS"
+        ))
 
-        # Row 2: home row
+        # Row 1: top letters (offset by 0.5 col)
         y += key_h + gap
-        row = layout_data["rows"][2]
-        x_offset = key_w
-        for i, ch in enumerate(row):
-            x = kb_x + x_offset + i * (key_w + gap)
-            rect = pygame.Rect(x, y, key_w, key_h)
-            display = ch.upper() if self.shift else ch
-            self._keys.append((rect, ch, display))
+        x_offset_1 = 0.5
+        make_row(y, layout_data["rows"][1], x_offset_1)
+
+        # Enter: rightmost 2 columns of row 1
+        ent_w = key_w * 2 + gap
+        ent_x = self.screen_w - kb_margin - ent_w
+        self._keys.append((
+            pygame.Rect(ent_x, y, ent_w, key_h),
+            "enter", "Ent"
+        ))
+
+        # Row 2: home row (offset by 1 col)
+        y += key_h + gap
+        make_row(y, layout_data["rows"][2], 1)
 
         # Row 3: bottom row
         y += key_h + gap
-        row = layout_data["rows"][3]
-        x_offset = key_w * 2
-        for i, ch in enumerate(row):
-            x = kb_x + x_offset + i * (key_w + gap)
+        row3 = layout_data["rows"][3]
+
+        # Shift at leftmost position
+        shift_x = kb_margin
+        self._keys.append((
+            pygame.Rect(shift_x, y, key_w, key_h),
+            "shift", "Sft" if not self.shift else "SFT"
+        ))
+
+        # Letter keys in the middle
+        x_start_3 = kb_margin + (key_w + gap)
+        for i, ch in enumerate(row3):
+            x = x_start_3 + i * (key_w + gap)
+            if x + key_w > self.screen_w - kb_margin - (key_w + gap) * 5:
+                break
             rect = pygame.Rect(x, y, key_w, key_h)
             display = ch.upper() if self.shift else ch
             self._keys.append((rect, ch, display))
 
-        # Special keys
-        y = kb_y
-        special_h = key_h * 3 + gap * 2
-
-        # Shift key (left side)
-        shift_w = key_w * 1
-        shift_x = kb_x
-        shift_y = kb_y + (key_h + gap) * 3
+        # Space bar (5 cols wide)
+        space_w = key_w * 5 + gap * 4
+        space_x = self.screen_w - kb_margin - space_w - (key_w + gap) * 2
+        space_x = max(space_x, kb_margin + (key_w + gap))
         self._keys.append((
-            pygame.Rect(shift_x, shift_y, key_w, key_h),
-            "shift", "⇧" if not self.shift else "⇧↑"
-        ))
-
-        # Space bar
-        space_w = key_w * 5
-        space_x = kb_x + key_w * 2 + gap * 2
-        space_y = kb_y + (key_h + gap) * 3
-        self._keys.append((
-            pygame.Rect(space_x, space_y, space_w, key_h),
+            pygame.Rect(space_x, y, space_w, key_h),
             "space", " "
         ))
 
-        # Backspace
-        bs_w = key_w * 2
-        bs_x = self.screen_w - kb_x - bs_w
-        bs_y = kb_y
+        # Close button: bottom-right corner
+        close_w = key_w * 2 + gap
+        close_x = self.screen_w - kb_margin - close_w
         self._keys.append((
-            pygame.Rect(bs_x, bs_y, bs_w, key_h),
-            "backspace", "⌫"
+            pygame.Rect(close_x, y, close_w, key_h),
+            "close", "X"
         ))
 
-        # Enter
-        enter_w = key_w * 2
-        enter_x = self.screen_w - kb_x - enter_w
-        enter_y = kb_y + key_h + gap
+        # Layout toggle: top-left corner (small)
         self._keys.append((
-            pygame.Rect(enter_x, enter_y, enter_w, key_h),
-            "enter", "↵"
-        ))
-
-        # Layout toggle
-        layout_w = key_w * 1
-        layout_x = kb_x
-        layout_y = kb_y
-        layout_label = LAYOUTS[self.layout]["name"]
-        self._keys.append((
-            pygame.Rect(layout_x, layout_y, key_w, key_h),
-            "layout", layout_label
+            pygame.Rect(kb_margin, kb_y - key_h - gap, key_w * 2 + gap, key_h),
+            "layout", LAYOUTS[self.layout]["name"]
         ))
 
     def toggle(self):
@@ -207,6 +215,8 @@ class PygameKeyboard:
             return ("enter", "")
         elif char == "space":
             return ("char", " ")
+        elif char == "close":
+            return ("close", "")
         else:
             layout_data = LAYOUTS[self.layout]
             if self.shift and char in layout_data.get("shift_map", {}):
@@ -223,16 +233,18 @@ class PygameKeyboard:
         if not self.visible:
             return
 
-        # Semi-transparent background
-        bg = pygame.Surface((self.screen_w, 260), pygame.SRCALPHA)
+        bg_h = 260
+        bg = pygame.Surface((self.screen_w, bg_h), pygame.SRCALPHA)
         bg.fill((0, 0, 0, 200))
-        screen.blit(bg, (0, self.screen_h - 260))
+        screen.blit(bg, (0, self.screen_h - bg_h))
 
-        font = pygame.font.SysFont("Arial", 20, bold=True)
+        font = self._get_font()
 
         for rect, char, display in self._keys:
             if char == "space":
                 color = self._btn_color
+            elif char == "close":
+                color = self._btn_close_color
             elif char in ("shift", "layout", "backspace", "enter"):
                 color = self._btn_special_color
             else:

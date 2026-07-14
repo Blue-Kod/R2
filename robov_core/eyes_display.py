@@ -19,8 +19,7 @@ import socket
 import time
 import random
 
-os.environ['SDL_VIDEO_CENTERED'] = '0'
-os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
+os.environ['SDL_VIDEO_CENTERED'] = '1'
 
 try:
     import pygame
@@ -272,7 +271,7 @@ class RobotFace:
         info = pygame.display.Info()
         sw, sh = info.current_w, info.current_h
 
-        screen = pygame.display.set_mode((sw, sh), pygame.NOFRAME)
+        screen = pygame.display.set_mode((sw, sh), pygame.FULLSCREEN)
         pygame.event.set_grab(True)
         pygame.mouse.set_visible(True)
         clock = pygame.time.Clock()
@@ -333,6 +332,9 @@ class RobotFace:
                                 if self._cmd_buf.strip():
                                     self._send_command(self._cmd_buf.strip())
                                     self._cmd_buf = ""
+                            elif action == "close":
+                                self._cmd_active = False
+                                self._pygame_keyboard.hide()
                         continue
 
                     if my > sh * 0.8 and not self._menu_rect.collidepoint(mx, my):

@@ -43,6 +43,7 @@ class StereoSGBMDepthProvider(DepthProvider):
         self.right_matcher = None
         self.wls_filter = None
         self._wls_enabled: bool = True
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
     def setup(self, **kwargs) -> None:
         num_disp: int = kwargs.get("num_disp", 192)
@@ -57,11 +58,11 @@ class StereoSGBMDepthProvider(DepthProvider):
             numDisparities=num_disp,
             blockSize=window_size,
             P1=8 * 3 * window_size ** 2,
-            P2=32 * 3 * window_size ** 2,
-            disp12MaxDiff=2,
-            uniquenessRatio=10,
+            P2=48 * 3 * window_size ** 2,
+            disp12MaxDiff=-1,
+            uniquenessRatio=7,
             speckleWindowSize=100,
-            speckleRange=2,
+            speckleRange=1,
             preFilterCap=31,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
         )
@@ -81,17 +82,24 @@ class StereoSGBMDepthProvider(DepthProvider):
         grayL = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
         grayR = cv2.cvtColor(right, cv2.COLOR_BGR2GRAY)
 
+        grayL = self._clahe.apply(grayL)
+        grayR = self._clahe.apply(grayR)
+
         disp = self.left_matcher.compute(grayL, grayR)
         disp[disp < 0] = 0
 
         if self._wls_enabled and self.right_matcher and self.wls_filter:
             disp_r = self.right_matcher.compute(grayR, grayL)
             disp = self.wls_filter.filter(disp, grayL, disparity_map_right=disp_r)
+            conf = self.wls_filter.getConfidenceMap()
+            disp[conf < 128] = 0
             disp[disp < 0] = 0
 
         disp = cv2.medianBlur(disp, 3)
 
-        disp_guided = cv2.ximgproc.guidedFilter(grayL, disp.astype(np.float32) / 16.0, radius=5, eps=100)
+        disp_guided = cv2.ximgproc.guidedFilter(
+            grayL, disp.astype(np.float32) / 16.0, radius=3, eps=0.5
+        )
         disp = (disp_guided * 16.0).astype(np.int16)
 
         mask = (disp == 0).astype(np.uint8)

@@ -50,6 +50,7 @@ class ServoController:
             5: 45, 6: 135, 7: 135, 8: 90, 9: 90
         }
         self.lock: threading.Lock = threading.Lock()
+        self._move_locks: Dict[int, threading.Lock] = {}
 
         self.offsets: Dict[int, float] = {}
         self.inverted_channels: Set[int] = set(INVERTED_CHANNELS)
@@ -118,6 +119,15 @@ class ServoController:
             return channel in self.inverted_channels
 
     # ------------------------------------------------------------------
+    # Per-channel move lock (prevents I2C bus contention)
+    # ------------------------------------------------------------------
+    def _get_move_lock(self, channel: int) -> threading.Lock:
+        with self.lock:
+            if channel not in self._move_locks:
+                self._move_locks[channel] = threading.Lock()
+            return self._move_locks[channel]
+
+    # ------------------------------------------------------------------
     # Преобразование угла в импульс
     # ------------------------------------------------------------------
     def angle_to_pulse(self, angle: float, channel: int) -> int:
@@ -144,27 +154,36 @@ class ServoController:
             min_angle, max_angle, _, _ = self.channel_configs[channel]
             angle = max_angle - (angle - min_angle)   # зеркалируем
 
-        with self.lock:
-            current = self.current_angles.get(channel, None)
-            if current is None:
-                current = angle
-            target_command = angle
-            offset = self.offsets.get(channel, 0)
+        move_lock = self._get_move_lock(channel)
+        with move_lock:
+            with self.lock:
+                current = self.current_angles.get(channel, None)
+                if current is None:
+                    current = angle
+                target_command = angle
+                offset = self.offsets.get(channel, 0)
 
-        if not smooth or current == target_command:
-            return self._set_servo_immediate(channel, target_command + offset, target_command)
+            if not smooth or current == target_command:
+                return self._set_servo_immediate(channel, target_command + offset, target_command)
 
-        step = step_angle if target_command > current else -step_angle
-        for cmd in range(int(current), int(target_command), step):
-            self._set_servo_immediate(channel, cmd + offset, cmd)
-            time.sleep(step_delay)
-        self._set_servo_immediate(channel, target_command + offset, target_command)
-        return True
+            step = step_angle if target_command > current else -step_angle
+            for cmd in range(int(current), int(target_command), step):
+                self._set_servo_immediate(channel, cmd + offset, cmd)
+                time.sleep(step_delay)
+            self._set_servo_immediate(channel, target_command + offset, target_command)
+            return True
 
     def _set_servo_immediate(self, channel: int, physical_angle: float, command_angle: Optional[int] = None) -> bool:
         try:
             pulse = self.angle_to_pulse(physical_angle, channel)
-            self.pwm.set_pwm(channel, 0, pulse)
+            for attempt in range(3):
+                try:
+                    self.pwm.set_pwm(channel, 0, pulse)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
             with self.lock:
                 if command_angle is not None:
                     self.current_angles[channel] = command_angle

@@ -52,6 +52,8 @@ class StereoCamera:
         self._latest_left: Optional[np.ndarray] = None
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
+        self._ema_disp: Optional[np.ndarray] = None
+        self._ema_alpha: float = 0.8
 
         self._load_camera_parameters()
         self._setup_rectification()
@@ -286,6 +288,13 @@ class StereoCamera:
 
             result = self.depth_provider.compute(left_d, right_d)
             disp_final = result.disparity
+
+            if self._ema_disp is None:
+                self._ema_disp = disp_final.astype(np.float32)
+            else:
+                cv2.accumulateWeighted(disp_final.astype(np.float32), self._ema_disp, self._ema_alpha)
+                disp_final = self._ema_disp.astype(np.int16)
+
             self.disp_buffer.append(disp_final.copy())
             self._latest_left = frame.copy()
 

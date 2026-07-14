@@ -806,7 +806,14 @@ def set_servo_physical(channel: int, physical_angle: int) -> bool:
         logical_angle = max_angle - (physical_angle - min_angle)
     else:
         logical_angle = physical_angle
-    return servo.set_servo(channel, int(logical_angle), smooth=True, step_delay=0.01, step_angle=2)
+    threading.Thread(
+        target=servo.set_servo,
+        args=(channel, int(logical_angle)),
+        kwargs={"smooth": True, "step_delay": 0.01, "step_angle": 2},
+        daemon=True,
+        name=f"servo-ch{channel}",
+    ).start()
+    return True
 
 
 def set_servo_offset(channel: int, offset: float) -> bool:
