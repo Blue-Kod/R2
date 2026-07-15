@@ -64,6 +64,10 @@ class StereoCamera:
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
 
+        self._overlay_items: list = []
+        self._overlay_expire: float = 0.0
+        self._overlay_duration: float = 3.0
+
         self._load_camera_parameters()
         self._setup_rectification()
         self.focal_length = self.P1[0, 0]
@@ -370,6 +374,7 @@ class StereoCamera:
                 result["y"] = round(coords["y"], 3)
                 result["z"] = round(coords["z"], 3)
                 result["depth"] = round(coords["depth"], 3)
+        self._push_overlay([result])
         return result
 
     def scan(self, prompts: Optional[str] = None, max_age: float = 2.0) -> list:
@@ -410,6 +415,7 @@ class StereoCamera:
             results.append(item)
         self._scan_cache = results
         self._scan_cache_time = now
+        self._push_overlay(results)
         return results
 
     def _filter_by_prompts(self, dets: list, prompts: str) -> list:
@@ -425,6 +431,48 @@ class StereoCamera:
                     matched.append(det)
                     break
         return matched
+
+    def _push_overlay(self, items: list) -> None:
+        self._overlay_items = items
+        self._overlay_expire = time.time() + self._overlay_duration
+
+    def _render_overlay(self, frame: np.ndarray) -> np.ndarray:
+        now = time.time()
+        if now > self._overlay_expire or not self._overlay_items:
+            return frame
+        remaining = self._overlay_expire - now
+        alpha = min(1.0, remaining / 0.5)
+        overlay = frame.copy()
+        colors = [
+            (46, 204, 113), (52, 152, 219), (231, 76, 60),
+            (241, 196, 15), (155, 89, 182), (26, 188, 156),
+        ]
+        h, w = frame.shape[:2]
+        for i, item in enumerate(self._overlay_items):
+            color = colors[i % len(colors)]
+            bbox = item.get("bbox", {})
+            x1 = bbox.get("x1", 0)
+            y1 = bbox.get("y1", 0)
+            x2 = bbox.get("x2", w)
+            y2 = bbox.get("y2", h)
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
+            parts = [item.get("name", "?")]
+            if item.get("confidence"):
+                parts.append(f"{item['confidence']:.0%}")
+            if "x" in item and "z" in item:
+                parts.append(f"{item['x']:.1f},{item['y']:.1f},{item['z']:.1f}m")
+            if "vx" in item:
+                parts.append(f"[{item['vx']:.2f}x{item['vy']:.2f}x{item['vz']:.2f}]")
+            label = " ".join(parts)
+            fs = 0.4
+            ft = 1
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, fs, ft)
+            ly = max(th + 6, y1 - 4)
+            cv2.rectangle(overlay, (x1, ly - th - 4), (x1 + tw + 4, ly + 2), color, -1)
+            cv2.putText(overlay, label, (x1 + 2, ly - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), ft, cv2.LINE_AA)
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, dst=frame)
+        return frame
 
     def _process_raw_frame(self, raw: np.ndarray) -> np.ndarray:
         raw = cv2.rotate(raw, cv2.ROTATE_180)
@@ -494,6 +542,7 @@ class StereoCamera:
                 else:
                     frame = self.detector.annotate(frame, self._last_detections)
 
+        frame = self._render_overlay(frame)
         return frame
 
     def _capture_loop(self) -> None:
