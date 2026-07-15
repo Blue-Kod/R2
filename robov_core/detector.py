@@ -70,12 +70,13 @@ def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float = 0.45) -> 
 
 
 class ObjectDetector:
-    INPUT_SIZE = 640
 
-    def __init__(self, model_path: Optional[str] = None, conf_threshold: float = 0.35) -> None:
+    def __init__(self, model_path: Optional[str] = None, conf_threshold: float = 0.35,
+                 threads_inter: int = 2, threads_intra: int = 4) -> None:
         self._session: Optional[ort.InferenceSession] = None
         self._conf_threshold = conf_threshold
         self._input_name: str = ""
+        self._input_size: int = 640
         self._names: Dict[int, str] = {}
         self._num_classes: int = 0
         self._last_infer_ms: float = 0.0
@@ -93,13 +94,16 @@ class ObjectDetector:
         if os.path.isfile(model_path):
             try:
                 opts = ort.SessionOptions()
-                opts.inter_op_num_threads = 2
-                opts.intra_op_num_threads = 4
+                opts.inter_op_num_threads = threads_inter
+                opts.intra_op_num_threads = threads_intra
                 opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
                 self._session = ort.InferenceSession(
                     model_path, opts, providers=["CPUExecutionProvider"]
                 )
                 self._input_name = self._session.get_inputs()[0].name
+                in_shape = self._session.get_inputs()[0].shape
+                if len(in_shape) >= 4 and isinstance(in_shape[2], int):
+                    self._input_size = in_shape[2]
                 out_shape = self._session.get_outputs()[0].shape
                 if len(out_shape) == 3 and out_shape[2] <= 64:
                     self._format = "nms"
@@ -180,12 +184,13 @@ class ObjectDetector:
 
     def _preprocess(self, frame: np.ndarray) -> Tuple[np.ndarray, float, Tuple[int, int]]:
         h, w = frame.shape[:2]
-        scale = self.INPUT_SIZE / max(h, w)
+        sz = self._input_size
+        scale = sz / max(h, w)
         new_w, new_h = int(w * scale), int(h * scale)
         resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        canvas = np.full((self.INPUT_SIZE, self.INPUT_SIZE, 3), 114, dtype=np.uint8)
-        pad_w = (self.INPUT_SIZE - new_w) // 2
-        pad_h = (self.INPUT_SIZE - new_h) // 2
+        canvas = np.full((sz, sz, 3), 114, dtype=np.uint8)
+        pad_w = (sz - new_w) // 2
+        pad_h = (sz - new_h) // 2
         canvas[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized
         blob = canvas[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
         blob = np.expand_dims(blob, axis=0)
