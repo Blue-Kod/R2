@@ -53,6 +53,8 @@ class StereoCamera:
         self.detection_prompts: str = ""
         self._scan_cache: Optional[list] = None
         self._scan_cache_time: float = 0.0
+        self._detection_frame_skip: int = 5
+        self._detection_frame_count: int = 0
 
         self.actual_width: int = 0
         self.actual_height: int = 0
@@ -395,15 +397,18 @@ class StereoCamera:
             frame = cv2.resize(side, self.img_size)
 
         if self.detection_enabled and self.detector.available:
-            det_frame = clean_frame if clean_frame is not None else frame
-            self._last_detections = self.detector.detect(det_frame)
-            valid = []
-            for det in self._last_detections:
-                cx, cy = det.center_x, det.center_y
-                if 0 <= cy < frame.shape[0] and 0 <= cx < frame.shape[1]:
-                    if frame[cy, cx].sum() > 0:
-                        valid.append(det)
-            self._last_detections = valid
+            self._detection_frame_count += 1
+            if self._detection_frame_count >= self._detection_frame_skip:
+                self._detection_frame_count = 0
+                det_frame = clean_frame if clean_frame is not None else frame
+                self._last_detections = self.detector.detect(det_frame)
+                valid = []
+                for det in self._last_detections:
+                    cx, cy = det.center_x, det.center_y
+                    if 0 <= cy < frame.shape[0] and 0 <= cx < frame.shape[1]:
+                        if frame[cy, cx].sum() > 0:
+                            valid.append(det)
+                self._last_detections = valid
 
             if self._last_detections:
                 if self.depth_enabled and len(self.disp_buffer) > 0:

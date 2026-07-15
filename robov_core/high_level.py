@@ -649,8 +649,6 @@ def start_background() -> None:
             except Exception as e:
                 log(f"EveryLLM refresh error: {e}")
 
-        threading.Thread(target=_refresh_models, daemon=True, name="r2-llm-refresh").start()
-
         # Inject robot API into AI's python environment
         _ai_agent.executor.python_env.update({
             "angle": angle,
