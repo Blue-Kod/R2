@@ -62,6 +62,7 @@ class StereoCamera:
         self._setup_rectification()
         self.focal_length = self.P1[0, 0]
         self.baseline = abs(float(self.T[0]))
+        self._compute_scaled_intrinsics()
         self.depth_provider: DepthProvider = self._create_default_provider()
         self._init_provider()
 
@@ -90,6 +91,19 @@ class StereoCamera:
         self.rMapX, self.rMapY = cv2.fisheye.initUndistortRectifyMap(
             self.Kr, self.Dr, self.R2, self.P2, self.imSize, cv2.CV_32FC1
         )
+
+    def _compute_scaled_intrinsics(self) -> None:
+        sx = self.img_size[0] / self.imSize[0]
+        sy = self.img_size[1] / self.imSize[1]
+        self._Kl_s = self.Kl.copy()
+        self._Kl_s[0, 0] *= sx
+        self._Kl_s[1, 1] *= sy
+        self._Kl_s[0, 2] *= sx
+        self._Kl_s[1, 2] *= sy
+        self._Q_proc = self.Q.copy()
+        self._Q_proc[0, 3] *= sx
+        self._Q_proc[1, 3] *= sy
+        self._Q_proc[2, 3] *= sx
 
     @staticmethod
     def _create_default_provider() -> DepthProvider:
@@ -160,7 +174,7 @@ class StereoCamera:
         return result.disparity
 
     def get_depth_at_point(self, disparity_map: np.ndarray, x: Optional[int] = None, y: Optional[int] = None) -> float:
-        points_3d = cv2.reprojectImageTo3D(disparity_map.astype(np.float32) / 16.0, self.Q)
+        points_3d = cv2.reprojectImageTo3D(disparity_map.astype(np.float32) / 16.0, self._Q_proc)
         h, w = disparity_map.shape[:2]
         if x is None:
             x = w // 2
@@ -209,13 +223,7 @@ class StereoCamera:
             if not self.initialize_camera():
                 frame = np.zeros((*self.img_size[::-1], 3), dtype=np.uint8)
                 cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
-        if self.detection_enabled and self.detector.available:
-            self._last_detections = self.detector.detect(frame)
-            if self._last_detections:
-                frame = self.detector.annotate(frame, self._last_detections)
-
-        return frame
-
+                return frame
         ret, raw = self.cap.read()
         if not ret:
             self.cap.release()
@@ -240,10 +248,8 @@ class StereoCamera:
         if len(self.disp_buffer) > 0:
             disp = self.disp_buffer[-1]
             sh, sw = disp.shape[:2]
-            sx = int(x * sw / self.imSize[0])
-            sy = int(y * sh / self.imSize[1])
-            sx = max(0, min(sx, sw - 1))
-            sy = max(0, min(sy, sh - 1))
+            sx = max(0, min(x, sw - 1))
+            sy = max(0, min(y, sh - 1))
             return self.get_depth_at_point(disp, sx, sy)
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
@@ -257,15 +263,15 @@ class StereoCamera:
             if depth_mm is None or depth_mm <= 0:
                 return None
 
-            w, h = self.imSize
+            w, h = self.img_size
             if x_px < 0 or x_px >= w or y_px < 0 or y_px >= h:
                 return None
 
-            fx = self.Kl[0, 0]
-            fy = self.Kl[1, 1]
+            fx = self._Kl_s[0, 0]
+            fy = self._Kl_s[1, 1]
 
-            x_real = (x_px - self.Kl[0, 2]) * depth_mm / fx
-            y_real = (y_px - self.Kl[1, 2]) * depth_mm / fy
+            x_real = (x_px - self._Kl_s[0, 2]) * depth_mm / fx
+            y_real = (y_px - self._Kl_s[1, 2]) * depth_mm / fy
             z_real = depth_mm
 
             return {'x': float(x_real) / 1000.0, 'y': float(y_real) / 1000.0, 'z': float(z_real) / 1000.0, 'depth': float(depth_mm) / 1000.0}
@@ -338,6 +344,11 @@ class StereoCamera:
             rawR = raw[:, half_w:]
             side = rawL if self.show_left else rawR
             frame = cv2.resize(side, self.img_size)
+
+        if self.detection_enabled and self.detector.available:
+            self._last_detections = self.detector.detect(frame)
+            if self._last_detections:
+                frame = self.detector.annotate(frame, self._last_detections)
 
         return frame
 

@@ -600,7 +600,7 @@ const cursorInfoEl = document.getElementById('cursorInfo');
 let cursorTimer = null;
 
 async function fetchCursorXYZ(px, py, screenX, screenY) {
-    if (!depthEnabledChk.checked && !detectionEnabledChk.checked) {
+    if (!depthEnabledChk.checked) {
         cursorInfoEl.classList.remove('visible');
         return;
     }
@@ -612,9 +612,9 @@ async function fetchCursorXYZ(px, py, screenX, screenY) {
         });
         const d = await r.json();
         if (d.valid) {
-            cursorInfoEl.textContent = `X: ${d.x} m  Y: ${d.y} m\nD: ${d.depth} m`;
+            cursorInfoEl.textContent = `X: ${d.x} m  Y: ${d.y} m  Z: ${d.z} m\nD: ${d.depth} m`;
         } else {
-            cursorInfoEl.textContent = 'X: --  Y: --\nD: --';
+            cursorInfoEl.textContent = 'X: --  Y: --  Z: --\nD: --';
         }
         const container = document.getElementById('video-container');
         const rect = container.getBoundingClientRect();
