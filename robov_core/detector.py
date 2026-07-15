@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -13,22 +14,6 @@ try:
     _HAS_ORT = True
 except ImportError:
     _HAS_ORT = False
-
-COCO_NAMES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep",
-    "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
-    "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
-    "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
-    "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork",
-    "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
-    "couch", "potted plant", "bed", "dining table", "toilet", "tv",
-    "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
-    "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
-    "scissors", "teddy bear", "hair drier", "toothbrush",
-]
 
 
 @dataclass
@@ -70,17 +55,20 @@ def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float = 0.45) -> 
 
 class ObjectDetector:
     INPUT_SIZE = 640
+    NUM_MASK_COEFFS = 32
 
     def __init__(self, model_path: Optional[str] = None, conf_threshold: float = 0.35) -> None:
         self._session: Optional[ort.InferenceSession] = None
         self._conf_threshold = conf_threshold
         self._input_name: str = ""
-        self._names = COCO_NAMES
+        self._names: Dict[int, str] = {}
+        self._num_classes: int = 0
         self._last_infer_ms: float = 0.0
 
         if model_path is None:
             base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            model_path = os.path.join(base, "models", "yolo11n.onnx")
+            model_path = os.path.join(base, "models", "yoloe-v8s-seg-pf.onnx")
+        self._load_names(model_path)
         if os.path.isfile(model_path):
             try:
                 opts = ort.SessionOptions()
@@ -93,6 +81,23 @@ class ObjectDetector:
                 self._input_name = self._session.get_inputs()[0].name
             except Exception:
                 self._session = None
+
+    def _load_names(self, onnx_path: str) -> None:
+        json_path = os.path.join(os.path.dirname(onnx_path), "lvis_classes.json")
+        if os.path.isfile(json_path):
+            with open(json_path) as f:
+                raw = json.load(f)
+            self._names = {int(k): v for k, v in raw.items()}
+            self._num_classes = len(self._names)
+            return
+        names_file = onnx_path.replace(".onnx", "_names.json")
+        if os.path.isfile(names_file):
+            with open(names_file) as f:
+                raw = json.load(f)
+            self._names = {int(k): v for k, v in raw.items()}
+            self._num_classes = len(self._names)
+            return
+        self._num_classes = 4585
 
     @property
     def available(self) -> bool:
@@ -122,7 +127,8 @@ class ObjectDetector:
         matched.sort(key=lambda d: d.confidence, reverse=True)
         return matched
 
-    def annotate(self, frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
+    def annotate(self, frame: np.ndarray, detections: List[Detection],
+                 labels: Optional[List[str]] = None) -> np.ndarray:
         vis = frame.copy()
         colors = [
             (46, 204, 113), (52, 152, 219), (231, 76, 60),
@@ -131,7 +137,7 @@ class ObjectDetector:
         for i, det in enumerate(detections):
             color = colors[i % len(colors)]
             cv2.rectangle(vis, (det.x1, det.y1), (det.x2, det.y2), color, 2)
-            label = f"{det.name} {det.confidence:.0%}"
+            label = labels[i] if labels else f"{det.name} {det.confidence:.0%}"
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.rectangle(vis, (det.x1, det.y1 - th - 8), (det.x1 + tw + 4, det.y1), color, -1)
             cv2.putText(vis, label, (det.x1 + 2, det.y1 - 4),
@@ -153,10 +159,14 @@ class ObjectDetector:
 
     def _postprocess(self, raw: np.ndarray, orig_shape: Tuple[int, int],
                      ratio: float, pad_w: int, pad_h: int) -> List[Detection]:
-        boxes_xywh = raw[:4, :].T
-        scores = raw[4:, :].T
-        oh, ow = orig_shape[:2]
+        num_detect = 4 + self._num_classes + self.NUM_MASK_COEFFS
+        num_classes = self._num_classes
 
+        boxes_xywh = raw[:4, :].T
+        scores_raw = raw[4:4 + num_classes, :].T
+        scores = 1.0 / (1.0 + np.exp(-scores_raw))
+
+        oh, ow = orig_shape[:2]
         max_scores = scores.max(axis=1)
         class_ids = scores.argmax(axis=1)
         mask = max_scores > self._conf_threshold
@@ -187,7 +197,7 @@ class ObjectDetector:
             x2 = max(0, min(x2, ow - 1))
             y2 = max(0, min(y2, oh - 1))
             cid = int(class_ids[i])
-            name = self._names[cid] if cid < len(self._names) else str(cid)
+            name = self._names.get(cid, str(cid))
             results.append(Detection(
                 name=name, class_id=cid, confidence=float(max_scores[i]),
                 x1=x1, y1=y1, x2=x2, y2=y2,

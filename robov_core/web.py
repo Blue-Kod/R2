@@ -29,6 +29,7 @@ from robov_core.high_level import (
     set_reasoning, get_reasoning,
     get_rerun_viewer,
     get_depth_provider, set_depth_provider,
+    scan as hl_scan,
 )
 
 from robov_core.ai import init_agent
@@ -268,6 +269,7 @@ def create_app() -> Flask:
                     "hud_enabled": camera.hud_enabled,
                     "wls_enabled": camera.wls_enabled,
                     "detection_enabled": camera.detection_enabled,
+                    "detection_prompts": camera.detection_prompts,
                     "alpha_depth": camera.alpha_depth,
                     "show_left": camera.show_left,
                     "num_disp": camera.num_disp,
@@ -279,6 +281,7 @@ def create_app() -> Flask:
             hud_enabled=data.get("hud_enabled"),
             wls_enabled=data.get("wls_enabled"),
             detection_enabled=data.get("detection_enabled"),
+            detection_prompts=data.get("detection_prompts"),
             alpha_depth=data.get("alpha_depth"),
             show_left=data.get("show_left"),
             num_disp=data.get("num_disp"),
@@ -332,6 +335,29 @@ def create_app() -> Flask:
         if result is None:
             return jsonify({"found": False, "name": name})
         return jsonify({"found": True, **result})
+
+    @app.route("/api/scan")
+    @require_auth
+    def api_scan():
+        camera = get_stereo_camera()
+        if camera is None:
+            return jsonify({"error": "Camera not available"}), 503
+        prompts = request.args.get("prompts", "").strip()
+        results = hl_scan(prompts=prompts)
+        objects = []
+        for obj in results:
+            item = {
+                "name": obj.name,
+                "confidence": obj.confidence,
+                "bbox": obj.bbox,
+            }
+            if obj.position:
+                item["x"] = round(obj.position.x, 3)
+                item["y"] = round(obj.position.y, 3)
+                item["z"] = round(obj.position.z, 3)
+                item["depth"] = round(obj.depth, 3)
+            objects.append(item)
+        return jsonify({"objects": objects, "count": len(objects)})
 
     # --- Servo ---
 

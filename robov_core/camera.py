@@ -50,6 +50,9 @@ class StereoCamera:
         self.detection_enabled: bool = False
         self.detector: ObjectDetector = ObjectDetector()
         self._last_detections: list = []
+        self.detection_prompts: str = ""
+        self._scan_cache: Optional[list] = None
+        self._scan_cache_time: float = 0.0
 
         self.actual_width: int = 0
         self.actual_height: int = 0
@@ -313,6 +316,50 @@ class StereoCamera:
             result["z"] = round(coords["z"], 3)
         return result
 
+    def scan(self, prompts: Optional[str] = None, max_age: float = 2.0) -> list:
+        now = time.time()
+        if self._scan_cache is not None and (now - self._scan_cache_time) < max_age:
+            return self._scan_cache
+        left_frame, right_frame = self.get_rectified_frames()
+        if left_frame is None:
+            return []
+        prompts = prompts or self.detection_prompts
+        all_dets = self.detector.detect(left_frame)
+        if prompts:
+            all_dets = self._filter_by_prompts(all_dets, prompts)
+        results = []
+        for det in all_dets:
+            coords = self.get_real_coords(det.center_x, det.center_y)
+            item = {
+                "name": det.name,
+                "confidence": round(det.confidence, 3),
+                "bbox": {"x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2},
+                "center": {"x": det.center_x, "y": det.center_y},
+            }
+            if coords:
+                item["x"] = round(coords["x"], 3)
+                item["y"] = round(coords["y"], 3)
+                item["z"] = round(coords["z"], 3)
+                item["depth"] = round(coords["depth"], 3)
+            results.append(item)
+        self._scan_cache = results
+        self._scan_cache_time = now
+        return results
+
+    def _filter_by_prompts(self, dets: list, prompts: str) -> list:
+        import re
+        patterns = re.split(r"[,\.\;]+", prompts)
+        patterns = [p.strip().lower() for p in patterns if p.strip()]
+        if not patterns:
+            return dets
+        matched = []
+        for det in dets:
+            for p in patterns:
+                if p in det.name.lower():
+                    matched.append(det)
+                    break
+        return matched
+
     def _process_raw_frame(self, raw: np.ndarray) -> np.ndarray:
         raw = cv2.rotate(raw, cv2.ROTATE_180)
         half_w = raw.shape[1] // 2
@@ -333,6 +380,8 @@ class StereoCamera:
             self.disp_buffer.append(disp_final.copy())
             self._latest_left = frame.copy()
 
+            clean_frame = frame.copy() if self.detection_enabled else None
+
             if self.depth_enabled:
                 depth_vis = cv2.normalize(disp_final, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
                 depth_vis = cv2.morphologyEx(depth_vis, cv2.MORPH_OPEN, self.kernel)
@@ -346,9 +395,28 @@ class StereoCamera:
             frame = cv2.resize(side, self.img_size)
 
         if self.detection_enabled and self.detector.available:
-            self._last_detections = self.detector.detect(frame)
+            det_frame = clean_frame if clean_frame is not None else frame
+            self._last_detections = self.detector.detect(det_frame)
+            valid = []
+            for det in self._last_detections:
+                cx, cy = det.center_x, det.center_y
+                if 0 <= cy < frame.shape[0] and 0 <= cx < frame.shape[1]:
+                    if frame[cy, cx].sum() > 0:
+                        valid.append(det)
+            self._last_detections = valid
+
             if self._last_detections:
-                frame = self.detector.annotate(frame, self._last_detections)
+                if self.depth_enabled and len(self.disp_buffer) > 0:
+                    labels = []
+                    for det in self._last_detections:
+                        coords = self.get_real_coords(det.center_x, det.center_y)
+                        if coords:
+                            labels.append(f"{det.name} {det.confidence:.0%} {coords['x']:.1f} {coords['y']:.1f} {coords['z']:.1f}")
+                        else:
+                            labels.append(f"{det.name} {det.confidence:.0%}")
+                    frame = self.detector.annotate(frame, self._last_detections, labels=labels)
+                else:
+                    frame = self.detector.annotate(frame, self._last_detections)
 
         return frame
 

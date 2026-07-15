@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Dict, List, Tuple
 
@@ -25,6 +26,22 @@ except ImportError:
     _HAS_DISPLAY = False
     EyeDisplay = None
     optimize_for_arm = None
+
+
+@dataclass
+class Position:
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+
+@dataclass
+class RealObject:
+    name: str = ""
+    confidence: float = 0.0
+    position: Optional[Position] = None
+    bbox: Dict[str, int] = field(default_factory=dict)
+    depth: float = 0.0
 
 # --- Configuration ---
 APP_VERSION = "0.2"
@@ -647,6 +664,11 @@ def start_background() -> None:
             "get_raw_frame": get_raw_frame,
             "get_coords_stereo": get_coords_stereo,
             "find": find_object,
+            "precise_find": precise_find,
+            "scan": scan,
+            "goto": goto,
+            "grab": grab,
+            "move_arm_to": move_arm_to,
             "health_snapshot": health_snapshot,
             "ip_address": ip_address,
             "log": log,
@@ -743,6 +765,46 @@ def find_object(name: str) -> Optional[dict]:
     if camera is None:
         return None
     return camera.find(name)
+
+
+def precise_find(names: str) -> List[RealObject]:
+    camera = get_stereo_camera()
+    if camera is None:
+        return []
+    results = camera.scan(prompts=names)
+    objects = []
+    for r in results:
+        pos = None
+        if "x" in r and "y" in r and "z" in r:
+            pos = Position(x=r["x"], y=r["y"], z=r["z"])
+        obj = RealObject(
+            name=r["name"],
+            confidence=r.get("confidence", 0.0),
+            position=pos,
+            bbox=r.get("bbox", {}),
+            depth=r.get("depth", 0.0),
+        )
+        objects.append(obj)
+    return objects
+
+
+def scan(prompts: str = "") -> List[RealObject]:
+    return precise_find(prompts)
+
+
+def goto(target) -> bool:
+    log(f"goto() stub called — target={target}")
+    return False
+
+
+def grab(target) -> bool:
+    log(f"grab() stub called — target={target}")
+    return False
+
+
+def move_arm_to(target, left: bool = False) -> bool:
+    log(f"move_arm_to() stub called — target={target}, left={left}")
+    return False
 
 
 def get_coords_stereo(stereo_image, x: int, y: int) -> Optional[Tuple[float, float, float]]:

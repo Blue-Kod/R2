@@ -161,7 +161,7 @@
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <label><input type="checkbox" id="depthEnabled"> Глубина</label>
                     <label><input type="checkbox" id="detectionEnabled"> Распознование</label>
-                    <label><input type="checkbox" id="wlsEnabled"> WLS</label>
+                    <input type="text" id="detectionPrompts" placeholder="red can, table, person" style="width:180px; background:#1e1e1e; border:1px solid var(--line); color:white; border-radius:8px; padding:5px 8px; font-size:12px;">
                 </div>
             </div>
         </main>
@@ -228,7 +228,7 @@ const eyeRight = document.getElementById('eyeRight');
 const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
 const detectionEnabledChk = document.getElementById('detectionEnabled');
-const wlsEnabledChk = document.getElementById('wlsEnabled');
+const detectionPromptsInput = document.getElementById('detectionPrompts');
 const terminalOutputDiv = document.getElementById('terminal-output');
 const terminalInput = document.getElementById('terminal-command');
 const sshHostDisplay = document.getElementById('sshHostDisplay');
@@ -253,7 +253,7 @@ function restoreState() {
         const cp = serverData.camera_params;
         depthEnabledChk.checked = cp.depth_enabled || false;
         detectionEnabledChk.checked = cp.detection_enabled || false;
-        wlsEnabledChk.checked = cp.wls_enabled || false;
+        detectionPromptsInput.value = cp.detection_prompts || '';
         depthAlphaSlider.value = (cp.alpha_depth || 0.3) * 100;
         eyeLeft.checked = cp.show_left !== false;
         eyeRight.checked = !eyeLeft.checked;
@@ -300,7 +300,7 @@ async function sendCameraParams() {
         await fetch('/api/camera/params', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
             depth_enabled: depthEnabledChk.checked,
             detection_enabled: detectionEnabledChk.checked,
-            wls_enabled: wlsEnabledChk.checked,
+            detection_prompts: detectionPromptsInput.value,
         })});
     } catch(e) {}
 }
@@ -486,7 +486,7 @@ function attachEvents() {
     depthAlphaSlider.oninput = updateRenderParams;
     depthEnabledChk.onchange = sendCameraParams;
     detectionEnabledChk.onchange = sendCameraParams;
-    wlsEnabledChk.onchange = sendCameraParams;
+    detectionPromptsInput.addEventListener('change', sendCameraParams);
 
     terminalInput.onkeydown = (e) => {
         if (e.key === 'Enter') {
