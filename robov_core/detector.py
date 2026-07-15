@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import cv2
@@ -43,6 +43,7 @@ class Detection:
     y2: int
     center_x: int
     center_y: int
+    mask: Optional[np.ndarray] = field(default=None, repr=False)
 
 
 def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float = 0.45) -> np.ndarray:
@@ -82,10 +83,12 @@ class ObjectDetector:
         self._last_infer_ms: float = 0.0
         self._format: str = "raw"
         self._num_dets: int = 300
+        self._has_mask_output: bool = False
+        self._mask_proto_name: str = ""
 
         if model_path is None:
             base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            for candidate in ["yoloe-11s-seg.onnx", "yolov8s.onnx"]:
+            for candidate in ["yoloe-11s-seg-320.onnx", "yoloe-11s-seg.onnx", "yolov8s.onnx"]:
                 p = os.path.join(base, "models", candidate)
                 if os.path.isfile(p):
                     model_path = p
@@ -104,7 +107,8 @@ class ObjectDetector:
                 in_shape = self._session.get_inputs()[0].shape
                 if len(in_shape) >= 4 and isinstance(in_shape[2], int):
                     self._input_size = in_shape[2]
-                out_shape = self._session.get_outputs()[0].shape
+                outputs = self._session.get_outputs()
+                out_shape = outputs[0].shape
                 if len(out_shape) == 3 and out_shape[2] <= 64:
                     self._format = "nms"
                     self._num_dets = int(out_shape[1])
@@ -113,6 +117,9 @@ class ObjectDetector:
                     self._format = "raw"
                     if len(out_shape) >= 2:
                         self._num_classes = int(out_shape[1]) - 4
+                if len(outputs) >= 2:
+                    self._has_mask_output = True
+                    self._mask_proto_name = outputs[1].name
                 if self._num_classes == len(COCO_NAMES):
                     self._names = {i: n for i, n in enumerate(COCO_NAMES)}
             except Exception:
@@ -151,8 +158,9 @@ class ObjectDetector:
         raw = outputs[0]
         if raw.ndim == 3:
             raw = raw[0]
+        proto = outputs[1][0] if len(outputs) >= 2 else None
         if self._format == "nms":
-            dets = self._postprocess_nms(raw, frame.shape, ratio, pad_w, pad_h)
+            dets = self._postprocess_nms(raw, proto, frame.shape, ratio, pad_w, pad_h)
         else:
             dets = self._postprocess_raw(raw, frame.shape, ratio, pad_w, pad_h)
         self._last_infer_ms = (time.monotonic() - t0) * 1000
@@ -172,14 +180,24 @@ class ObjectDetector:
             (46, 204, 113), (52, 152, 219), (231, 76, 60),
             (241, 196, 15), (155, 89, 182), (26, 188, 156),
         ]
+        font_scale = 0.35
+        font_thick = 1
         for i, det in enumerate(detections):
             color = colors[i % len(colors)]
-            cv2.rectangle(vis, (det.x1, det.y1), (det.x2, det.y2), color, 2)
+            if det.mask is not None:
+                overlay = vis.copy()
+                overlay[det.mask > 0] = color
+                cv2.addWeighted(vis, 0.6, overlay, 0.4, 0, dst=vis)
+                contours, _ = cv2.findContours(
+                    det.mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                cv2.drawContours(vis, contours, -1, color, 2)
+            cv2.rectangle(vis, (det.x1, det.y1), (det.x2, det.y2), color, 1)
             label = labels[i] if labels else f"{det.name} {det.confidence:.0%}"
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(vis, (det.x1, det.y1 - th - 8), (det.x1 + tw + 4, det.y1), color, -1)
-            cv2.putText(vis, label, (det.x1 + 2, det.y1 - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thick)
+            cv2.rectangle(vis, (det.x1, det.y1 - th - 6), (det.x1 + tw + 3, det.y1), color, -1)
+            cv2.putText(vis, label, (det.x1 + 1, det.y1 - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thick, cv2.LINE_AA)
         return vis
 
     def _preprocess(self, frame: np.ndarray) -> Tuple[np.ndarray, float, Tuple[int, int]]:
@@ -196,7 +214,27 @@ class ObjectDetector:
         blob = np.expand_dims(blob, axis=0)
         return blob, scale, (pad_w, pad_h)
 
-    def _postprocess_nms(self, raw: np.ndarray, orig_shape: Tuple[int, int],
+    def _decode_mask(self, mask_coeffs: np.ndarray, proto: np.ndarray,
+                     orig_h: int, orig_w: int,
+                     ratio: float, pad_w: int, pad_h: int) -> Optional[np.ndarray]:
+        if proto is None or mask_coeffs is None:
+            return None
+        try:
+            mask_coeffs = mask_coeffs.astype(np.float32)
+            raw_mask = mask_coeffs @ proto.reshape(proto.shape[0], -1)
+            raw_mask = raw_mask.reshape(proto.shape[1], proto.shape[2])
+            raw_mask = 1.0 / (1.0 + np.exp(-raw_mask))
+            mask_bin = (raw_mask > 0.5).astype(np.uint8)
+            new_h = int(orig_h * ratio)
+            new_w = int(orig_w * ratio)
+            valid_mask = mask_bin[pad_h:pad_h + new_h, pad_w:pad_w + new_w]
+            full_mask = cv2.resize(valid_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+            return full_mask
+        except Exception:
+            return None
+
+    def _postprocess_nms(self, raw: np.ndarray, proto: Optional[np.ndarray],
+                         orig_shape: Tuple[int, int],
                          ratio: float, pad_w: int, pad_h: int) -> List[Detection]:
         oh, ow = orig_shape[:2]
         mask = raw[:, 4] > self._conf_threshold
@@ -206,20 +244,27 @@ class ObjectDetector:
         results = []
         for row in rows:
             x1, y1, x2, y2, conf, cls_id = row[:6]
-            x1 = int((float(x1) - pad_w) / ratio)
-            y1 = int((float(y1) - pad_h) / ratio)
-            x2 = int((float(x2) - pad_w) / ratio)
-            y2 = int((float(y2) - pad_h) / ratio)
-            x1 = max(0, min(x1, ow - 1))
-            y1 = max(0, min(y1, oh - 1))
-            x2 = max(0, min(x2, ow - 1))
-            y2 = max(0, min(y2, oh - 1))
+            ix1 = int((float(x1) - pad_w) / ratio)
+            iy1 = int((float(y1) - pad_h) / ratio)
+            ix2 = int((float(x2) - pad_w) / ratio)
+            iy2 = int((float(y2) - pad_h) / ratio)
+            ix1 = max(0, min(ix1, ow - 1))
+            iy1 = max(0, min(iy1, oh - 1))
+            ix2 = max(0, min(ix2, ow - 1))
+            iy2 = max(0, min(iy2, oh - 1))
             cid = int(cls_id)
             name = self._names.get(cid, str(cid))
+            det_mask = None
+            if proto is not None and len(row) > 6:
+                det_mask = self._decode_mask(
+                    row[6:6 + proto.shape[0]], proto,
+                    oh, ow, ratio, pad_w, pad_h
+                )
             results.append(Detection(
                 name=name, class_id=cid, confidence=float(conf),
-                x1=x1, y1=y1, x2=x2, y2=y2,
-                center_x=(x1 + x2) // 2, center_y=(y1 + y2) // 2,
+                x1=ix1, y1=iy1, x2=ix2, y2=iy2,
+                center_x=(ix1 + ix2) // 2, center_y=(iy1 + iy2) // 2,
+                mask=det_mask,
             ))
         return results
 

@@ -284,6 +284,42 @@ class StereoCamera:
         except Exception:
             return None
 
+    def _get_mask_3d(self, mask: np.ndarray, erode_px: int = 3) -> Optional[dict]:
+        if len(self.disp_buffer) == 0 or mask is None:
+            return None
+        disp = self.disp_buffer[-1]
+        sh, sw = disp.shape[:2]
+        if mask.shape[:2] != (sh, sw):
+            mask = cv2.resize(mask.astype(np.uint8), (sw, sh), interpolation=cv2.INTER_NEAREST)
+        kernel = np.ones((erode_px, erode_px), np.uint8)
+        eroded = cv2.erode(mask.astype(np.uint8), kernel, iterations=1)
+        valid = (eroded > 0) & (disp > 0)
+        n_valid = int(valid.sum())
+        if n_valid < 5:
+            return None
+        points_3d = cv2.reprojectImageTo3D(
+            disp.astype(np.float32) / 16.0, self._Q_proc
+        )
+        pts = points_3d[valid].reshape(-1, 3)
+        depth_vals = np.abs(pts[:, 2]) * self.depth_scale
+        range_ok = (depth_vals > 50.0) & (depth_vals < 5000.0)
+        if range_ok.sum() < 3:
+            return None
+        pts = pts[range_ok]
+        ds = self.depth_scale
+        fx = self._Kl_s[0, 0]
+        fy = self._Kl_s[1, 1]
+        cx = self._Kl_s[0, 2]
+        cy = self._Kl_s[1, 2]
+        x_m = (pts[:, 0] * ds) / 1000.0
+        y_m = (pts[:, 1] * ds) / 1000.0
+        z_m = (np.abs(pts[:, 2]) * ds) / 1000.0
+        mx, my, mz = float(x_m.mean()), float(y_m.mean()), float(z_m.mean())
+        vx = float(x_m.max() - x_m.min())
+        vy = float(y_m.max() - y_m.min())
+        vz = float(z_m.max() - z_m.min())
+        return {"x": mx, "y": my, "z": mz, "vx": vx, "vy": vy, "vz": vz, "n_points": n_valid}
+
     def update_params(self, **kwargs) -> None:
         with self.lock:
             for key, value in kwargs.items():
@@ -303,19 +339,28 @@ class StereoCamera:
         if not detections:
             return None
         det = detections[0]
-        depth_mm = self.get_depth_at(det.center_x, det.center_y)
-        coords = self.get_real_coords(det.center_x, det.center_y)
         result = {
             "name": det.name,
             "confidence": round(det.confidence, 3),
             "bbox": {"x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2},
             "center": {"x": det.center_x, "y": det.center_y},
-            "depth_mm": round(depth_mm, 1) if depth_mm else 0,
         }
-        if coords:
-            result["x"] = round(coords["x"], 3)
-            result["y"] = round(coords["y"], 3)
-            result["z"] = round(coords["z"], 3)
+        m3d = self._get_mask_3d(det.mask) if det.mask is not None else None
+        if m3d:
+            result["x"] = round(m3d["x"], 3)
+            result["y"] = round(m3d["y"], 3)
+            result["z"] = round(m3d["z"], 3)
+            result["vx"] = round(m3d["vx"], 3)
+            result["vy"] = round(m3d["vy"], 3)
+            result["vz"] = round(m3d["vz"], 3)
+            result["depth"] = round(m3d["z"], 3)
+        else:
+            coords = self.get_real_coords(det.center_x, det.center_y)
+            if coords:
+                result["x"] = round(coords["x"], 3)
+                result["y"] = round(coords["y"], 3)
+                result["z"] = round(coords["z"], 3)
+                result["depth"] = round(coords["depth"], 3)
         return result
 
     def scan(self, prompts: Optional[str] = None, max_age: float = 2.0) -> list:
@@ -331,18 +376,28 @@ class StereoCamera:
             all_dets = self._filter_by_prompts(all_dets, prompts)
         results = []
         for det in all_dets:
-            coords = self.get_real_coords(det.center_x, det.center_y)
             item = {
                 "name": det.name,
                 "confidence": round(det.confidence, 3),
                 "bbox": {"x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2},
                 "center": {"x": det.center_x, "y": det.center_y},
             }
-            if coords:
-                item["x"] = round(coords["x"], 3)
-                item["y"] = round(coords["y"], 3)
-                item["z"] = round(coords["z"], 3)
-                item["depth"] = round(coords["depth"], 3)
+            m3d = self._get_mask_3d(det.mask) if det.mask is not None else None
+            if m3d:
+                item["x"] = round(m3d["x"], 3)
+                item["y"] = round(m3d["y"], 3)
+                item["z"] = round(m3d["z"], 3)
+                item["vx"] = round(m3d["vx"], 3)
+                item["vy"] = round(m3d["vy"], 3)
+                item["vz"] = round(m3d["vz"], 3)
+                item["depth"] = round(m3d["z"], 3)
+            else:
+                coords = self.get_real_coords(det.center_x, det.center_y)
+                if coords:
+                    item["x"] = round(coords["x"], 3)
+                    item["y"] = round(coords["y"], 3)
+                    item["z"] = round(coords["z"], 3)
+                    item["depth"] = round(coords["depth"], 3)
             results.append(item)
         self._scan_cache = results
         self._scan_cache_time = now
@@ -414,11 +469,15 @@ class StereoCamera:
                 if self.depth_enabled and len(self.disp_buffer) > 0:
                     labels = []
                     for det in self._last_detections:
-                        coords = self.get_real_coords(det.center_x, det.center_y)
-                        if coords:
-                            labels.append(f"{det.name} {det.confidence:.0%} {coords['x']:.1f} {coords['y']:.1f} {coords['z']:.1f}")
+                        m3d = self._get_mask_3d(det.mask) if det.mask is not None else None
+                        if m3d:
+                            labels.append(f"{det.name} {det.confidence:.0%} {m3d['x']:.1f} {m3d['y']:.1f} {m3d['z']:.1f} [{m3d['vx']:.2f}x{m3d['vy']:.2f}x{m3d['vz']:.2f}]")
                         else:
-                            labels.append(f"{det.name} {det.confidence:.0%}")
+                            coords = self.get_real_coords(det.center_x, det.center_y)
+                            if coords:
+                                labels.append(f"{det.name} {det.confidence:.0%} {coords['x']:.1f} {coords['y']:.1f} {coords['z']:.1f}")
+                            else:
+                                labels.append(f"{det.name} {det.confidence:.0%}")
                     frame = self.detector.annotate(frame, self._last_detections, labels=labels)
                 else:
                     frame = self.detector.annotate(frame, self._last_detections)

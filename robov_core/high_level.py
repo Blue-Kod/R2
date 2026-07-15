@@ -42,6 +42,9 @@ class RealObject:
     position: Optional[Position] = None
     bbox: Dict[str, int] = field(default_factory=dict)
     depth: float = 0.0
+    vx: float = 0.0
+    vy: float = 0.0
+    vz: float = 0.0
 
 # --- Configuration ---
 APP_VERSION = "0.2"
@@ -781,6 +784,9 @@ def precise_find(names: str) -> List[RealObject]:
             position=pos,
             bbox=r.get("bbox", {}),
             depth=r.get("depth", 0.0),
+            vx=r.get("vx", 0.0),
+            vy=r.get("vy", 0.0),
+            vz=r.get("vz", 0.0),
         )
         objects.append(obj)
     return objects
