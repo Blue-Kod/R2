@@ -282,7 +282,9 @@ class ObjectDetector:
             raw_mask = mask_coeffs @ proto.reshape(proto.shape[0], -1)
             raw_mask = raw_mask.reshape(proto.shape[1], proto.shape[2])
             raw_mask = 1.0 / (1.0 + np.exp(-raw_mask))
-            mask_bin = (raw_mask > 0.5).astype(np.uint8)
+            resized = cv2.resize(raw_mask, (self._input_size, self._input_size),
+                                 interpolation=cv2.INTER_LINEAR)
+            mask_bin = (resized > 0.5).astype(np.uint8)
             new_h = int(orig_h * ratio)
             new_w = int(orig_w * ratio)
             valid_mask = mask_bin[pad_h:pad_h + new_h, pad_w:pad_w + new_w]
@@ -294,11 +296,20 @@ class ObjectDetector:
                 full_mask = full_mask & clip
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             full_mask = cv2.morphologyEx(full_mask, cv2.MORPH_OPEN, kernel)
-            n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(full_mask, connectivity=8)
-            if n_labels > 1:
-                areas = stats[1:, cv2.CC_STAT_AREA]
-                best = int(np.argmax(areas)) + 1
-                full_mask = (labels == best).astype(np.uint8)
+            n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+                full_mask, connectivity=8
+            )
+            if n_labels > 1 and bbox is not None:
+                bx1, by1, bx2, by2 = bbox
+                bbox_area = max(1, (bx2 - bx1) * (by2 - by1))
+                keep = np.ones(n_labels, dtype=bool)
+                keep[0] = False
+                for i in range(1, n_labels):
+                    if stats[i, cv2.CC_STAT_AREA] < bbox_area * 0.05:
+                        keep[i] = False
+                if not keep.all():
+                    good = np.where(keep)[0]
+                    full_mask = np.isin(labels, good).astype(np.uint8)
             return full_mask
         except Exception:
             return None
