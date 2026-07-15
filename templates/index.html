@@ -35,6 +35,16 @@
         #video-container { width: 100%; height: var(--cam-h); position: relative; border-radius: 16px; border: 1px solid var(--line); background: #070707; overflow: hidden; display: flex; justify-content: center; align-items: center; }
         #video-feed { width: 100%; height: 100%; object-fit: cover; }
         .depth-tooltip { position: absolute; background: #111; color: white; border: 1px solid #3a3a3a; border-radius: 12px; padding: 5px 10px; font-size: 12px; font-weight: 500; pointer-events: none; z-index: 1000; }
+        .cursor-info {
+            position: absolute; z-index: 10;
+            background: rgba(18, 18, 18, 0.92); border: 1px solid var(--line);
+            border-radius: 10px; padding: 8px 14px; font-size: 12px;
+            color: var(--muted); backdrop-filter: blur(8px);
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            pointer-events: none; opacity: 0; transition: opacity 0.15s;
+            white-space: pre-line; line-height: 1.5;
+        }
+        .cursor-info.visible { opacity: 1; }
         .hidden { display: none !important; }
         .servo-controls { overflow-y: auto; flex: 1; padding-right: 6px; }
         .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
@@ -135,6 +145,7 @@
             <div id="video-container">
                 <img id="video-feed" src="/video_feed" alt="Video Stream" crossorigin="anonymous">
                 <div class="depth-tooltip hidden" id="depthTooltip">Загрузка...</div>
+                <div class="cursor-info" id="cursorInfo"></div>
             </div>
 
             <div class="control-row" style="width:100%; margin-top: 12px;">
@@ -149,7 +160,6 @@
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <label><input type="checkbox" id="depthEnabled"> Глубина</label>
-                    <label><input type="checkbox" id="hudEnabled"> HUD</label>
                     <label><input type="checkbox" id="wlsEnabled"> WLS</label>
                 </div>
             </div>
@@ -216,7 +226,6 @@ const eyeLeft = document.getElementById('eyeLeft');
 const eyeRight = document.getElementById('eyeRight');
 const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
-const hudEnabledChk = document.getElementById('hudEnabled');
 const wlsEnabledChk = document.getElementById('wlsEnabled');
 const terminalOutputDiv = document.getElementById('terminal-output');
 const terminalInput = document.getElementById('terminal-command');
@@ -241,7 +250,6 @@ function restoreState() {
     if (serverData.camera_params) {
         const cp = serverData.camera_params;
         depthEnabledChk.checked = cp.depth_enabled || false;
-        hudEnabledChk.checked = cp.hud_enabled || false;
         wlsEnabledChk.checked = cp.wls_enabled || false;
         depthAlphaSlider.value = (cp.alpha_depth || 0.3) * 100;
         eyeLeft.checked = cp.show_left !== false;
@@ -288,7 +296,6 @@ async function sendCameraParams() {
     try {
         await fetch('/api/camera/params', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
             depth_enabled: depthEnabledChk.checked,
-            hud_enabled: hudEnabledChk.checked,
             wls_enabled: wlsEnabledChk.checked,
         })});
     } catch(e) {}
@@ -474,7 +481,6 @@ function attachEvents() {
     eyeRight.onchange = updateRenderParams;
     depthAlphaSlider.oninput = updateRenderParams;
     depthEnabledChk.onchange = sendCameraParams;
-    hudEnabledChk.onchange = sendCameraParams;
     wlsEnabledChk.onchange = sendCameraParams;
 
     terminalInput.onkeydown = (e) => {
@@ -583,6 +589,49 @@ function attachEvents() {
         } catch(e) { alert('Ошибка: '+e.message); updateBtn.disabled = false; updateBtn.textContent = '↻'; }
     };
 }
+
+// ===================== CURSOR XYZ =====================
+const cursorInfoEl = document.getElementById('cursorInfo');
+let cursorTimer = null;
+
+async function fetchCursorXYZ(px, py, screenX, screenY) {
+    try {
+        const r = await fetch('/api/cursor_xyz', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({x: px, y: py})
+        });
+        const d = await r.json();
+        if (d.valid) {
+            cursorInfoEl.textContent = `X: ${d.x} m\nY: ${d.y} m\nZ: ${d.z} m`;
+        } else {
+            cursorInfoEl.textContent = 'X: --  Y: --  Z: --';
+        }
+        const container = document.getElementById('video-container');
+        const rect = container.getBoundingClientRect();
+        let tx = screenX - rect.left + 16;
+        let ty = screenY - rect.top - 40;
+        if (tx + 150 > rect.width) tx = screenX - rect.left - 160;
+        if (ty < 0) ty = screenY - rect.top + 20;
+        cursorInfoEl.style.left = tx + 'px';
+        cursorInfoEl.style.top = ty + 'px';
+        cursorInfoEl.classList.add('visible');
+    } catch(e) {}
+}
+
+document.getElementById('video-container').addEventListener('mousemove', (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relX = e.clientX - rect.left;
+    const relY = e.clientY - rect.top;
+    const imgX = Math.round(relX / rect.width * 640);
+    const imgY = Math.round(relY / rect.height * 360);
+    if (cursorTimer) clearTimeout(cursorTimer);
+    cursorTimer = setTimeout(() => fetchCursorXYZ(imgX, imgY, e.clientX, e.clientY), 80);
+});
+
+document.getElementById('video-container').addEventListener('mouseleave', () => {
+    cursorInfoEl.classList.remove('visible');
+});
 
 // ===================== INIT =====================
 async function init() {

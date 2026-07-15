@@ -313,10 +313,11 @@ class RobotFace:
                         if event.key in [pygame.K_ESCAPE, pygame.K_q]:
                             self.state.stop()
                 elif event.type == pygame.MOUSEBUTTONDOWN or event.type == pygame.FINGERDOWN:
-                    mx, my = event.pos
                     if event.type == pygame.FINGERDOWN:
-                        mx = int(mx * sw)
-                        my = int(my * sh)
+                        mx = int(event.x * sw)
+                        my = int(event.y * sh)
+                    else:
+                        mx, my = event.pos
 
                     # Handle pygame keyboard first if visible
                     if self._pygame_keyboard and self._pygame_keyboard.visible:
