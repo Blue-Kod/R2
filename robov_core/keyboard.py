@@ -187,8 +187,11 @@ class PygameKeyboard:
         if not self.visible:
             return None
 
-        if event.type == pygame.MOUSEBUTTONDOWN or event.type == pygame.FINGERDOWN:
-            mx, my = event.pos
+        if event.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+            pos = getattr(event, 'pos', None)
+            if pos is None:
+                return None
+            mx, my = pos
             sw, sh = self.screen_w, self.screen_h
             if event.type == pygame.FINGERDOWN:
                 mx = int(mx * sw)
