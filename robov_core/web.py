@@ -660,6 +660,7 @@ def create_app() -> Flask:
             "x": round(coords["x"], 3),
             "y": round(coords["y"], 3),
             "z": round(coords["z"], 3),
+            "depth": round(coords["depth"], 3),
             "valid": True,
         })
 

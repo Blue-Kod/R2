@@ -258,7 +258,7 @@ class StereoCamera:
             y_real = (y_px - self.Kl[1, 2]) * depth_mm / fy
             z_real = depth_mm
 
-            return {'x': float(x_real) / 1000.0, 'y': float(y_real) / 1000.0, 'z': float(z_real) / 1000.0}
+            return {'x': float(x_real) / 1000.0, 'y': float(y_real) / 1000.0, 'z': float(z_real) / 1000.0, 'depth': float(depth_mm) / 1000.0}
 
         except Exception:
             return None

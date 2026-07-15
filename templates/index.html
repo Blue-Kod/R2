@@ -160,7 +160,6 @@
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <label><input type="checkbox" id="depthEnabled"> Глубина</label>
-                    <label><input type="checkbox" id="wlsEnabled"> WLS</label>
                 </div>
             </div>
         </main>
@@ -226,7 +225,6 @@ const eyeLeft = document.getElementById('eyeLeft');
 const eyeRight = document.getElementById('eyeRight');
 const depthAlphaSlider = document.getElementById('depthAlpha');
 const depthEnabledChk = document.getElementById('depthEnabled');
-const wlsEnabledChk = document.getElementById('wlsEnabled');
 const terminalOutputDiv = document.getElementById('terminal-output');
 const terminalInput = document.getElementById('terminal-command');
 const sshHostDisplay = document.getElementById('sshHostDisplay');
@@ -250,7 +248,6 @@ function restoreState() {
     if (serverData.camera_params) {
         const cp = serverData.camera_params;
         depthEnabledChk.checked = cp.depth_enabled || false;
-        wlsEnabledChk.checked = cp.wls_enabled || false;
         depthAlphaSlider.value = (cp.alpha_depth || 0.3) * 100;
         eyeLeft.checked = cp.show_left !== false;
         eyeRight.checked = !eyeLeft.checked;
@@ -296,7 +293,7 @@ async function sendCameraParams() {
     try {
         await fetch('/api/camera/params', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
             depth_enabled: depthEnabledChk.checked,
-            wls_enabled: wlsEnabledChk.checked,
+            wls_enabled: true,
         })});
     } catch(e) {}
 }
@@ -481,7 +478,6 @@ function attachEvents() {
     eyeRight.onchange = updateRenderParams;
     depthAlphaSlider.oninput = updateRenderParams;
     depthEnabledChk.onchange = sendCameraParams;
-    wlsEnabledChk.onchange = sendCameraParams;
 
     terminalInput.onkeydown = (e) => {
         if (e.key === 'Enter') {
@@ -595,6 +591,10 @@ const cursorInfoEl = document.getElementById('cursorInfo');
 let cursorTimer = null;
 
 async function fetchCursorXYZ(px, py, screenX, screenY) {
+    if (!depthEnabledChk.checked) {
+        cursorInfoEl.classList.remove('visible');
+        return;
+    }
     try {
         const r = await fetch('/api/cursor_xyz', {
             method: 'POST',
@@ -603,9 +603,9 @@ async function fetchCursorXYZ(px, py, screenX, screenY) {
         });
         const d = await r.json();
         if (d.valid) {
-            cursorInfoEl.textContent = `X: ${d.x} m\nY: ${d.y} m\nZ: ${d.z} m`;
+            cursorInfoEl.textContent = `X: ${d.x} m\nY: ${d.y} m\nZ: ${d.z} m\nD: ${d.depth} m`;
         } else {
-            cursorInfoEl.textContent = 'X: --  Y: --  Z: --';
+            cursorInfoEl.textContent = 'X: --  Y: --  Z: --  D: --';
         }
         const container = document.getElementById('video-container');
         const rect = container.getBoundingClientRect();
