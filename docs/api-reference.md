@@ -2,7 +2,7 @@
 
 Этот документ предоставляет полную документацию по всем эндпоинтам и Python интерфейсам API робота R2.
 
-## 🌐 REST API Эндпоинты
+## REST API Эндпоинты
 
 Робот R2 предоставляет RESTful API через Flask веб-сервер, обычно работающий на порту 80.
 
@@ -10,17 +10,13 @@
 ```
 http://<robot-ip>/
 ```
-Вы можете узнать IP робота, нажав внизу его экрана с глазами.
-
-### Аутентификация
-В настоящее время аутентификация не требуется. Все эндпоинты доступны без аутентификации.
 
 ---
 
-## 📊 Системная информация
+## Системная информация
 
 ### GET `/api/data`
-Возвращает снимок состояния системы, включая CPU, память, температуру и последние логи.
+Возвращает снимок состояния системы.
 
 **Ответ:**
 ```json
@@ -29,28 +25,19 @@ http://<robot-ip>/
   "memory_usage": 45.2,
   "temperature": "45.0°C",
   "fps": 15.0,
-  "logs": ["Запись лога 1", "Запись лога 2", ...]
+  "logs": ["..."]
 }
 ```
 
 ### GET `/api/ip`
 Возвращает IP-адрес робота.
 
-**Ответ:**
-```json
-{
-  "ip": "192.168.1.100"
-}
-```
-
 ---
 
-## 🎥 Управление камерой
+## Камера и стереозрение
 
 ### GET `/video_feed`
-Предоставляет MJPEG видеопоток со стереокамеры.
-
-**Ответ:** Multipart поток с JPEG кадрами
+MJPEG видеопоток со стереокамеры (с CLAHE выравниванием яркости).
 
 ### GET `/api/camera/params`
 Получить текущие параметры камеры.
@@ -59,440 +46,259 @@ http://<robot-ip>/
 ```json
 {
   "depth_enabled": false,
+  "detection_enabled": false,
+  "detection_prompts": "",
   "alpha_depth": 0.3,
   "show_left": true,
-  "num_disp": 128
+  "num_disp": 128,
+  "window_size": 11
 }
 ```
 
 ### POST `/api/camera/params`
-Обновить параметры камеры.
-
-**Тело запроса:**
-```json
-{
-  "depth_enabled": true,
-  "alpha_depth": 0.5,
-  "show_left": false,
-  "num_disp": 64
-}
-```
+Обновить параметры камеры. Доступные ключи:
+- `depth_enabled` (bool) — включить наложение карты глубины
+- `detection_enabled` (bool) — включить распознавание объектов
+- `detection_prompts` (str) — фильтр классов через запятую (например `"person, dog, cup"`)
+- `alpha_depth` (float) — прозрачность наложения глубины (0.0–1.0)
+- `show_left` (bool) — показать левую камеру
+- `num_disp`, `window_size`, `min_disp` — параметры SGBM-матчера
 
 ### POST `/api/depth`
-Получить измерение глубины в указанных координатах.
+Измерение глубины в пикселях.
 
-**Тело запроса:**
-```json
-{
-  "x": 320,
-  "y": 240
-}
+**Тело:** `{"x": 320, "y": 240}`  
+**Ответ:** `{"depth": 1.25}` (метры)
+
+### GET `/api/cursor_xyz`
+3D-координаты под курсором мыши. Обновляется при движении мыши в браузере.
+
+---
+
+## Компьютерное зрение
+
+### ObjectDetector (`robov_core/detector.py`)
+
+ONNX-детектор на базе YOLOE-11s-seg с встроенными масками.
+
+**Модели:**
+| Модель | Размер | Вход | Скорость (x86) | Описание |
+|--------|--------|------|----------------|----------|
+| `yoloe-11s-seg-640.onnx` | 39 MB | 640x640 | ~300ms | Точная, по умолчанию |
+| `yoloe-11s-seg-320.onnx` | 39 MB | 320x320 | ~80ms | Быстрая |
+| `yolov8s.onnx` | 43 MB | 640x640 | ~150ms | COCO 80 классов (fallback) |
+
+**79 распознаваемых классов:**
+person, face, hand, dog, cat, rodent, laptop, monitor, keyboard, mouse, phone, remote control, headphones, speaker, charger, pen, pencil, scissors, notebook, book, calculator, cup, bottle, glass, plate, bowl, fork, spoon, knife, pan, kettle, microwave, refrigerator, sink, banana, apple, orange, egg, bread, can, chair, table, desk, sofa, bed, shelf, cabinet, stool, lamp, door, window, trash can, bucket, towel, pillow, blanket, clock, vase, plant pot, hat, glasses, bag, shoe, screwdriver, hammer, wrench, measuring tape, box, key, flashlight, ball, umbrella, toilet, bathtub, soap, toothbrush, comb, pill, hair dryer
+
+```python
+from robov_core.detector import ObjectDetector, Detection
+
+det = ObjectDetector()  # Автоматически выбирает лучшую модель
+det = ObjectDetector("models/yoloe-11s-seg-320.onnx")  # Указать модель вручную
+
+# Детекция
+detections: List[Detection] = det.detect(frame_bgr)
+# Detection: name, class_id, confidence, x1,y1,x2,y2, center_x, center_y, mask(np.ndarray|None)
+
+# Поиск по имени
+matched = det.find("cup", frame_bgr)  # Возвращает List[Detection], отсортированные по conf
+
+# Смена модели на лету
+det.reinit_object_detection("yoloe-11s-seg-320.onnx")  # → True/False
+det.model_name  # Текущее имя файла модели
+
+# Визуализация
+vis = det.annotate(frame, detections, labels=None)
+# Маски отображаются полупрозрачным оверлеем с контурами
+# Лейблы: автоматические или кастомные
 ```
 
-**Ответ:**
-```json
-{
-  "depth": 1250.5
-}
+**Декодирование масок:**
+Маски декодируются из prototype-мапы (32 канала) через матричное умножение coefficients @ proto → sigmoid → resize → clip to bbox → morphological open → connected components (фильтрация кластеров < 5% bbox-площади).
+
+### StereoCamera (`robov_core/camera.py`)
+
+Стереокамера с клавибровкой, ректификацией, глубиной и детекцией.
+
+```python
+camera = StereoCamera("cam_params.json", source=0)
+
+# Калибровка: Kl, Kr, Dl, Dr, R, T, Q — из cam_params.json
+# Ректификация: cv2.fisheye.stereoRectify, balance=0.8
+# img_size = (640, 360) — размер обработки
+# imSize = (1280, 720) — реальное разрешение камеры
+```
+
+**Ключевые методы:**
+
+```python
+# Получить ректифицированные кадры
+left, right = camera.get_rectified_frames()
+
+# Расчёт диспаритета
+disp = camera.compute_disparity(left, right)
+
+# Глубина в точке (мм → метры)
+depth_m = camera.get_depth_at(disp, x, y) / 1000
+
+# 3D-координаты в метрах
+coords = camera.get_real_coords(x_px, y_px)
+# → {'x': 0.5, 'y': -0.2, 'z': 1.2, 'depth': 1.2}
+
+# 3D по маске (с эрозией, фильтрацией фона)
+m3d = camera._get_mask_3d(mask, erode_px=3)
+# → {'x': ..., 'y': ..., 'z': ..., 'vx': ..., 'vy': ..., 'vz': ..., 'n_points': ...}
+```
+
+**Детекция + глубина (Python API):**
+
+```python
+# find() — найти один объект по имени
+result = camera.find("dog")
+# → {'name': 'dog', 'confidence': 0.92, 'bbox': {...}, 'x': 0.3, 'y': -0.1, 'z': 1.5,
+#    'vx': 0.2, 'vy': 0.4, 'vz': 0.3, 'depth': 1.5}
+
+# scan() — найти все объекты по фильтру
+results = camera.scan(prompts="person, dog, cup")
+# → [{'name': 'person', 'confidence': 0.95, 'bbox': {...}, 'x': ..., ...}, ...]
+```
+
+**Overlay-система:**
+Результаты `find()` и `scan()` автоматически отображаются на видеопотоке в браузере как полупрозрачный оверлей на 3 секунды с плавным затуханием.
+
+```python
+camera._push_overlay([{"name": "dog", "confidence": 0.9, "bbox": {"x1": 100, ...}}])
+camera._overlay_duration = 3.0  # Секунды
+```
+
+**CLAHE (компенсация backlit):**
+На каждом кадре применяется CLAHE (clipLimit=2.0, tileGridSize=8x8) через L-канал LAB. Выравнивает яркость при_backlit-сценах.
+
+### Глубина (`robov_core/depth_providers.py`)
+
+```python
+from robov_core.depth_providers import StereoSGBMDepthProvider
+
+provider = StereoSGBMDepthProvider()
+provider.setup(num_disp=160, window_size=11, min_disp=0, wls_enabled=True)
+result = provider.compute(gray_left, gray_right)
+disp = result.disparity  # int16, /16.0 → пиксели диспаритета
 ```
 
 ---
 
-## 🦾 Управление сервоприводами
+## Управление сервоприводами
 
 ### POST `/api/servo/<channel>/<angle>`
-Установить угол сервопривода для указанного канала.
-
-**Параметры:**
-- `channel` (int): Канал сервопривода (0-7)
-- `angle` (int): Целевой угол в градусах
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "channel": 0,
-  "angle": 90
-}
-```
-
-**Ответ с ошибкой:**
-```json
-{
-  "error": "Угол должен быть 0-180"
-}
-```
+Установить угол сервопривода (0–180).
 
 ---
 
-## 😊 Эмоции и отображение
+## Эмоции и отображение
 
-### GET `/api/emote`
-Получить текущую эмоцию и список поддерживаемых эмоций.
+### GET/POST `/api/emote`
+Получить/установить эмоцию. Список: happy, neutral, scared, spooked, sleep.
 
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "emote": "happy",
-  "supported": ["happy", "neutral", "scared"]
-}
-```
-
-### POST `/api/emote`
-Установить отображение эмоции робота.
-
-**Тело запроса:**
-```json
-{
-  "emotion_name": "happy"
-}
-```
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "emote": "happy"
-}
-```
-
-### GET `/api/eyes`
-Получить текущую позицию глаз.
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "x": 0.0,
-  "y": 0.0
-}
-```
-
-### POST `/api/eyes`
-Установить позицию глаз.
-
-**Тело запроса:**
-```json
-{
-  "x": 0.5,
-  "y": -0.3
-}
-```
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "x": 0.5,
-  "y": -0.3
-}
-```
+### GET/POST `/api/eyes`
+Получить/установить позицию глаз (x, y от -1.0 до 1.0).
 
 ---
 
-## 🖥️ Терминал и оболочка
+## Терминал
 
 ### POST `/api/cmd/send`
-Отправить команду в оболочку робота.
-
-**Тело запроса:**
-```json
-{
-  "command": "ls -la"
-}
-```
-
-**Ответ:**
-```json
-{
-  "status": "ok"
-}
-```
+Отправить команду в shell.
 
 ### GET `/api/cmd/output`
-Получить вывод команды оболочки.
-
-**Ответ:**
-```json
-{
-  "output": "Вывод команды здесь..."
-}
-```
+Получить вывод shell.
 
 ### POST `/api/python/exec`
-Выполнить Python код на роботе.
-
-**Тело запроса:**
-```json
-{
-  "code": "print('Привет от робота!')"
-}
-```
-
-**Ответ:**
-```json
-{
-  "stdout": "Привет от робота!\n",
-  "stderr": ""
-}
-```
+Выполнить Python-код. Агент имеет доступ ко всем функциям робота.
 
 ---
 
-## 📁 Управление файлами
+## AI-агент
 
-### GET `/api/files`
-Получить список файлов и директорий.
+AI-агент ( EveryLLM ) имеет доступ к следующим функциям через Python-окружение:
 
-**Параметры запроса:**
-- `path` (string): Путь к директории (по умолчанию: "/")
+```python
+# Детекция и глубина
+find("person")           # → dict с name, bbox, x,y,z, vx,vy,vz
+precise_find("cup, dog") # → List[RealObject]
+scan("person, dog")      # → List[RealObject]
+
+# Навигация и манипуляции (stubs)
+goto(target)             # → bool (заглушка)
+grab(target)             # → bool (заглушка)
+move_arm_to(target)      # → bool (заглушка)
+
+# Сервоприводы
+set_servo_physical(channel, angle)  # Физический угол с инверсией
+get_servo_angles_physical()
+
+# Речь
+speak("Привет!")         # TTS через Piper (русский)
+
+# Эмоции и глаза
+set_emote("happy")
+set_eyes_position(0.5, -0.3)
+
+# Терминал
+shell_start(), shell_write(cmd), shell_output()
+```
+
+### Dataclass RealObject
+
+```python
+@dataclass
+class RealObject:
+    name: str          # "dog"
+    confidence: float  # 0.92
+    position: Position # Position(x=0.3, y=-0.1, z=1.5) — в метрах
+    bbox: dict         # {"x1": 100, "y1": 50, "x2": 300, "y2": 400}
+    depth: float       # 1.5 (метры)
+    vx: float          # 0.2 — ширина bounding volume (метры)
+    vy: float          # 0.4 — высота
+    vz: float          # 0.3 — глубина
+```
+
+### Переключение модели детекции
+
+```python
+reinit_object_detection("yoloe-11s-seg-320.onnx")  # Быстрая
+reinit_object_detection("yoloe-11s-seg-640.onnx")  # Точная (по умолчанию)
+reinit_object_detection("yolov8s.onnx")             # COCO fallback
+```
+
+### REST API для детекции
+
+**GET `/api/scan?prompts=person,dog`** — сканирование сцену.
 
 **Ответ:**
 ```json
 {
-  "path": "/home/robot",
-  "items": [
+  "objects": [
     {
-      "name": "documents",
-      "path": "/home/robot/documents",
-      "type": "directory",
-      "size": 0,
-      "modified": 1640995200,
-      "permissions": "755"
-    },
-    {
-      "name": "config.txt",
-      "path": "/home/robot/config.txt",
-      "type": "file",
-      "size": 1024,
-      "modified": 1640995200,
-      "permissions": "644"
+      "name": "person",
+      "confidence": 0.95,
+      "bbox": {"x1": 100, "y1": 50, "x2": 300, "y2": 400},
+      "x": 0.3, "y": -0.1, "z": 1.5, "depth": 1.5,
+      "vx": 0.2, "vy": 0.4, "vz": 0.3
     }
-  ]
+  ],
+  "count": 1
 }
 ```
 
-### GET `/api/files/read`
-Прочитать содержимое файла.
+**POST `/api/detection/model`** — смена модели.
 
-**Параметры запроса:**
-- `path` (string): Путь к файлу
-
-**Ответ:**
-```json
-{
-  "content": "Содержимое файла здесь...",
-  "encoding": "utf-8",
-  "size": 1024
-}
-```
-
-### POST `/api/files/write`
-Записать содержимое файла.
-
-**Тело запроса:**
-```json
-{
-  "path": "/home/robot/test.txt",
-  "content": "Привет, мир!"
-}
-```
-
-**Ответ:**
-```json
-{
-  "success": true,
-  "message": "Файл успешно сохранен",
-  "size": 13
-}
-```
-
-### POST `/api/files/create`
-Создать новый файл или директорию.
-
-**Тело запроса:**
-```json
-{
-  "path": "/home/robot",
-  "name": "new_directory",
-  "type": "directory"
-}
-```
-
-**Ответ:**
-```json
-{
-  "success": true,
-  "message": "Директория успешно создана",
-  "path": "/home/robot/new_directory"
-}
-```
-
-### POST `/api/files/delete`
-Удалить файл или директорию.
-
-**Тело запроса:**
-```json
-{
-  "path": "/home/robot/old_file.txt"
-}
-```
-
-**Ответ:**
-```json
-{
-  "success": true,
-  "message": "Успешно удалено"
-}
-```
-
-### POST `/api/files/rename`
-Переименовать файл или директорию.
-
-**Тело запроса:**
-```json
-{
-  "old_path": "/home/robot/old_name.txt",
-  "new_name": "new_name.txt"
-}
-```
-
-**Ответ:**
-```json
-{
-  "success": true,
-  "message": "Успешно переименовано",
-  "new_path": "/home/robot/new_name.txt"
-}
-```
-
-### POST `/api/files/upload`
-Загрузить файлы.
-
-**Данные формы:**
-- `path` (string): Целевая директория
-- `files` (file[]): Файлы для загрузки
-
-**Ответ:**
-```json
-{
-  "success": true,
-  "uploaded_count": 2,
-  "total_files": 2
-}
-```
-
-### GET `/api/files/download`
-Скачать файл.
-
-**Параметры запроса:**
-- `path` (string): Путь к файлу
-
-**Ответ:** Скачивание файла с соответствующим MIME типом
+**Тело:** `{"model": "yoloe-11s-seg-320.onnx"}`
 
 ---
 
-## 🔧 Управление системой
-
-### POST `/api/update`
-Обновить систему робота.
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "message": "Обновление начато"
-}
-```
-
-### POST `/api/shutdown`
-Выключить систему робота.
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "message": "Завершение работы"
-}
-```
-
----
-
-## 🐍 Python API
-
-Робот также предоставляет Python API для прямой интеграции:
-
-### Основные функции
-
-```python
-from robov_core.high_level import *  # В веб управлении не требуется
-
-# Запуск фоновых сервисов
-start_background()
-
-# Управление сервоприводами
-angle(channel, angle)        # Установить угол сервопривода
-get_servo_angles()           # Получить все необработанные углы сервоприводов
-get_servo_angles_physical()  # Получить физические углы с корректной инверсией, рекомендуется
-
-# Камера
-get_stereo_camera()       # Получить экземпляр камеры
-get_raw_frame(left=True)  # Получить сырой кадр камеры
-
-# Эмоции
-emote(emotion_name)      # Установить эмоцию
-get_emote()              # Получить текущую эмоцию
-set_eyes_position(x, y)  # Установить позицию глаз
-get_eyes_position()      # Получить позицию глаз
-
-# Система
-health_snapshot()      # Получить снимок состояния системы
-ip_address()           # Получить IP-адрес
-get_logs(count)        # Получить системные логи
-```
-
-### API камеры
-
-```python
-from robov_core.camera import StereoCamera
-
-camera = StereoCamera("calib_params.json", source=0)
-
-# Получить кадры
-left_frame, right_frame = camera.get_rectified_frames()
-
-# Расчет глубины
-disparity_map = camera.compute_disparity(left_frame, right_frame)
-depth_mm = camera.get_depth_at_point(disparity_map, x, y)
-
-# Координаты реального мира
-coords = camera.get_real_coords(x_px, y_px)
-# Возвращает: {'x': 0.5, 'y': 0.3, 'z': 1.2} в метрах
-```
-
-### API AI
-
-```python
-from robov_core.ai import command, get_current_response, enable_ai_audio
-
-# Отправить команду в AI. Он сам способен исполнять код, управлять роботом и выполнять команды. Имеет полный доступ.
-command("Скажи привет")
-
-# Получить накопленный ответ
-response = get_current_response()
-
-# Включить/выключить аудио
-enable_ai_audio(True)
-```
-
----
-
-## 📝 Коды ответов
+## Коды ответов
 
 - **200 OK**: Запрос успешен
 - **400 Bad Request**: Недействительные параметры
-- **403 Forbidden**: Доступ запрещен
-- **404 Not Found**: Ресурс не найден
-- **409 Conflict**: Ресурс уже существует
 - **500 Internal Server Error**: Ошибка сервера

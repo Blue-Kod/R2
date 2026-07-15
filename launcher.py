@@ -69,7 +69,7 @@ LAS2_WEIGHT_DIR = "models/las2/checkpoints"
 LAS2_HF_REPO = "tomtomtommi/LiteAnyStereoV2"
 LAS2_WEIGHT_FILENAME = "LAS2_S.pth"
 LAS2_ONNX_FILENAME = "las2_s_640x384.onnx"
-LAS2_ONNX_PATH = "models/las2_s_640x384.onnx"
+LAS2_ONNX_PATH = "dev/las2_s_640x384.onnx"
 LAS2_RKNN_PATH = "models/las2_s_640x384.rknn"
 
 def log_message(*args):

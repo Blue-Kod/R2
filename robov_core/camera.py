@@ -344,11 +344,23 @@ class StereoCamera:
 
     # --- Shared frame buffer ---
 
-    def find(self, name: str) -> Optional[dict]:
+    def _get_detection_frame(self) -> Optional[np.ndarray]:
+        with self.lock:
+            if self._latest_left is not None:
+                return self._latest_left.copy()
         left_frame, right_frame = self.get_rectified_frames()
         if left_frame is None:
             return None
-        detections = self.detector.find(name, left_frame)
+        frame = cv2.resize(left_frame, self.img_size)
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        lab[:, :, 0] = self._clahe.apply(lab[:, :, 0])
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    def find(self, name: str) -> Optional[dict]:
+        det_frame = self._get_detection_frame()
+        if det_frame is None:
+            return None
+        detections = self.detector.find(name, det_frame)
         if not detections:
             return None
         det = detections[0]
@@ -381,11 +393,11 @@ class StereoCamera:
         now = time.time()
         if self._scan_cache is not None and (now - self._scan_cache_time) < max_age:
             return self._scan_cache
-        left_frame, right_frame = self.get_rectified_frames()
-        if left_frame is None:
+        det_frame = self._get_detection_frame()
+        if det_frame is None:
             return []
         prompts = prompts or self.detection_prompts
-        all_dets = self.detector.detect(left_frame)
+        all_dets = self.detector.detect(det_frame)
         if prompts:
             all_dets = self._filter_by_prompts(all_dets, prompts)
         results = []
