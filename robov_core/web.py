@@ -29,6 +29,7 @@ from robov_core.high_level import (
     set_reasoning, get_reasoning,
     get_rerun_viewer,
     get_depth_provider, set_depth_provider,
+    reinit_object_detection as hl_reinit_object_detection,
     scan as hl_scan,
 )
 
@@ -350,6 +351,9 @@ def create_app() -> Flask:
                 "name": obj.name,
                 "confidence": obj.confidence,
                 "bbox": obj.bbox,
+                "vx": round(obj.vx, 3),
+                "vy": round(obj.vy, 3),
+                "vz": round(obj.vz, 3),
             }
             if obj.position:
                 item["x"] = round(obj.position.x, 3)
@@ -358,6 +362,19 @@ def create_app() -> Flask:
                 item["depth"] = round(obj.depth, 3)
             objects.append(item)
         return jsonify({"objects": objects, "count": len(objects)})
+
+    @app.route("/api/detection/model", methods=["POST"])
+    @require_auth
+    def api_set_detection_model():
+        from flask import request as flask_request
+        data = flask_request.get_json(silent=True) or {}
+        model_name = data.get("model", "").strip()
+        if not model_name:
+            return jsonify({"error": "model required"}), 400
+        ok = hl_reinit_object_detection(model_name)
+        if ok:
+            return jsonify({"ok": True, "model": model_name})
+        return jsonify({"error": f"failed to load {model_name}"}), 400
 
     # --- Servo ---
 

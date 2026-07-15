@@ -684,6 +684,7 @@ def start_background() -> None:
             "get_servo_angles_physical": get_servo_angles_physical,
             "set_emote": set_emote,
             "supported_emotes": supported_emotes,
+            "reinit_object_detection": reinit_object_detection,
         })
         log("AI agent initialized")
     except Exception as e:
@@ -911,6 +912,17 @@ def get_depth_provider():
     if _camera is None:
         return None
     return _camera.depth_provider.name if _camera.depth_provider else None
+
+
+def reinit_object_detection(model_name: str) -> bool:
+    if _camera is None:
+        return False
+    ok = _camera.detector.reinit_object_detection(model_name)
+    if ok:
+        log(f"Detection model switched to {model_name}")
+    else:
+        log(f"Failed to switch detection model to {model_name}")
+    return ok
 
 
 def set_depth_provider(name: str) -> bool:

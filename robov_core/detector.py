@@ -85,14 +85,16 @@ class ObjectDetector:
         self._num_dets: int = 300
         self._has_mask_output: bool = False
         self._mask_proto_name: str = ""
+        self._model_path: str = ""
 
         if model_path is None:
             base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            for candidate in ["yoloe-11s-seg-320.onnx", "yoloe-11s-seg.onnx", "yolov8s.onnx"]:
+            for candidate in ["yoloe-11s-seg-640.onnx", "yoloe-11s-seg-320.onnx", "yoloe-11s-seg.onnx", "yolov8s.onnx"]:
                 p = os.path.join(base, "models", candidate)
                 if os.path.isfile(p):
                     model_path = p
                     break
+        self._model_path = model_path
         self._load_names(model_path)
         if os.path.isfile(model_path):
             try:
@@ -148,6 +150,61 @@ class ObjectDetector:
     @property
     def last_infer_ms(self) -> float:
         return self._last_infer_ms
+
+    @property
+    def model_name(self) -> str:
+        return os.path.basename(self._model_path) if self._model_path else ""
+
+    def reinit_object_detection(self, model_name: str) -> bool:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_path = os.path.join(base, "models", model_name)
+        if not os.path.isfile(model_path):
+            return False
+        try:
+            self._session.close() if self._session else None
+        except Exception:
+            pass
+        self._session = None
+        self._model_path = model_path
+        self._names = {}
+        self._num_classes = 0
+        self._format = "raw"
+        self._num_dets = 300
+        self._has_mask_output = False
+        self._mask_proto_name = ""
+        self._input_name = ""
+        self._load_names(model_path)
+        try:
+            opts = ort.SessionOptions()
+            opts.inter_op_num_threads = 2
+            opts.intra_op_num_threads = 4
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            self._session = ort.InferenceSession(
+                model_path, opts, providers=["CPUExecutionProvider"]
+            )
+            self._input_name = self._session.get_inputs()[0].name
+            in_shape = self._session.get_inputs()[0].shape
+            if len(in_shape) >= 4 and isinstance(in_shape[2], int):
+                self._input_size = in_shape[2]
+            outputs = self._session.get_outputs()
+            out_shape = outputs[0].shape
+            if len(out_shape) == 3 and out_shape[2] <= 64:
+                self._format = "nms"
+                self._num_dets = int(out_shape[1])
+                self._num_classes = int(out_shape[2]) - 6
+            else:
+                self._format = "raw"
+                if len(out_shape) >= 2:
+                    self._num_classes = int(out_shape[1]) - 4
+            if len(outputs) >= 2:
+                self._has_mask_output = True
+                self._mask_proto_name = outputs[1].name
+            if self._num_classes == len(COCO_NAMES):
+                self._names = {i: n for i, n in enumerate(COCO_NAMES)}
+            return True
+        except Exception:
+            self._session = None
+            return False
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         if not self.available:
@@ -216,7 +273,8 @@ class ObjectDetector:
 
     def _decode_mask(self, mask_coeffs: np.ndarray, proto: np.ndarray,
                      orig_h: int, orig_w: int,
-                     ratio: float, pad_w: int, pad_h: int) -> Optional[np.ndarray]:
+                     ratio: float, pad_w: int, pad_h: int,
+                     bbox: Optional[Tuple[int, int, int, int]] = None) -> Optional[np.ndarray]:
         if proto is None or mask_coeffs is None:
             return None
         try:
@@ -229,6 +287,18 @@ class ObjectDetector:
             new_w = int(orig_w * ratio)
             valid_mask = mask_bin[pad_h:pad_h + new_h, pad_w:pad_w + new_w]
             full_mask = cv2.resize(valid_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+            if bbox is not None:
+                x1, y1, x2, y2 = bbox
+                clip = np.zeros_like(full_mask)
+                clip[max(0, y1):min(orig_h, y2), max(0, x1):min(orig_w, x2)] = 1
+                full_mask = full_mask & clip
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            full_mask = cv2.morphologyEx(full_mask, cv2.MORPH_OPEN, kernel)
+            n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(full_mask, connectivity=8)
+            if n_labels > 1:
+                areas = stats[1:, cv2.CC_STAT_AREA]
+                best = int(np.argmax(areas)) + 1
+                full_mask = (labels == best).astype(np.uint8)
             return full_mask
         except Exception:
             return None
@@ -258,7 +328,8 @@ class ObjectDetector:
             if proto is not None and len(row) > 6:
                 det_mask = self._decode_mask(
                     row[6:6 + proto.shape[0]], proto,
-                    oh, ow, ratio, pad_w, pad_h
+                    oh, ow, ratio, pad_w, pad_h,
+                    bbox=(ix1, iy1, ix2, iy2)
                 )
             results.append(Detection(
                 name=name, class_id=cid, confidence=float(conf),
