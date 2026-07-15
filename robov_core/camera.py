@@ -1,4 +1,5 @@
 import os
+import platform
 import threading
 import time
 import json
@@ -70,6 +71,7 @@ class StereoCamera:
         self._compute_scaled_intrinsics()
         self.depth_provider: DepthProvider = self._create_default_provider()
         self._init_provider()
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
     def _load_camera_parameters(self) -> None:
         try:
@@ -139,6 +141,13 @@ class StereoCamera:
             if self.cap.isOpened():
                 self.actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 self.actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if platform.system() == "Linux":
+                    try:
+                        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                        self.cap.set(cv2.CAP_PROP_EXPOSURE, -6)
+                    except Exception:
+                        pass
                 return True
             return False
         except Exception as e:
@@ -426,6 +435,9 @@ class StereoCamera:
             imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, cv2.INTER_LINEAR)
             frame = imgL if self.show_left else imgR
             frame = cv2.resize(frame, self.img_size)
+            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+            lab[:, :, 0] = self._clahe.apply(lab[:, :, 0])
+            frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
             grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
             grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
