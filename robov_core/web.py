@@ -267,6 +267,7 @@ def create_app() -> Flask:
                     "depth_enabled": camera.depth_enabled,
                     "hud_enabled": camera.hud_enabled,
                     "wls_enabled": camera.wls_enabled,
+                    "detection_enabled": camera.detection_enabled,
                     "alpha_depth": camera.alpha_depth,
                     "show_left": camera.show_left,
                     "num_disp": camera.num_disp,
@@ -277,6 +278,7 @@ def create_app() -> Flask:
             depth_enabled=data.get("depth_enabled"),
             hud_enabled=data.get("hud_enabled"),
             wls_enabled=data.get("wls_enabled"),
+            detection_enabled=data.get("detection_enabled"),
             alpha_depth=data.get("alpha_depth"),
             show_left=data.get("show_left"),
             num_disp=data.get("num_disp"),
@@ -297,6 +299,39 @@ def create_app() -> Flask:
         if set_depth_provider(provider_name):
             return jsonify({"status": "ok", "provider": provider_name.upper()})
         return jsonify({"error": f"Failed to switch to {provider_name}"}), 400
+
+    # --- Object Detection ---
+
+    @app.route("/api/detections")
+    @require_auth
+    def get_detections():
+        camera = get_stereo_camera()
+        if camera is None:
+            return jsonify({"detections": [], "available": False})
+        return jsonify({
+            "detections": [
+                {"name": d.name, "confidence": round(d.confidence, 3),
+                 "bbox": {"x1": d.x1, "y1": d.y1, "x2": d.x2, "y2": d.y2},
+                 "center": {"x": d.center_x, "y": d.center_y}}
+                for d in camera._last_detections
+            ],
+            "available": camera.detector.available,
+            "enabled": camera.detection_enabled,
+        })
+
+    @app.route("/api/find")
+    @require_auth
+    def api_find():
+        name = request.args.get("name", "").strip()
+        if not name:
+            return jsonify({"error": "Missing ?name="}), 400
+        camera = get_stereo_camera()
+        if camera is None:
+            return jsonify({"error": "Camera not available"}), 503
+        result = camera.find(name)
+        if result is None:
+            return jsonify({"found": False, "name": name})
+        return jsonify({"found": True, **result})
 
     # --- Servo ---
 

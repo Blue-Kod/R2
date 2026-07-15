@@ -646,6 +646,7 @@ def start_background() -> None:
             "get_stereo_camera": get_stereo_camera,
             "get_raw_frame": get_raw_frame,
             "get_coords_stereo": get_coords_stereo,
+            "find": find_object,
             "health_snapshot": health_snapshot,
             "ip_address": ip_address,
             "log": log,
@@ -735,6 +736,13 @@ def angle(servo: int, angle_value: int) -> bool:
     if _servo is None:
         return False
     return _servo.set_servo(servo, angle_value, smooth=True, step_delay=0.01, step_angle=2)
+
+
+def find_object(name: str) -> Optional[dict]:
+    camera = get_stereo_camera()
+    if camera is None:
+        return None
+    return camera.find(name)
 
 
 def get_coords_stereo(stereo_image, x: int, y: int) -> Optional[Tuple[float, float, float]]:

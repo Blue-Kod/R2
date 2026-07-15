@@ -11,6 +11,7 @@ os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 
 from robov_core.depth_providers import DepthProvider, StereoSGBMDepthProvider, DepthResult
+from robov_core.detector import ObjectDetector, Detection
 
 
 class CameraInitError(Exception):
@@ -45,6 +46,10 @@ class StereoCamera:
         self.min_disp: int = 0
         self.num_disp: int = 160
         self.depth_scale: float = 1.25
+
+        self.detection_enabled: bool = False
+        self.detector: ObjectDetector = ObjectDetector()
+        self._last_detections: list = []
 
         self.actual_width: int = 0
         self.actual_height: int = 0
@@ -204,7 +209,12 @@ class StereoCamera:
             if not self.initialize_camera():
                 frame = np.zeros((*self.img_size[::-1], 3), dtype=np.uint8)
                 cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
-                return frame
+        if self.detection_enabled and self.detector.available:
+            self._last_detections = self.detector.detect(frame)
+            if self._last_detections:
+                frame = self.detector.annotate(frame, self._last_detections)
+
+        return frame
 
         ret, raw = self.cap.read()
         if not ret:
@@ -274,11 +284,34 @@ class StereoCamera:
 
     # --- Shared frame buffer ---
 
+    def find(self, name: str) -> Optional[dict]:
+        left_frame, right_frame = self.get_rectified_frames()
+        if left_frame is None:
+            return None
+        detections = self.detector.find(name, left_frame)
+        if not detections:
+            return None
+        det = detections[0]
+        depth_mm = self.get_depth_at(det.center_x, det.center_y)
+        coords = self.get_real_coords(det.center_x, det.center_y)
+        result = {
+            "name": det.name,
+            "confidence": round(det.confidence, 3),
+            "bbox": {"x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2},
+            "center": {"x": det.center_x, "y": det.center_y},
+            "depth_mm": round(depth_mm, 1) if depth_mm else 0,
+        }
+        if coords:
+            result["x"] = round(coords["x"], 3)
+            result["y"] = round(coords["y"], 3)
+            result["z"] = round(coords["z"], 3)
+        return result
+
     def _process_raw_frame(self, raw: np.ndarray) -> np.ndarray:
         raw = cv2.rotate(raw, cv2.ROTATE_180)
         half_w = raw.shape[1] // 2
 
-        if self.depth_enabled or self.hud_enabled:
+        if self.depth_enabled or self.hud_enabled or self.detection_enabled:
             imgL = cv2.remap(raw[:, :half_w], self.lMapX, self.lMapY, cv2.INTER_LINEAR)
             imgR = cv2.remap(raw[:, half_w:], self.rMapX, self.rMapY, cv2.INTER_LINEAR)
             frame = imgL if self.show_left else imgR
