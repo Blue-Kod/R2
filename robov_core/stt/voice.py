@@ -7,6 +7,7 @@ import time
 import signal
 import threading
 import subprocess
+import urllib.request
 import numpy as np
 import sherpa_onnx
 from scipy.signal import lfilter
@@ -24,6 +25,7 @@ SPI_SPEED = 4000000
 GAIN = 64
 
 MODEL_DIR = os.path.join(_R2, "models", "vosk-model-small-streaming-ru")
+VAD_MODEL = os.path.join(_R2, "models", "silero_vad.onnx")
 CHUNK_MS = 200
 NUM_THREADS = 2
 
@@ -45,6 +47,35 @@ TRIGGER_WORDS = ["R2", "два", "робот"]
 HP_ALPHA = np.exp(-2 * np.pi * 150 / SAMPLE_RATE)
 HP_B = np.array([1.0, -1.0])
 HP_A = np.array([1.0, -HP_ALPHA])
+
+_HF_ASR_BASE = "https://huggingface.co/alphacep/vosk-model-small-streaming-ru/resolve/main"
+_ASR_FILES = {
+    "am-onnx/encoder.int8.onnx": f"{_HF_ASR_BASE}/am-onnx/encoder.int8.onnx",
+    "am-onnx/decoder.int8.onnx": f"{_HF_ASR_BASE}/am-onnx/decoder.int8.onnx",
+    "am-onnx/joiner.int8.onnx":  f"{_HF_ASR_BASE}/am-onnx/joiner.int8.onnx",
+    "lang/tokens.txt":            f"{_HF_ASR_BASE}/lang/tokens.txt",
+}
+_HF_VAD_URL = "https://huggingface.co/snakers4/silero-models/resolve/main/vad/silero_vad.onnx"
+
+
+def _ensure_models():
+    """Download model files if missing."""
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(VAD_MODEL), exist_ok=True)
+
+    for rel, url in _ASR_FILES.items():
+        dest = os.path.join(MODEL_DIR, rel)
+        if os.path.exists(dest) and os.path.getsize(dest) > 1000:
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        print(f"  Downloading {rel}...")
+        sys.stdout.flush()
+        urllib.request.urlretrieve(url, dest)
+
+    if not os.path.exists(VAD_MODEL) or os.path.getsize(VAD_MODEL) < 100000:
+        print("  Downloading silero_vad.onnx...")
+        sys.stdout.flush()
+        urllib.request.urlretrieve(_HF_VAD_URL, VAD_MODEL)
 
 
 def _play_sound_blocking(path, mic=None):
@@ -167,6 +198,7 @@ class VoiceListener:
         self._loop()
 
     def _loop(self):
+        _ensure_models()
         print("Voice starting...", flush=True)
 
         # Создаём свежий VAD (чтобы не было остаточного состояния)
