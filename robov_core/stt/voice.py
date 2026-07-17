@@ -12,7 +12,7 @@ import sherpa_onnx
 from scipy.signal import lfilter
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_R2 = os.path.dirname(_HERE)
+_R2 = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _HERE)
 import inmp441
 
