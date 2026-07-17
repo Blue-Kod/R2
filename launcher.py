@@ -402,17 +402,149 @@ def save_last_commit_info(target_dir, sha):
     except Exception as e:
         log_message(f"[!] Error saving .last_commit: {e}")
 
+SKIP_DIRS = {".git", "venv", "__pycache__", "models", "dev", "node_modules", ".idea", ".vscode"}
+SKIP_FILES = {".last_commit", ".setup_complete"}
+
+def get_changed_files(old_sha, new_sha):
+    """Use GitHub Compare API to get files changed between two commits.
+    Returns (to_download, to_delete) where to_download is [(path, raw_url)].
+    """
+    compare_url = f"https://api.github.com/repos/Blue-Kod/R2/compare/{old_sha}...{new_sha}"
+    try:
+        response = requests.get(compare_url, timeout=15)
+        if response.status_code == 404:
+            log_message("[L] Compare API: commits too far apart or not found.")
+            return None, None
+        response.raise_for_status()
+        data = response.json()
+
+        status = data.get("status")
+        if status == "identical":
+            log_message("[L] Commits identical, nothing to update.")
+            return [], []
+        if status == "diverged":
+            log_message("[L] Branches diverged, using compare results anyway.")
+
+        to_download = []
+        to_delete = []
+
+        for f in data.get("files", []):
+            filename = f["filename"]
+            file_status = f["status"]
+
+            if any(part in SKIP_DIRS for part in Path(filename).parts):
+                continue
+            if filename in SKIP_FILES:
+                continue
+
+            if file_status in ("added", "modified"):
+                raw_url = f"https://raw.githubusercontent.com/Blue-Kod/R2/main/{filename}"
+                to_download.append((filename, raw_url))
+            elif file_status == "removed":
+                to_delete.append(filename)
+            elif file_status == "renamed":
+                old_name = f.get("previous_filename", "")
+                if old_name:
+                    to_delete.append(old_name)
+                raw_url = f"https://raw.githubusercontent.com/Blue-Kod/R2/main/{filename}"
+                to_download.append((filename, raw_url))
+
+        log_message(f"[L] Compare: {len(to_download)} to download, {len(to_delete)} to delete.")
+        return to_download, to_delete
+
+    except Exception as e:
+        log_message(f"[!] Compare API error: {e}")
+        return None, None
+
+
+def download_changed_files(target_dir, to_download, to_delete, script_name):
+    """Download only changed files and delete removed ones.
+    Returns (success, new_launcher_tmp_path).
+    """
+    new_launcher_tmp = None
+    downloaded = 0
+    failed = 0
+
+    for filename, raw_url in to_download:
+        dest_file = os.path.join(target_dir, filename)
+        dest_dir = os.path.dirname(dest_file)
+
+        if dest_dir and not os.path.exists(dest_dir):
+            os.makedirs(dest_dir, exist_ok=True)
+
+        if filename == script_name:
+            log_message(f"[L] New {script_name} detected, downloading to temp...")
+            fd, new_launcher_tmp = tempfile.mkstemp(prefix="launcher_new_", suffix=".py")
+            os.close(fd)
+            target = new_launcher_tmp
+        else:
+            target = dest_file
+
+        try:
+            resp = requests.get(raw_url, timeout=30)
+            resp.raise_for_status()
+            with open(target, 'wb') as f:
+                f.write(resp.content)
+            downloaded += 1
+            log_message(f"[L] Updated: {filename}")
+        except Exception as e:
+            log_message(f"[!] Failed to download {filename}: {e}")
+            failed += 1
+
+    deleted = 0
+    for filename in to_delete:
+        filepath = os.path.join(target_dir, filename)
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+                deleted += 1
+                log_message(f"[L] Deleted: {filename}")
+            except Exception as e:
+                log_message(f"[!] Failed to delete {filename}: {e}")
+
+    log_message(f"[L] Done: {downloaded} downloaded, {deleted} deleted, {failed} failed.")
+    return failed == 0, new_launcher_tmp
+
+
 def download_and_extract_repo(target_dir, script_name, target_user):
+    """Incremental update via GitHub Compare API with ZIP fallback."""
     if is_repo_up_to_date(target_dir):
         return True
+
+    last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
+    local_sha = None
+    if os.path.exists(last_commit_path):
+        try:
+            with open(last_commit_path, 'r') as f:
+                local_sha = f.read().strip()
+        except Exception:
+            pass
 
     remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
     if remote_sha is None:
         log_message("[!] Could not get remote commit SHA, update aborted.")
         return False
 
+    # --- Attempt 1: Incremental update via Compare API ---
+    if local_sha:
+        log_message(f"[L] Incremental update: {local_sha[:8]} -> {remote_sha[:8]}")
+        to_download, to_delete = get_changed_files(local_sha, remote_sha)
+
+        if to_download is not None:
+            success, new_launcher_tmp = download_changed_files(
+                target_dir, to_download, to_delete, script_name
+            )
+            if new_launcher_tmp:
+                apply_self_update(new_launcher_tmp)
+            if success:
+                fix_permissions(target_dir, target_user)
+                save_last_commit_info(target_dir, remote_sha)
+                return True
+            log_message("[!] Incremental update had failures, falling back to full download.")
+
+    # --- Attempt 2: Full ZIP download (first run or Compare fallback) ---
+    log_message("[L] Full repository download...")
     try:
-        log_message("[L] Downloading repository...")
         response = requests.get(ARCHIVE_URL, stream=True)
         response.raise_for_status()
 
@@ -427,7 +559,7 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
             extracted_items = os.listdir(tmp_extract_dir)
             if not extracted_items:
-                raise Exception("[!] Archive is empty")
+                raise Exception("Archive is empty")
             repo_root = os.path.join(tmp_extract_dir, extracted_items[0])
             if not os.path.isdir(repo_root):
                 for item in extracted_items:
@@ -435,7 +567,7 @@ def download_and_extract_repo(target_dir, script_name, target_user):
                         repo_root = os.path.join(tmp_extract_dir, item)
                         break
                 else:
-                    raise Exception("[!] Could not find repo root folder")
+                    raise Exception("Could not find repo root folder")
 
             new_launcher_tmp = None
             for root, dirs, files in os.walk(repo_root):
@@ -446,7 +578,10 @@ def download_and_extract_repo(target_dir, script_name, target_user):
 
                 for file in files:
                     src_file = os.path.join(root, file)
-                    if '.git' in rel_path.split(os.sep):
+                    parts = Path(rel_path).parts
+                    if any(p in SKIP_DIRS for p in parts):
+                        continue
+                    if file in SKIP_FILES:
                         continue
 
                     if file == script_name:
