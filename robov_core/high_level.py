@@ -66,6 +66,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 # --- Global state ---
 _camera: Optional[StereoCamera] = None
 _servo: Optional[ServoController] = None
+_tof = None
 _display: Optional[EyeDisplay] = None
 _eye_api = None
 _lock: threading.Lock = threading.Lock()
@@ -118,100 +119,85 @@ _supported_emotes: List[str] = [os.path.splitext(f)[0] for f in os.listdir(_emot
 _display_thread: Optional[threading.Thread] = None
 _all_threads: List[threading.Thread] = []
 
-_tts: Any = None
-_tts_sample_rate: int = 22050
+_tts_ready: bool = False
 _tts_lock: threading.Lock = threading.Lock()
 
 _ai_agent = None
-_rerun_viewer = None
+_last_speech_time: float = 0.0
+_SPEECH_WINDOW = 15.0
 
-_TTS_MODEL_DIR = os.path.join(ROOT_DIR, "models")
-_TTS_MODEL_NAME = "ru_RU-ruslan-medium"
-_TTS_LENGTH_SCALE = 0.9
+_ESPEAK_VOICE = "ru"
+_ESPEAK_SPEED = 90
+_ESPEAK_PITCH = 40
 
 
 def _init_tts():
-    """Load Piper TTS model with optimized ONNX session."""
-    global _tts, _tts_sample_rate
+    """Check that espeak-ng is available."""
+    global _tts_ready
     try:
-        import onnxruntime
-        from piper import PiperVoice
-        onnx_path = os.path.join(_TTS_MODEL_DIR, f"{_TTS_MODEL_NAME}.onnx")
-        if not os.path.exists(onnx_path):
-            log("TTS model not found, attempting download...")
-            _download_tts_model()
-        _tts = PiperVoice.load(onnx_path)
-        _tts_sample_rate = _tts.config.sample_rate
-
-        cpu_count = os.cpu_count() or 4
-        sess_opts = onnxruntime.SessionOptions()
-        sess_opts.intra_op_num_threads = cpu_count
-        sess_opts.inter_op_num_threads = max(1, cpu_count // 2)
-        sess_opts.graph_optimization_level = (
-            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+        import subprocess
+        subprocess.run(
+            ["espeak-ng", "--version"],
+            capture_output=True, timeout=5,
         )
-        _tts.session = onnxruntime.InferenceSession(
-            onnx_path, sess_options=sess_opts,
-            providers=["CPUExecutionProvider"],
-        )
-
-        import io, wave
-        with wave.open(io.BytesIO(), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(_tts_sample_rate)
-            _tts.synthesize_wav("ок", w)
-        log(f"Piper TTS ready (sample_rate={_tts_sample_rate}, threads={cpu_count})")
-    except ImportError:
-        log("TTS unavailable: piper-tts not installed")
+        _tts_ready = True
+        log("espeak-ng TTS ready")
+    except FileNotFoundError:
+        log("TTS unavailable: espeak-ng not installed")
     except Exception as e:
         log(f"TTS init error: {e}")
-        _tts = None
 
 
 def speak(text: str) -> None:
-    global _tts
-    if _tts is None:
+    global _tts_ready, _last_speech_time
+    if not _tts_ready:
         _init_tts()
-    if _tts is None:
+    if not _tts_ready:
         return
+    _last_speech_time = time.time()
+
+    stripped = _strip_speech(text)
+    if stripped and _ai_agent and hasattr(_ai_agent, 'display') and _ai_agent.display:
+        _ai_agent.display.update(
+            ticker_text=stripped,
+            ticker_duration=max(3.0, len(stripped) / 15.0 + 1.0),
+            is_speaking=True,
+        )
+
+    from robov_core.stt.voice import _listener
+    if _listener is not None:
+        _listener.pause()
+
     try:
-        import subprocess, io, wave
+        import subprocess
+        espeak = subprocess.Popen(
+            ["espeak-ng", "-v", _ESPEAK_VOICE,
+             "-s", str(_ESPEAK_SPEED), "-p", str(_ESPEAK_PITCH),
+             "--stdout", text],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        raw_audio = espeak.stdout.read()
+        espeak.wait()
+        import audioop
+        amplified = audioop.mul(raw_audio, 2, 1.5)
         aplay = subprocess.Popen(
             ["aplay", "-D", "plughw:1,0", "-t", "raw",
-             "-f", "S16_LE", "-r", str(_tts_sample_rate), "-c", "1"],
+             "-f", "S16_LE", "-r", "22050", "-c", "1"],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        for chunk in _tts.synthesize(text):
-            aplay.stdin.write(chunk.audio_int16_bytes)
+        aplay.stdin.write(amplified)
         aplay.stdin.close()
         aplay.wait()
     except Exception as e:
         log(f"TTS error: {e}")
-
-
-def _download_tts_model():
-    """Download Piper TTS model from HuggingFace if missing."""
-    import requests as _req
-    hf_base = "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium"
-    os.makedirs(_TTS_MODEL_DIR, exist_ok=True)
-    for ext in ("onnx", "onnx.json"):
-        url = f"{hf_base}/{_TTS_MODEL_NAME}.{ext}"
-        dest = os.path.join(_TTS_MODEL_DIR, f"{_TTS_MODEL_NAME}.{ext}")
-        if os.path.exists(dest):
-            continue
-        try:
-            log(f"Downloading {_TTS_MODEL_NAME}.{ext}...")
-            r = _req.get(url, stream=True, timeout=120)
-            r.raise_for_status()
-            with open(dest, "wb") as f:
-                for chunk in r.iter_content(256 * 1024):
-                    f.write(chunk)
-            log(f"Saved {_TTS_MODEL_NAME}.{ext}")
-        except Exception as e:
-            log(f"Failed to download {ext}: {e}")
+    finally:
+        if _listener is not None:
+            _listener.unpause()
+        if _ai_agent and hasattr(_ai_agent, 'display') and _ai_agent.display:
+            _ai_agent.display.update(is_speaking=False)
 
 _SENTENCE_END = re.compile(r"[.!?…]\s")
 
@@ -314,7 +300,7 @@ def log(message: str) -> None:
 
 
 def _init_hardware() -> None:
-    global _camera, _servo
+    global _camera, _servo, _tof
 
     cam_path = ROOT_DIR / CAMERA_PARAMS_FILE
     if cam_path.exists():
@@ -355,6 +341,19 @@ def _init_hardware() -> None:
         except Exception as exc:
             log(f"Servo init error: {exc}")
             log("Falling back to mock servo")
+
+        try:
+            from robov_core.vl53l0x import VL53L0X
+            _tof = VL53L0X(i2c_bus=1)
+            _tof.open()
+            log("VL53L0X TOF sensor initialized on i2c-1")
+        except Exception as exc:
+            log(f"TOF init error: {exc}")
+            _tof = None
+
+        if _camera and _tof:
+            _camera.set_tof(_tof)
+            log("TOF linked to stereo camera for depth calibration")
 
 
 def _shell_reader() -> None:
@@ -583,20 +582,6 @@ def start_background() -> None:
     if _shell_thread:
         _all_threads.append(_shell_thread)
 
-    # Start Rerun 3D visualization viewer (lazy — starts logging when web viewer connects)
-    if _camera:
-        try:
-            from robov_core.rerun_viewer import RerunViewer
-            global _rerun_viewer
-            _rerun_viewer = RerunViewer(_camera, log_fn=log)
-            if _rerun_viewer.start():
-                log(f"Rerun viewer ready on port {_rerun_viewer.port} (auto-starts on /view)")
-            else:
-                log("Rerun viewer failed to start (rerun-sdk not installed?)")
-                _rerun_viewer = None
-        except Exception as e:
-            log(f"Rerun init error: {e}")
-
     from robov_core.web import create_app
     app = create_app()
     web_thread = threading.Thread(
@@ -664,6 +649,9 @@ def start_background() -> None:
             "get_stereo_camera": get_stereo_camera,
             "get_raw_frame": get_raw_frame,
             "get_coords_stereo": get_coords_stereo,
+            "tof_distance": get_tof_distance,
+            "calibrate_depth": calibrate_depth,
+            "get_tof_info": get_tof_info,
             "find": find_object,
             "precise_find": precise_find,
             "scan": scan,
@@ -705,12 +693,15 @@ def cleanup() -> None:
 
     stop_display()
 
-    if _rerun_viewer:
-        _rerun_viewer.stop()
-
     if _camera:
         _camera.stop_continuous_capture()
         _camera.release_camera()
+
+    if _tof:
+        try:
+            _tof.close()
+        except Exception:
+            pass
 
     if _shell_thread and _shell_thread.is_alive():
         _shell_thread.join(timeout=2.0)
@@ -904,14 +895,54 @@ def get_ai_agent():
     return _ai_agent
 
 
-def get_rerun_viewer():
-    return _rerun_viewer
+_VOICE_TRIGGER_WORDS = ["r2", "два", "робот", "работа", "работай"]
+
+
+def is_voice_active(text: str) -> bool:
+    """Check if voice input should be processed (trigger word or recent speech window)."""
+    t = text.lower()
+    if any(w in t for w in _VOICE_TRIGGER_WORDS):
+        return True
+    return (time.time() - _last_speech_time) < _SPEECH_WINDOW
 
 
 def get_depth_provider():
     if _camera is None:
         return None
     return _camera.depth_provider.name if _camera.depth_provider else None
+
+
+def get_tof_distance():
+    if _tof is None:
+        return None
+    try:
+        dist = _tof.read_single()
+        if dist is not None and dist < 8190:
+            return dist / 1000.0
+        return None
+    except Exception as e:
+        log(f"TOF read error: {e}")
+        return None
+
+
+def calibrate_depth():
+    if _camera is None or _tof is None:
+        return None
+    result = _camera.calibrate_depth_scale()
+    if result is not None:
+        log(f"Depth scale calibrated: {result:.4f} (TOF-based, #{_camera._tof_calibrations})")
+    return result
+
+
+def get_tof_info():
+    if _tof is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "correction": round(_camera._tof_correction, 4) if _camera else 1.0,
+        "depth_scale": round(_camera.depth_scale, 4) if _camera else None,
+        "calibrations": _camera._tof_calibrations if _camera else 0,
+    }
 
 
 def reinit_object_detection(model_name: str) -> bool:
