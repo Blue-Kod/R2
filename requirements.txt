@@ -37,11 +37,6 @@ websockets>=11.0.0
 sounddevice>=0.4.6
 
 # Scientific computing - heavy, install only if needed
-scipy>=1.11.0
-
-# Piper Neural TTS
-piper-tts>=1.4.0
-onnxruntime>=1.16.0
 
 # Optional: RKNN-Toolkit-Lite2 for NPU acceleration (Orange Pi / RK3588 only)
 # Install manually on the NPU device: pip install rknn-toolkit-lite2
@@ -49,5 +44,4 @@ onnxruntime>=1.16.0
 # AI / LLM (EveryLLM backend)
 
 # 3D Visualization (Rerun viewer)
-rerun-sdk>=0.18.0
 openai>=1.0.0

@@ -27,7 +27,6 @@ from robov_core.high_level import (
     get_servo_angles, get_servo_angles_physical, get_servo_offsets,
     set_servo_physical, log, cleanup,
     set_reasoning, get_reasoning,
-    get_rerun_viewer,
     get_depth_provider, set_depth_provider,
     reinit_object_detection as hl_reinit_object_detection,
     scan as hl_scan,
@@ -702,25 +701,6 @@ def create_app() -> Flask:
     @require_auth
     def view_page():
         return render_template("view.html")
-
-    @app.route("/api/rerun/status")
-    @require_auth
-    def rerun_status():
-        viewer = get_rerun_viewer()
-        if viewer is None:
-            return jsonify({"available": False, "running": False})
-        viewer.ensure_active()
-        return jsonify(viewer.status())
-
-    @app.route("/api/rerun/pointcloud", methods=["POST"])
-    @require_auth
-    def rerun_pointcloud():
-        viewer = get_rerun_viewer()
-        if viewer is None:
-            return jsonify({"error": "Rerun not available"}), 503
-        data = request.get_json(silent=True) or {}
-        viewer.pointcloud_enabled = bool(data.get("enabled", True))
-        return jsonify({"status": "ok", "pointcloud_enabled": viewer.pointcloud_enabled})
 
     @app.route("/api/cursor_xyz", methods=["POST"])
     @require_auth

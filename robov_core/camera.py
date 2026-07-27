@@ -47,9 +47,16 @@ class StereoCamera:
         self.min_disp: int = 0
         self.num_disp: int = 160
         self.depth_scale: float = 1.25
+        self._depth_scale_base: float = 1.25
+        self._tof = None
+        self._tof_correction: float = 1.0
+        self._tof_correction_ema: float = 1.0
+        self._tof_ema_alpha: float = 0.3
+        self._tof_calibrations: int = 0
+        self._tof_last_calibration: float = 0.0
 
         self.detection_enabled: bool = False
-        self.detector: ObjectDetector = ObjectDetector()
+        self._detector: Optional[ObjectDetector] = None
         self._last_detections: list = []
         self.detection_prompts: str = ""
         self._scan_cache: Optional[list] = None
@@ -76,6 +83,12 @@ class StereoCamera:
         self.depth_provider: DepthProvider = self._create_default_provider()
         self._init_provider()
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+    @property
+    def detector(self) -> ObjectDetector:
+        if self._detector is None:
+            self._detector = ObjectDetector()
+        return self._detector
 
     def _load_camera_parameters(self) -> None:
         try:
@@ -135,6 +148,54 @@ class StereoCamera:
             self.depth_provider = provider
             self._init_provider()
         self.disp_buffer.clear()
+
+    def set_tof(self, tof_sensor) -> None:
+        self._tof = tof_sensor
+        self._tof_correction = 1.0
+        self._tof_correction_ema = 1.0
+        self._tof_calibrations = 0
+        self._depth_scale_base = self.depth_scale
+
+    def _get_raw_center_depth(self) -> float:
+        if len(self.disp_buffer) == 0:
+            return 0.0
+        disp = self.disp_buffer[-1]
+        h, w = disp.shape[:2]
+        cx, cy = w // 2, h // 2
+        points_3d = cv2.reprojectImageTo3D(
+            disp.astype(np.float32) / 16.0, self._Q_proc
+        )
+        return float(abs(points_3d[cy, cx][2]))
+
+    def calibrate_depth_scale(self, min_dist_mm: float = 30.0,
+                              max_dist_mm: float = 800.0) -> Optional[float]:
+        if self._tof is None:
+            return None
+
+        tof_mm = self._tof.read_single()
+        if tof_mm is None or tof_mm >= 8190:
+            return None
+        if tof_mm < min_dist_mm or tof_mm > max_dist_mm:
+            return None
+
+        stereo_raw = self._get_raw_center_depth()
+        if stereo_raw <= 0:
+            return None
+
+        ratio = tof_mm / stereo_raw
+        if ratio < 0.5 or ratio > 2.0:
+            return None
+
+        self._tof_correction_ema = (
+            self._tof_ema_alpha * ratio +
+            (1.0 - self._tof_ema_alpha) * self._tof_correction_ema
+        )
+        self._tof_correction = self._tof_correction_ema
+        self.depth_scale = self._depth_scale_base * self._tof_correction
+        self._tof_calibrations += 1
+        self._tof_last_calibration = time.time()
+
+        return self.depth_scale
 
     def initialize_camera(self) -> bool:
         try:
