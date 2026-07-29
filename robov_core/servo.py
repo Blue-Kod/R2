@@ -47,7 +47,7 @@ class ServoController:
 
         self.current_angles: Dict[int, int] = {
             0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
-            5: 45, 6: 135, 7: 135, 8: 90, 9: 90
+            5: 45, 6: 180, 7: 180, 8: 90, 9: 90
         }
         self.lock: threading.Lock = threading.Lock()
         self._move_locks: Dict[int, threading.Lock] = {}
