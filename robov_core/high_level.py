@@ -605,8 +605,8 @@ def start_background() -> None:
         log(f"TTS init error: {e}")
 
     # WiFi QR setup — if no internet, scan for WiFi QR codes via camera
+    from robov_core.qr_wifi import check_internet, start_wifi_setup
     if not check_internet():
-        from robov_core.qr_wifi import start_wifi_setup
         wifi_thread = threading.Thread(
             target=start_wifi_setup,
             args=(speak, log),
