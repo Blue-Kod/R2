@@ -88,6 +88,8 @@ ONNX-детектор на базе YOLOE-11s-seg с встроенными ма
 | `yoloe-11s-seg-320.onnx` | 39 MB | 320x320 | ~80ms | Быстрая |
 | `yolov8s.onnx` | 43 MB | 640x640 | ~150ms | COCO 80 классов (fallback) |
 
+**Модели скачиваются автоматически** из репозитория [Blue-Kod/prepared-models](https://github.com/Blue-Kod/prepared-models) при первом запуске `launcher.py`.
+
 **79 распознаваемых классов:**
 person, face, hand, dog, cat, rodent, laptop, monitor, keyboard, mouse, phone, remote control, headphones, speaker, charger, pen, pencil, scissors, notebook, book, calculator, cup, bottle, glass, plate, bowl, fork, spoon, knife, pan, kettle, microwave, refrigerator, sink, banana, apple, orange, egg, bread, can, chair, table, desk, sofa, bed, shelf, cabinet, stool, lamp, door, window, trash can, bucket, towel, pillow, blanket, clock, vase, plant pot, hat, glasses, bag, shoe, screwdriver, hammer, wrench, measuring tape, box, key, flashlight, ball, umbrella, toilet, bathtub, soap, toothbrush, comb, pill, hair dryer
 
@@ -195,6 +197,49 @@ disp = result.disparity  # int16, /16.0 → пиксели диспаритет�
 
 ---
 
+## Настройка Wi-Fi через QR-код
+
+### `robov_core/qr_wifi.py`
+
+Автоматическая настройка Wi-Fi при отсутствии интернета. Сканирует QR-коды через камеру и подключается к сети.
+
+**Функции:**
+
+```python
+check_internet(host="8.8.8.8", port=53, timeout=3) -> bool
+# Проверка доступа в интернет (TCP к 8.8.8.8:53, fallback HTTP к github.com)
+
+parse_wifi_qr(data: str) -> dict | None
+# Парсинг QR-кода формата WIFI:T:WPA;S:SSID;P:Пароль;;
+# → {"auth": "WPA", "ssid": "...", "password": "..."}
+
+scan_qr_frame(frame) -> str | None
+# Детекция и декодирование QR-кода в кадре (cv2.QRCodeDetector)
+
+connect_to_wifi(ssid: str, password: str) -> bool
+# Подключение к Wi-Fi (сначала nmcli, fallback wpa_supplicant).
+# Поддерживает скрытые сети (hidden=yes / scan_ssid=1).
+
+start_wifi_setup(speak_func, log_func) -> None
+# Оркестратор: проверка интернета → голосовое приглашение →
+# сканирование QR → подключение → подтверждение.
+```
+
+**Формат QR-кода:**
+```
+WIFI:T:WPA;S:ИмяСети;P:Пароль;;
+```
+
+**Поток выполнения:**
+1. При старте `main.py` проверяется наличие интернета
+2. Если интернета нет — запускается фоновый поток QR-сканирования
+3. Робот говорит: *«Я не подключён к интернету. Покажите QR-код с настройками Wi-Fi перед камерой.»*
+4. Кадры с камеры (640×360) анализируются через `cv2.QRCodeDetector`
+5. При обнаружении QR — парсинг, подключение, голосовое подтверждение
+6. При неудаче — повторное сканирование, напоминание каждые 10 секунд
+
+---
+
 ## Эмоции
 
 ### GET/POST `/api/emote`
@@ -218,6 +263,40 @@ disp = result.disparity  # int16, /16.0 → пиксели диспаритет�
 
 ---
 
+## Управление питанием
+
+### POST `/api/shutdown`
+Корректное завершение всех процессов и выход.
+
+**Ответ:** `{"status": "ok", "message": "Shutting down"}`
+
+### POST `/api/reboot` _(если реализовано)_
+Перезагрузка системы.
+
+---
+
+## Лаунчер (`launcher.py`)
+
+Точка входа для установки и запуска. Выполняется с `sudo`:
+
+```bash
+sudo python3 launcher.py
+```
+
+**Автоматически делает при первом запуске:**
+- Установка APT-зависимостей
+- Установка Python-пакетов из `requirements.txt`
+- Скачивание ONNX-моделей из [prepared-models](https://github.com/Blue-Kod/prepared-models)
+- Настройка sudoers (шutdown, audio без пароля)
+- Запуск `main.py`
+
+**Автоматическое обновление:**
+- Проверяет наличие новой версии на GitHub
+- Скачивает и применяет обновления
+- Обновлённый лаунчер перезапускается
+
+---
+
 ## AI-агент
 
 AI-агент ( EveryLLM ) имеет доступ к следующим функциям через Python-окружение:
@@ -237,8 +316,14 @@ move_arm_to(target)      # → bool (заглушка)
 set_servo_physical(channel, angle)  # Физический угол с инверсией
 get_servo_angles_physical()
 
-# Речь
-speak("Привет!")         # TTS через Piper (русский)
+# Речь (TTS)
+speak("Привет!")         # Синтез речи через espeak-ng (русский, голос "ru")
+
+# STT (Speech-to-text, см. robovoc_core/stt/)
+# Голосовое управление — прослушивание микрофона INMP441 через SPI.
+# Активация через триггер-слова: "R2", "робот", "два" и т.д.
+# Использует Silero VAD + sherpa-onnx (Vosk модель русского языка).
+# Модели скачиваются автоматически из HuggingFace при первом запуске.
 
 # Эмоции и глаза
 set_emote("happy")

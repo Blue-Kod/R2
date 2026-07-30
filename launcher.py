@@ -27,7 +27,6 @@ import time
 import pwd
 import socket
 import json
-import shlex
 from pathlib import Path
 
 # Constants
@@ -46,7 +45,8 @@ REQUIREMENTS_APT = [
 ]
 
 MAIN_SCRIPT = "main.py"
-AUTOSTART_DESKTOP_FILE = "r2-monitor.desktop"
+SERVICE_NAME = "r2-robot"
+SERVICE_FILE = f"/etc/systemd/system/{SERVICE_NAME}.service"
 INTERNET_CHECK_HOST = "8.8.8.8"
 LAST_COMMIT_FILE = ".last_commit"
 SETUP_COMPLETE_FLAG = ".setup_complete"  # Flag for first-run installation
@@ -256,8 +256,12 @@ def setup_sudoers(target_user: str) -> bool:
     sudoers_path = "/etc/sudoers.d/r2"
 
     python_bin = shutil.which("python3") or "/usr/bin/python3"
+    systemctl_bin = shutil.which("systemctl") or "/usr/bin/systemctl"
+    journalctl_bin = shutil.which("journalctl") or "/usr/bin/journalctl"
     commands = [
         python_bin,
+        systemctl_bin,
+        journalctl_bin,
         "/usr/sbin/shutdown",
         "/usr/bin/amixer",
         "/usr/bin/aplay",
@@ -649,85 +653,56 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         log_message(f"[!] Error downloading/extracting repo: {e}")
         return False
 
-def get_terminal_command(script_path, user):
-    launcher_cmd = f"sudo python3 {script_path}"
-    hold_cmd = 'echo; echo "Press any key to close..."; read'
-    full_cmd = f"{launcher_cmd}; {hold_cmd}"
-
-    if shutil.which("terminator"):
-        return ["terminator", "-e", f"bash -c '{full_cmd}'"]
-    elif shutil.which("gnome-terminal"):
-        return ["gnome-terminal", "--", "bash", "-c", full_cmd]
-    elif shutil.which("x-terminal-emulator"):
-        return ["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"]
-    elif shutil.which("xterm"):
-        return ["xterm", "-hold", "-e", f"bash -c '{full_cmd}'"]
-    return None
-
 def setup_autostart_linux(target_user):
+    """Create systemd service for headless autostart on boot."""
     script_path = os.path.abspath(__file__)
-    try:
-        pw = pwd.getpwnam(target_user)
-        user_home = pw.pw_dir
-        uid, gid = pw.pw_uid, pw.pw_gid
-    except KeyError:
-        log_message(f"[!] User {target_user} not found.")
-        return False
+    script_dir = os.path.dirname(script_path)
 
-    autostart_dir = os.path.join(user_home, ".config", "autostart")
-    os.makedirs(autostart_dir, exist_ok=True)
-    desktop_file_path = os.path.join(autostart_dir, AUTOSTART_DESKTOP_FILE)
+    unit = f"""[Unit]
+Description=R2 Robot
+After=network-online.target
+Wants=network-online.target
 
-    terminal_cmd = get_terminal_command(script_path, target_user)
-    if not terminal_cmd:
-        log_message("[!] No suitable terminal found.")
-        return False
+[Service]
+Type=simple
+User=root
+ExecStart={sys.executable} {script_path}
+WorkingDirectory={script_dir}
+Restart=on-failure
+RestartSec=5
 
-    cmd_str = " ".join(shlex.quote(arg) for arg in terminal_cmd)
-
-    desktop_content = f"""[Desktop Entry]
-Type=Application
-Name=R2 Main Program
-Exec={cmd_str}
-Path={os.path.dirname(script_path)}
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Phase=Applications
+[Install]
+WantedBy=multi-user.target
 """
     try:
-        with open(desktop_file_path, 'w') as f:
-            f.write(desktop_content)
-        os.chown(desktop_file_path, uid, gid)
-        log_message(f"[L] Autostart installed: {desktop_file_path}")
+        with open(SERVICE_FILE, "w") as f:
+            f.write(unit)
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True, timeout=10)
+        subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True, timeout=10)
+        log_message(f"[L] Systemd service installed: {SERVICE_FILE}")
         return True
     except Exception as e:
-        log_message(f"[!] Error creating .desktop file: {e}")
+        log_message(f"[!] Error installing systemd service: {e}")
         return False
+
 
 def remove_autostart_linux(target_user):
+    """Remove systemd service."""
     try:
-        pw = pwd.getpwnam(target_user)
-        user_home = pw.pw_dir
-    except KeyError:
-        log_message(f"[!] User {target_user} not found.")
-        return
-    desktop_file = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
-    if os.path.exists(desktop_file):
+        subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True, timeout=10)
+    except Exception:
+        pass
+    if os.path.exists(SERVICE_FILE):
         try:
-            os.remove(desktop_file)
-            log_message(f"[L] .desktop file removed.")
+            os.remove(SERVICE_FILE)
+            subprocess.run(["systemctl", "daemon-reload"], capture_output=True, timeout=10)
+            log_message(f"[L] Systemd service removed: {SERVICE_FILE}")
         except Exception as e:
-            log_message(f"[!] Error removing: {e}")
+            log_message(f"[!] Error removing service: {e}")
+
 
 def is_autostart_installed(target_user):
-    try:
-        pw = pwd.getpwnam(target_user)
-        user_home = pw.pw_dir
-    except KeyError:
-        return False
-    desktop_file = os.path.join(user_home, ".config", "autostart", AUTOSTART_DESKTOP_FILE)
-    return os.path.exists(desktop_file)
+    return os.path.exists(SERVICE_FILE)
 
 def start_main():
     """Launch main.py as a subprocess."""

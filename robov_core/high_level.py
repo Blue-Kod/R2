@@ -689,6 +689,9 @@ def start_background() -> None:
 
     _hardware_initialized = True
 
+    if check_internet():
+        speak("Я готов к работе.")
+
 
 def cleanup() -> None:
     global _shutdown_requested, _hardware_initialized, _shell_running
@@ -986,6 +989,9 @@ def refresh_models(timeout: float = 8.0) -> list[dict]:
     if agent is None:
         log("AI agent not initialized")
         return []
+    if not agent.llm.models():
+        log("No LLM providers available — check KEYS.json for API keys")
+        return []
     try:
         results = agent.llm.refresh(asynchronously=False, timeout=timeout)
         ok = sum(1 for r in results.values() if r.get("ok"))
@@ -1000,6 +1006,7 @@ def refresh_models(timeout: float = 8.0) -> list[dict]:
     if best:
         winner = min(best, key=best.get)
         agent.display.update(current_model=winner)
+    return agent.llm.best_models()
     return agent.llm.best_models()
 
 

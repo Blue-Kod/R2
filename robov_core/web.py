@@ -28,6 +28,7 @@ from robov_core.high_level import (
     set_servo_physical, log, cleanup,
     set_reasoning, get_reasoning,
     get_depth_provider, set_depth_provider,
+    refresh_models,
     reinit_object_detection as hl_reinit_object_detection,
     scan as hl_scan,
 )
@@ -765,6 +766,15 @@ def create_app() -> Flask:
         try:
             agent = init_agent()
             return jsonify(agent.display.get_all())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/ai/models/refresh", methods=["POST"])
+    @require_auth
+    def ai_refresh_models():
+        try:
+            results = refresh_models(timeout=12.0)
+            return jsonify({"status": "ok", "models": results})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 

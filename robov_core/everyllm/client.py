@@ -361,6 +361,9 @@ class EveryLLM:
         raise EveryLLMError(f"Unknown model '{model}'. Available: {available}")
 
     def _refresh_sequential(self, targets, timeout, delay) -> dict[str, dict]:
+        if not targets:
+            return {}
+
         results = {}
 
         providers = {}
@@ -404,6 +407,9 @@ class EveryLLM:
         return results
 
     def _refresh_parallel(self, targets, timeout, delay) -> dict[str, dict]:
+        if not targets:
+            return {}
+
         results = {}
         with ThreadPoolExecutor(max_workers=len(targets)) as pool:
             futures = {
