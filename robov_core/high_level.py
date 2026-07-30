@@ -665,6 +665,21 @@ def start_background() -> None:
     _hardware_initialized = True
 
 
+def servo_toggle(enable: bool) -> None:
+    servo = _servo
+    if servo is None or not servo.initialized:
+        return
+    if enable:
+        for ch in servo.channel_configs:
+            servo.set_servo(ch, servo.current_angles.get(ch, 90), smooth=False)
+    else:
+        for ch in servo.channel_configs:
+            try:
+                servo.pwm.set_pwm(ch, 0, 0)
+            except Exception:
+                pass
+
+
 def cleanup() -> None:
     global _shutdown_requested, _hardware_initialized, _shell_running
 

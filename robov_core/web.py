@@ -25,7 +25,7 @@ from robov_core.high_level import (
     set_emote, get_emote, supported_emotes,
     set_eyes_position, get_eyes_position, get_logs,
     get_servo_angles, get_servo_angles_physical, get_servo_offsets,
-    set_servo_physical, log, cleanup,
+    set_servo_physical, log, cleanup, servo_toggle,
     set_reasoning, get_reasoning,
     get_depth_provider, set_depth_provider,
     refresh_models,
@@ -164,15 +164,14 @@ def create_app() -> Flask:
         launcher_path = ROOT_DIR / "launcher.py"
         if not launcher_path.exists():
             return jsonify({"status": "error", "message": "launcher.py not found"}), 404
+        log("Restart command received")
         try:
-            def restart():
-                cleanup()
-                subprocess.Popen([sys.executable, str(launcher_path)])
-                log("Update process started")
-                os._exit(0)
-
-            threading.Thread(target=restart, daemon=True).start()
-            return jsonify({"status": "ok", "message": "Update started"})
+            subprocess.Popen(
+                [sys.executable, str(launcher_path)],
+                start_new_session=True,
+            )
+            threading.Thread(target=lambda: (time.sleep(1), cleanup(), os._exit(0)), daemon=True).start()
+            return jsonify({"status": "ok", "message": "Restarting"})
         except Exception as exc:
             return jsonify({"status": "error", "message": str(exc)}), 500
 
@@ -180,7 +179,12 @@ def create_app() -> Flask:
     @require_auth
     def api_shutdown():
         log("Shutdown command received")
-        threading.Thread(target=lambda: (cleanup(), time.sleep(1), os._exit(0)), daemon=True).start()
+        def _shutdown():
+            servo_toggle(False)
+            time.sleep(0.5)
+            cleanup()
+            subprocess.run(["sudo", "shutdown", "-P", "now"], timeout=5)
+        threading.Thread(target=_shutdown, daemon=True).start()
         return jsonify({"status": "ok", "message": "Shutting down"})
 
     # --- Shell ---
