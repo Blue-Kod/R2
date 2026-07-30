@@ -19,13 +19,9 @@ import psutil
 from robov_core.camera import StereoCamera
 from robov_core.servo import ServoController
 
-try:
-    from robov_core.eyes_display import EyeDisplay, optimize_for_arm
-    _HAS_DISPLAY = True
-except ImportError:
-    _HAS_DISPLAY = False
-    EyeDisplay = None
-    optimize_for_arm = None
+_HAS_DISPLAY = False
+EyeDisplay = None
+optimize_for_arm = None
 
 
 @dataclass
@@ -114,7 +110,9 @@ _eyes_x: float = 0.0
 _eyes_y: float = 0.0
 _emote_lock: threading.Lock = threading.Lock()
 _emotions_dir: str = os.path.join(os.path.dirname(__file__), "emotions")
-_supported_emotes: List[str] = [os.path.splitext(f)[0] for f in os.listdir(_emotions_dir) if f.endswith(".png")]
+_supported_emotes: List[str] = []
+if os.path.isdir(_emotions_dir):
+    _supported_emotes = [os.path.splitext(f)[0] for f in os.listdir(_emotions_dir) if f.endswith(".png")]
 
 _display_thread: Optional[threading.Thread] = None
 _all_threads: List[threading.Thread] = []
@@ -605,6 +603,17 @@ def start_background() -> None:
         _init_tts()
     except Exception as e:
         log(f"TTS init error: {e}")
+
+    # WiFi QR setup — if no internet, scan for WiFi QR codes via camera
+    if not check_internet():
+        from robov_core.qr_wifi import start_wifi_setup
+        wifi_thread = threading.Thread(
+            target=start_wifi_setup,
+            args=(speak, log),
+            daemon=True,
+            name="r2-wifi-setup"
+        )
+        wifi_thread.start()
 
     # Initialize AI agent
     try:

@@ -767,7 +767,7 @@ class ToolExecutor:
 
 
 # ---------------------------------------------------------------------------
-# Shared display state — read by eyes_display.py and web.py
+# Shared display state — read by web.py for SSE streaming
 # ---------------------------------------------------------------------------
 class DisplayState:
     """Thread-safe shared state for display overlays and streaming."""

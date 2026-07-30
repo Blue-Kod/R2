@@ -38,12 +38,7 @@ REQUIREMENTS_FILE = "requirements.txt"
 # Complete APT dependencies for Orange Pi 4 Pro / Debian Bullseye
 REQUIREMENTS_APT = [
     "python3-pip",
-    "python3-pygame",
-    "libsdl2-2.0-0",
-    "libsdl2-image-2.0-0",
-    "libsdl2-ttf-2.0-0",
     "libportaudio2",
-    "unclutter-xfixes",
     "libopencv-dev",
     "python3-opencv",
     "i2c-tools",
@@ -246,6 +241,49 @@ def install_pip_dependencies():
         log_message(f"[PIP] Exception during pip install: {e}")
         return False
 
+def setup_sudoers(target_user: str) -> bool:
+    """Create sudoers drop-in file so the robot can run without a password
+    at boot (autostart) and execute privileged commands.
+
+    Allows:
+      - python3 (for launching launcher.py and main.py)
+      - shutdown, amixer, aplay (system commands used by the robot)
+    """
+    if platform.system() != "Linux":
+        return True
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    sudoers_path = "/etc/sudoers.d/r2"
+
+    python_bin = shutil.which("python3") or "/usr/bin/python3"
+    commands = [
+        python_bin,
+        "/usr/sbin/shutdown",
+        "/usr/bin/amixer",
+        "/usr/bin/aplay",
+    ]
+
+    lines = [
+        "# R2 Robot - passwordless sudo for autostart and system commands",
+        f"# Added by R2 launcher on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        f"{target_user} ALL=(ALL) NOPASSWD: " + ", ".join(commands),
+        "",
+    ]
+
+    try:
+        content = "\n".join(lines) + "\n"
+        with open(sudoers_path, "w") as f:
+            f.write(content)
+        os.chmod(sudoers_path, 0o440)
+        log_message(f"[SUDOERS] Created {sudoers_path} for user {target_user}")
+        log_message(f"[SUDOERS] Allowed: {', '.join(commands)}")
+        return True
+    except Exception as e:
+        log_message(f"[!] Failed to create sudoers file: {e}")
+        return False
+
+
 def perform_first_run_setup():
     """
     Perform complete first-run installation.
@@ -254,6 +292,8 @@ def perform_first_run_setup():
     log_message("=" * 60)
     log_message("[SETUP] Starting first-run installation...")
     log_message("=" * 60)
+
+    target_user = get_display_user()
 
     # Install APT dependencies
     if not install_apt_dependencies():
@@ -264,6 +304,9 @@ def perform_first_run_setup():
     if not install_pip_dependencies():
         log_message("[SETUP] PIP installation failed.")
         return False
+
+    # Sudoers setup — allow passwordless shutdown, audio, etc.
+    setup_sudoers(target_user)
 
     # Mark setup as complete
     if not mark_setup_complete():
@@ -586,15 +629,11 @@ def setup_autostart_linux(target_user):
 
     cmd_str = " ".join(shlex.quote(arg) for arg in terminal_cmd)
 
-    display = os.environ.get('DISPLAY', ':0')
-    xauth = os.environ.get('XAUTHORITY', f"{user_home}/.Xauthority")
-
     desktop_content = f"""[Desktop Entry]
 Type=Application
 Name=R2 Main Program
 Exec={cmd_str}
 Path={os.path.dirname(script_path)}
-Environment="DISPLAY={display}" "XAUTHORITY={xauth}"
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
@@ -645,52 +684,14 @@ def start_main():
         log_message(f"[L] Starting {MAIN_SCRIPT}...")
 
         system_name = platform.system()
-        if system_name == "Windows":
-            subprocess.Popen(
-                ["python3", main_path],
-                cwd=script_dir,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
-            )
-            return True
-
+        env = os.environ.copy()
         if system_name == "Linux":
-            env = os.environ.copy()
-            env["DISPLAY"] = ":0"
-            # Get XAUTHORITY from environment or construct from user home
-            xauth = os.environ.get('XAUTHORITY')
-            if not xauth:
-                try:
-                    import pwd
-                    user = get_display_user()
-                    pw = pwd.getpwnam(user)
-                    xauth = os.path.join(pw.pw_dir, '.Xauthority')
-                except:
-                    xauth = '/root/.Xauthority'
-            env["XAUTHORITY"] = xauth
             env["PYTHONPATH"] = script_dir
 
-            python_cmd = f"python3 {shlex.quote(main_path)}"
-            hold_cmd = 'echo; echo "main.py finished. Press any key to close."; read'
-            full_cmd = f"{python_cmd}; {hold_cmd}"
-
-            if shutil.which("terminator"):
-                subprocess.Popen(["terminator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
-                return True
-            if shutil.which("gnome-terminal"):
-                subprocess.Popen(["gnome-terminal", "--", "bash", "-c", full_cmd], cwd=script_dir, env=env)
-                return True
-            if shutil.which("x-terminal-emulator"):
-                subprocess.Popen(["x-terminal-emulator", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
-                return True
-            if shutil.which("xterm"):
-                subprocess.Popen(["xterm", "-hold", "-e", f"bash -c '{full_cmd}'"], cwd=script_dir, env=env)
-                return True
-
-            log_message("[!] No GUI terminal found, running in current process.")
-            subprocess.Popen(["python3", main_path], cwd=script_dir)
-            return True
-
-        subprocess.Popen(["python3", main_path], cwd=script_dir)
+        subprocess.Popen(
+            [sys.executable or "python3", main_path],
+            cwd=script_dir, env=env
+        )
         return True
     except Exception as e:
         log_message(f"[!] Error starting {MAIN_SCRIPT}: {e}")
@@ -748,9 +749,6 @@ def main():
         # restart_script() calls os.execv() which replaces the process,
         # so we should never reach this point
         return
-
-    if platform.system() == "Linux" and shutil.which("unclutter"):
-        subprocess.Popen(["unclutter", "--timeout", "5", "--fork"])
 
     log_message("[L] Setup already complete, proceeding...")
 

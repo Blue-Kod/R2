@@ -24,9 +24,6 @@ numpy>=1.24.0,<2.0.0
 # Hardware I2C control for PCA9685 servo driver
 PCA9685-smbus2>=0.0.6
 
-# Display/graphics
-pygame>=2.5.0
-
 # Environment variables
 python-dotenv>=1.0.0
 

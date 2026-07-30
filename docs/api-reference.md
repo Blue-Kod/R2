@@ -195,7 +195,7 @@ disp = result.disparity  # int16, /16.0 → пиксели диспаритет�
 
 ---
 
-## Эмоции и отображение
+## Эмоции
 
 ### GET/POST `/api/emote`
 Получить/установить эмоцию. Список: happy, neutral, scared, spooked, sleep.
