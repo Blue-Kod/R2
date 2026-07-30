@@ -8,3 +8,6 @@
 *~
 KEYS.json
 /weights/
+
+# Models (downloaded from separate repo)
+/models/

@@ -284,6 +284,59 @@ def setup_sudoers(target_user: str) -> bool:
         return False
 
 
+MODELS_REPO_BASE = "https://raw.githubusercontent.com/Blue-Kod/prepared-models/main"
+REQUIRED_MODELS = [
+    "yoloe-11s-seg-640.onnx",
+    "yoloe-11s-seg-320.onnx",
+    "yoloe-11s-seg_names.json",
+    "yolov8s.onnx",
+]
+
+
+def download_models() -> bool:
+    """Download AI vision models if not already present."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(script_dir, "models")
+    os.makedirs(models_dir, exist_ok=True)
+
+    all_ok = True
+    for name in REQUIRED_MODELS:
+        path = os.path.join(models_dir, name)
+        if os.path.isfile(path):
+            log_message(f"[MODELS] {name} already present, skipping")
+            continue
+
+        url = f"{MODELS_REPO_BASE}/{name}"
+        log_message(f"[MODELS] Downloading {name}...")
+        try:
+            response = requests.get(url, stream=True, timeout=120)
+            if response.status_code != 200:
+                log_message(f"[!] Failed to download {name} (HTTP {response.status_code})")
+                all_ok = False
+                continue
+            total = int(response.headers.get("content-length", 0))
+            downloaded = 0
+            with open(path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total and downloaded % (total // 10 or 1) < 8192:
+                        pct = downloaded * 100 // total
+                        log_message(f"[MODELS] {name} — {pct}%")
+            log_message(f"[MODELS] {name} downloaded ({downloaded // 1024 // 1024} MB)")
+        except Exception as e:
+            log_message(f"[!] Error downloading {name}: {e}")
+            all_ok = False
+            if os.path.isfile(path):
+                os.remove(path)
+
+    if all_ok:
+        log_message("[MODELS] All vision models ready")
+    else:
+        log_message("[!] Some models failed to download, vision features may be limited")
+    return all_ok
+
+
 def perform_first_run_setup():
     """
     Perform complete first-run installation.
@@ -307,6 +360,9 @@ def perform_first_run_setup():
 
     # Sudoers setup — allow passwordless shutdown, audio, etc.
     setup_sudoers(target_user)
+
+    # Download AI vision models
+    download_models()
 
     # Mark setup as complete
     if not mark_setup_complete():

@@ -95,8 +95,8 @@ class ObjectDetector:
                     model_path = p
                     break
         self._model_path = model_path
-        self._load_names(model_path)
-        if os.path.isfile(model_path):
+        if model_path and os.path.isfile(model_path):
+            self._load_names(model_path)
             try:
                 opts = ort.SessionOptions()
                 opts.inter_op_num_threads = threads_inter
