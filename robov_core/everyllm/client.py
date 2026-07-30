@@ -19,6 +19,10 @@ from .providers import (
     GlmProvider,
     OpenCodeProvider,
     AnyApiProvider,
+    MiniMaxTextProvider,
+    MiniMaxVLProvider,
+    StepFlashProvider,
+    QwenOmniProvider,
 )
 
 REFINE_MAX_TOKENS = 200
@@ -114,6 +118,23 @@ class EveryLLM:
             if not key:
                 continue
             p = provider_cls(api_key=key)
+            self._all_providers.append(p)
+            for model in p.supported_models:
+                self._model_registry[model] = p
+                caps = get_capabilities(model)
+                self._tracker.set_capabilities(
+                    model, caps["vision"], caps["thinking"],
+                    caps.get("configurable_thinking", False),
+                )
+
+        free_providers = [
+            MiniMaxTextProvider,
+            MiniMaxVLProvider,
+            StepFlashProvider,
+            QwenOmniProvider,
+        ]
+        for provider_cls in free_providers:
+            p = provider_cls()
             self._all_providers.append(p)
             for model in p.supported_models:
                 self._model_registry[model] = p

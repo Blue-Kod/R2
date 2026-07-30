@@ -689,8 +689,13 @@ def start_background() -> None:
 
     _hardware_initialized = True
 
-    if check_internet():
-        speak("Я готов к работе.")
+    _sound_path = os.path.join(os.path.dirname(__file__), "stt", "sounds", "PowerOn.wav")
+    if os.path.isfile(_sound_path):
+        subprocess.run(
+            ["aplay", "-D", "plughw:1,0", _sound_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def cleanup() -> None:
