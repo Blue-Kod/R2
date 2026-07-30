@@ -74,7 +74,7 @@ _ASR_FILES = {
     "am-onnx/joiner.int8.onnx":  f"{_HF_ASR_BASE}/am-onnx/joiner.int8.onnx",
     "lang/tokens.txt":            f"{_HF_ASR_BASE}/lang/tokens.txt",
 }
-_HF_VAD_URL = "https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.onnx"
+_HF_VAD_URL = "https://raw.githubusercontent.com/Blue-Kod/prepared-models/main/silero_vad.onnx"
 
 
 def _ensure_models():
