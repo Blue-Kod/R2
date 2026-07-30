@@ -178,7 +178,7 @@ def speak(text: str) -> None:
         raw_audio = espeak.stdout.read()
         espeak.wait()
         import audioop
-        amplified = audioop.mul(raw_audio, 2, 1.5)
+        amplified = audioop.mul(raw_audio, 2, 1.0)
         aplay = subprocess.Popen(
             ["aplay", "-D", "plughw:1,0", "-t", "raw",
              "-f", "S16_LE", "-r", "22050", "-c", "1"],
@@ -620,31 +620,6 @@ def start_background() -> None:
         from robov_core.ai import init_agent
         global _ai_agent
         _ai_agent = init_agent(cwd=str(ROOT_DIR))
-
-        # Show best model from saved rankings immediately
-        try:
-            saved = _ai_agent.llm.best_models()
-            if saved:
-                _ai_agent.display.update(current_model=saved[0].get("name", ""))
-        except Exception:
-            pass
-
-        def _refresh_models():
-            try:
-                log("EveryLLM: refreshing model rankings...")
-                results = _ai_agent.llm.refresh(asynchronously=True, timeout=8.0)
-                ok = sum(1 for r in results.values() if r.get("ok"))
-                fail = sum(1 for r in results.values() if not r.get("ok"))
-                log(f"EveryLLM: refresh done — {ok} ok, {fail} failed out of {len(results)}")
-                for name, r in results.items():
-                    if not r.get("ok"):
-                        log(f"  FAIL: {name} — {r.get('error', 'unknown')}")
-                best = _ai_agent.llm.ttft_scores()
-                if best:
-                    winner = min(best, key=best.get)
-                    _ai_agent.display.update(current_model=winner)
-            except Exception as e:
-                log(f"EveryLLM refresh error: {e}")
 
         # Inject robot API into AI's python environment
         _ai_agent.executor.python_env.update({
