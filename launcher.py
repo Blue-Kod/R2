@@ -654,19 +654,19 @@ def download_and_extract_repo(target_dir, script_name, target_user):
         return False
 
 def setup_autostart_linux(target_user):
-    """Create systemd service for headless autostart on boot."""
+    """Create systemd service that runs launcher.py at boot."""
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
+    python_bin = shutil.which("python3") or "/usr/bin/python3"
 
     unit = f"""[Unit]
 Description=R2 Robot
-After=network-online.target
-Wants=network-online.target
+After=network.target
 
 [Service]
 Type=simple
 User=root
-ExecStart={sys.executable} {script_path}
+ExecStart={python_bin} {script_path}
 WorkingDirectory={script_dir}
 Restart=on-failure
 RestartSec=5
@@ -705,25 +705,23 @@ def is_autostart_installed(target_user):
     return os.path.exists(SERVICE_FILE)
 
 def start_main():
-    """Launch main.py as a subprocess."""
+    """Launch main.py and wait for it to finish."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     main_path = os.path.join(script_dir, MAIN_SCRIPT)
     if not os.path.exists(main_path):
         log_message(f"[!] {MAIN_SCRIPT} not found.")
         return False
     try:
-        log_message(f"[L] Starting {MAIN_SCRIPT}...")
-
+        log_message(f"[L] Running {MAIN_SCRIPT}...")
         system_name = platform.system()
         env = os.environ.copy()
         if system_name == "Linux":
             env["PYTHONPATH"] = script_dir
-
-        subprocess.Popen(
+        result = subprocess.run(
             [sys.executable or "python3", main_path],
-            cwd=script_dir, env=env
+            cwd=script_dir, env=env,
         )
-        return True
+        return result.returncode == 0
     except Exception as e:
         log_message(f"[!] Error starting {MAIN_SCRIPT}: {e}")
         return False
