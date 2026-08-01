@@ -23,6 +23,7 @@ from .providers import (
     MiniMaxVLProvider,
     StepFlashProvider,
     QwenOmniProvider,
+    DuckAIProvider,
 )
 
 REFINE_MAX_TOKENS = 200
@@ -132,6 +133,7 @@ class EveryLLM:
             MiniMaxVLProvider,
             StepFlashProvider,
             QwenOmniProvider,
+            DuckAIProvider,
         ]
         for provider_cls in free_providers:
             p = provider_cls()

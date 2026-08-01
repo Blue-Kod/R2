@@ -1,0 +1,10 @@
+{
+  "name": "everyllm-providers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node runtime helpers for everyllm providers (duckai VQD solver)",
+  "type": "commonjs",
+  "dependencies": {
+    "jsdom": "^25.0.1"
+  }
+}

@@ -9,6 +9,7 @@ from .hf_spaces import (
     StepFlashProvider,
     QwenOmniProvider,
 )
+from .duckai import DuckAIProvider
 
 __all__ = [
     "BaseProvider",
@@ -20,4 +21,5 @@ __all__ = [
     "MiniMaxVLProvider",
     "StepFlashProvider",
     "QwenOmniProvider",
+    "DuckAIProvider",
 ]

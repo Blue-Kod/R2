@@ -36,6 +36,12 @@ MODEL_CAPABILITIES: dict[str, dict] = {
     "minimax-vl-01": {"vision": True, "thinking": False, "configurable_thinking": False},
     "step-3.7-flash": {"vision": False, "thinking": True, "configurable_thinking": False},
     "qwen3-omni": {"vision": True, "thinking": False, "configurable_thinking": False},
+    "duckai/gpt-5.4-nano": {"vision": True, "thinking": False, "configurable_thinking": True},
+    "duckai/gpt-5.4-mini": {"vision": True, "thinking": False, "configurable_thinking": True},
+    "duckai/claude-haiku-4-5": {"vision": True, "thinking": True, "configurable_thinking": True},
+    "duckai/mistral-small-2603": {"vision": False, "thinking": False, "configurable_thinking": False},
+    "duckai/gpt-oss-120b": {"vision": False, "thinking": True, "configurable_thinking": True},
+    "duckai/gemma4-31b": {"vision": True, "thinking": True, "configurable_thinking": True},
 }
 
 
