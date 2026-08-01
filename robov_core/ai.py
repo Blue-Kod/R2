@@ -172,13 +172,6 @@ todo action="add" text="Fix the motor calibration" priority="high"
 todo action="done" id=1
 todo action="list" status="pending"
 current_state
-remember tier="core" key="user_name" value="Alex"
-remember tier="archival" content="User works on robotics" category="work"
-recall query="robotics" limit=5
-core_status
-forget tier="core" key="user_name"
-delete target="archival" keyword="robotics"
-delete target="core" key="user_name"
 delete target="todo" id=1
 delete target="file" path="old_file.txt"
 </tools>
@@ -192,158 +185,30 @@ Use run_python with robot API functions to control the robot:
   run_python code="from robov_core.high_level import health_snapshot; print(health_snapshot())"
 </robot_tools>
 
-<memory>
-Two-tier:
-1. CORE — always in context (max 20). remember/forget with tier=core
-2. ARCHIVAL — searchable. remember with tier=archival, recall to search
-</memory>
-
 <instructions>
 - You are a robot. Everything you write as final text WILL BE SPOKEN ALOUD. So keep speech short and natural.
 - NEVER say you will search, look up, or check something. Just DO IT — emit the <tool_call> tags directly. No talking about tools, just use them.
-- MANDATORY tool usage: if the user asks about ANY fact (people, places, events, weather, prices, news, dates, APIs, libraries, technologies, anything beyond simple math or logic) — you MUST emit tool_call tags. You have NO knowledge. You MUST search.
+- SIMPLE QUESTIONS: greetings, small talk, personal questions, opinions, simple math/logic — answer IMMEDIATELY in 1 short sentence. Do NOT search, do NOT use tools, do NOT reason. Examples: "привет", "как дела", "как тебя зовут", "2+2".
+- USE SEARCH ONLY WHEN NEEDED: web_search/wiki_search/http_get/http_request — only when you genuinely do not know a factual answer (news, weather, prices, events, current info). Do not search for things you already know or can derive.
+- ROBOT COMMANDS: when the user asks you to do something with the robot (move, look, find, grab, speak, emote), FIRST speak a short confirmation sentence ("Хорошо, сейчас сделаю."), then IMMEDIATELY emit the <tool_call> tag in the SAME response. Do not describe what you are about to do — just confirm briefly and act.
 - Use run_python with robot API to control the robot (speak, move, emote). Do it immediately, don't ask permission.
 - Combine multiple tools in ONE response:
-  * recall + web_search (check memory then internet)
   * web_search + wiki_search (cross-reference)
   * ls + read_file (explore then read)
   You can emit 2, 3, even 5 tool_call tags in one response.
-- REMEMBER USER FACTS: user shares a personal detail → immediately: remember tier="core" key="..." value="..."
-- CONTEXT CLUES: "tell me about it", "my city", "and my country" → recall query="..." first, then search.
 - Read files before editing.
 - Be extremely concise. One short sentence. Your speech is heard aloud — no bullet lists, no markdown, no formatting.
-- For simple greetings (привет, как дела, приветствую) and trivial questions — answer immediately in 1 short sentence, no reasoning needed. Do NOT search or use tools for simple social conversation.
 - Speak Russian by default. Use the language the user writes in.
 </instructions>"""
-
-
-# ---------------------------------------------------------------------------
-# Memory system — two tiers (from EveryLLM harness.py)
-# ---------------------------------------------------------------------------
-class Memory:
-    def __init__(self, base_dir: str | Path | None = None):
-        self._dir = Path(base_dir or Path.cwd()) / ".harness_memory"
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._core_path = self._dir / "core.json"
-        self._archival_path = self._dir / "archival.json"
-        self._core: list[dict] = self._load(self._core_path)
-        self._archival: list[dict] = self._load(self._archival_path)
-
-    @staticmethod
-    def _load(path: Path) -> list[dict]:
-        if not path.exists():
-            return []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return []
-
-    @staticmethod
-    def _save(path: Path, data: list[dict]) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-    def save_all(self) -> None:
-        self._save(self._core_path, self._core)
-        self._save(self._archival_path, self._archival)
-
-    def add_core(self, key: str, value: str) -> str:
-        for entry in self._core:
-            if entry["key"].lower() == key.lower():
-                entry["value"] = value
-                entry["updated_at"] = _timestamp()
-                self.save_all()
-                return f"Updated core memory: {key} = {value}"
-        if len(self._core) >= 20:
-            return "ERROR: Core memory is full (max 20). Use 'forget' to remove something first."
-        self._core.append({"key": key, "value": value, "created_at": _timestamp(), "updated_at": _timestamp()})
-        self.save_all()
-        return f"Added to core memory: {key} = {value}"
-
-    def get_core(self) -> str:
-        if not self._core:
-            return "(empty)"
-        return "\n".join(f"  {e['key']}: {e['value']}" for e in self._core)
-
-    def forget_core(self, key: str) -> str:
-        before = len(self._core)
-        self._core = [e for e in self._core if e["key"].lower() != key.lower()]
-        if len(self._core) == before:
-            return f"Key '{key}' not found in core memory."
-        self.save_all()
-        return f"Removed '{key}' from core memory."
-
-    def core_to_prompt(self) -> str:
-        if not self._core:
-            return ""
-        return "\n".join(f"  {e['key']}: {e['value']}" for e in self._core)
-
-    def add_archival(self, content: str, category: str = "general") -> str:
-        entry = {
-            "id": len(self._archival) + 1,
-            "content": content,
-            "category": category,
-            "created_at": _timestamp(),
-        }
-        self._archival.append(entry)
-        self.save_all()
-        return f"Stored in archival memory (id={entry['id']}, category={category})"
-
-    def recall(self, query: str, limit: int = 10) -> str:
-        query_lower = query.lower()
-        scored = []
-        for e in self._archival:
-            text = e["content"].lower()
-            words = query_lower.split()
-            score = sum(1 for w in words if w in text)
-            if score > 0:
-                scored.append((score, e))
-        scored.sort(key=lambda x: -x[0])
-        if not scored:
-            return f"No matches for '{query}' in archival memory ({len(self._archival)} entries)."
-        return "\n".join(
-            f"[id={e['id']} | {e['category']} | {e['created_at']}] {e['content']}"
-            for _, e in scored[:limit]
-        )
-
-    def archival_status(self) -> str:
-        if not self._archival:
-            return "Archival memory is empty."
-        cats: dict[str, int] = {}
-        for e in self._archival:
-            c = e.get("category", "general")
-            cats[c] = cats.get(c, 0) + 1
-        return f"Archival memory: {len(self._archival)} entries ({', '.join(f'{k}={v}' for k, v in sorted(cats.items()))})"
-
-    def forget_archival(self, id_or_keyword: str) -> str:
-        try:
-            rid = int(id_or_keyword)
-            before = len(self._archival)
-            self._archival = [e for e in self._archival if e["id"] != rid]
-            if len(self._archival) == before:
-                return f"No entry with id={rid} found."
-            self.save_all()
-            return f"Removed archival entry id={rid}."
-        except ValueError:
-            kw = id_or_keyword.lower()
-            before = len(self._archival)
-            self._archival = [e for e in self._archival if kw not in e["content"].lower()]
-            removed = before - len(self._archival)
-            if removed == 0:
-                return f"No entries containing '{id_or_keyword}' found."
-            self.save_all()
-            return f"Removed {removed} archival entries containing '{id_or_keyword}'."
 
 
 # ---------------------------------------------------------------------------
 # Tool executor (from EveryLLM harness.py, extended)
 # ---------------------------------------------------------------------------
 class ToolExecutor:
-    def __init__(self, cwd: str, shell: str, memory: Memory):
+    def __init__(self, cwd: str, shell: str):
         self.cwd = cwd
         self.shell = shell
-        self.memory = memory
         self.env = os.environ.copy()
         self.python_env: dict[str, Any] = {"__builtins__": __builtins__, "cwd": cwd}
         self._todo_path = Path(cwd) / ".harness_memory" / "todo.json"
@@ -378,10 +243,6 @@ class ToolExecutor:
             "http_request": self._http_request,
             "todo": self._todo_tool,
             "current_state": self._current_state,
-            "remember": self._remember,
-            "recall": self._recall,
-            "core_status": self._core_status,
-            "forget": self._forget,
             "delete": self._delete,
         }
         handler = HANDLERS.get(name)
@@ -539,17 +400,30 @@ class ToolExecutor:
         if not query:
             return "ERROR: No query provided."
         max_results = min(p.get("max_results", 5), 10)
-        try:
-            from ddgs import DDGS
-            results = DDGS().text(query, max_results=max_results)
-            if not results:
-                return f"No results for '{query}'"
-            lines = []
-            for i, r in enumerate(results, 1):
-                lines.append(f"{i}. {r.get('title', '')}\n   {r.get('href', '')}\n   {r.get('body', '')}")
-            return "\n\n".join(lines)
-        except Exception as e:
-            return f"ERROR: Search failed: {type(e).__name__}: {e}"
+        result = [None]
+        exception = [None]
+
+        def _target():
+            try:
+                from ddgs import DDGS
+                result[0] = DDGS().text(query, max_results=max_results)
+            except Exception as e:  # noqa: BLE001
+                exception[0] = e
+
+        t = threading.Thread(target=_target, daemon=True)
+        t.start()
+        t.join(timeout=20)
+        if t.is_alive():
+            return f"ERROR: Search timed out for '{query}'"
+        if exception[0]:
+            return f"ERROR: Search failed: {type(exception[0]).__name__}: {exception[0]}"
+        results = result[0]
+        if not results:
+            return f"No results for '{query}'"
+        lines = []
+        for i, r in enumerate(results, 1):
+            lines.append(f"{i}. {r.get('title', '')}\n   {r.get('href', '')}\n   {r.get('body', '')}")
+        return "\n\n".join(lines)
 
     def _wiki_search(self, p: dict) -> str:
         query = p.get("query", "")
@@ -700,52 +574,8 @@ class ToolExecutor:
         }
         return json.dumps(state, indent=2)
 
-    def _remember(self, p: dict) -> str:
-        tier = p.get("tier", "core")
-        if tier == "core":
-            key = p.get("key", "")
-            value = p.get("value", "")
-            if not key or not value:
-                return "ERROR: 'remember' tier=core requires 'key' and 'value'."
-            return self.memory.add_core(key, value)
-        content = p.get("content", "")
-        if not content:
-            return "ERROR: 'remember' tier=archival requires 'content'."
-        return self.memory.add_archival(content, p.get("category", "general"))
-
-    def _recall(self, p: dict) -> str:
-        query = p.get("query", "")
-        if not query:
-            return "ERROR: 'recall' requires 'query'."
-        return self.memory.recall(query, min(p.get("limit", 10), 30))
-
-    def _core_status(self, p: dict) -> str:
-        return f"=== Core Memory ===\n{self.memory.core_to_prompt()}\n\n=== Archival ===\n{self.memory.archival_status()}"
-
-    def _forget(self, p: dict) -> str:
-        tier = p.get("tier", "core")
-        if tier == "core":
-            key = p.get("key", "")
-            if not key:
-                return "ERROR: 'forget' tier=core requires 'key'."
-            return self.memory.forget_core(key)
-        identifier = p.get("id", "") or p.get("keyword", "")
-        if not identifier:
-            return "ERROR: 'forget' tier=archival requires 'id' or 'keyword'."
-        return self.memory.forget_archival(identifier)
-
     def _delete(self, p: dict) -> str:
-        target = p.get("target", "archival")
-        if target == "core":
-            key = p.get("key", "")
-            if not key:
-                return "ERROR: 'delete' target=core requires 'key'."
-            return self.memory.forget_core(key)
-        if target == "archival":
-            identifier = p.get("id", "") or p.get("keyword", "")
-            if not identifier:
-                return "ERROR: 'delete' target=archival requires 'id' or 'keyword'."
-            return self.memory.forget_archival(identifier)
+        target = p.get("target", "todo")
         if target == "todo":
             tid = p.get("id", "")
             if not tid:
@@ -763,7 +593,7 @@ class ToolExecutor:
                 return f"Deleted directory: {path}"
             path.unlink()
             return f"Deleted file: {path}"
-        return f"ERROR: Unknown delete target '{target}'. Use: core, archival, todo, file"
+        return f"ERROR: Unknown delete target '{target}'. Use: todo, file"
 
 
 # ---------------------------------------------------------------------------
@@ -847,7 +677,6 @@ class R2Agent:
     R2 AI Agent with:
     - EveryLLM as LLM backend (auto model selection)
     - Streaming with cancellation via command()
-    - Two-tier memory (core + archival)
     - Robot API integration (servos, speech, emotes)
     - Display state for pygame overlay and web console
     """
@@ -867,8 +696,7 @@ class R2Agent:
         self._current_model: Optional[str] = None
         self._prev_history: list[dict] = []
 
-        self.memory = Memory(self.cwd)
-        self.executor = ToolExecutor(self.cwd, _detect_shell(), self.memory)
+        self.executor = ToolExecutor(self.cwd, _detect_shell())
         self.history: list[dict] = []
 
         self.display = DisplayState()
@@ -1148,7 +976,6 @@ class R2Agent:
             results_text = self._execute_actions(actions)
             tool_log = self.display.get_all()["tools_text"]
             self.history.append({"role": "user", "content": results_text})
-            speaker.reset()
 
         # Final answer — flush remaining speech + stop ticker
         if response_text and not self._cancel_event.is_set():

@@ -36,6 +36,11 @@ sounddevice>=0.4.6
 # MP3 encoding for duck.ai /dictation (online STT); has manylinux aarch64 wheels
 lameenc>=1.8
 
+# Web tools (AI agent): internet search, Wikipedia, HTTP fetch
+ddgs>=8.0
+wikipedia>=1.4.0
+httpx>=0.24.0
+
 # Scientific computing - heavy, install only if needed
 
 # Optional: RKNN-Toolkit-Lite2 for NPU acceleration (Orange Pi / RK3588 only)
