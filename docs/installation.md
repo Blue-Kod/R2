@@ -88,7 +88,9 @@ ping -c 2 8.8.8.8
         i2c-tools \
         build-essential \
         cmake \
-        pkg-config
+        pkg-config \
+        nodejs \
+        npm
     ```
 
 4. Перезагрузите робота:

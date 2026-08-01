@@ -77,19 +77,24 @@ _ASR_FILES = {
 _HF_VAD_URL = "https://raw.githubusercontent.com/Blue-Kod/prepared-models/main/silero_vad.onnx"
 
 
-def _ensure_models():
-    """Download model files if missing."""
+def _ensure_models(asr_needed: bool = True):
+    """Download model files if missing.
+
+    asr_needed=False skips the (large) ASR encoder/decoder/joiner downloads;
+    silero_vad is always downloaded since it drives speech detection.
+    """
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(VAD_MODEL), exist_ok=True)
 
-    for rel, url in _ASR_FILES.items():
-        dest = os.path.join(MODEL_DIR, rel)
-        if os.path.exists(dest) and os.path.getsize(dest) > 1000:
-            continue
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        print(f"  ↓ {rel}...", end=" ", flush=True)
-        urllib.request.urlretrieve(url, dest)
-        print(f"({os.path.getsize(dest) // 1024}KB)", flush=True)
+    if asr_needed:
+        for rel, url in _ASR_FILES.items():
+            dest = os.path.join(MODEL_DIR, rel)
+            if os.path.exists(dest) and os.path.getsize(dest) > 1000:
+                continue
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            print(f"  ↓ {rel}...", end=" ", flush=True)
+            urllib.request.urlretrieve(url, dest)
+            print(f"({os.path.getsize(dest) // 1024}KB)", flush=True)
 
     if not os.path.exists(VAD_MODEL) or os.path.getsize(VAD_MODEL) < 100000:
         print("  ↓ silero_vad.onnx...", end=" ", flush=True)
@@ -151,6 +156,84 @@ def _fix_text(text):
     return text
 
 
+# ── Duck.ai dictation (online STT) ─────────────────────────────────
+
+_DUCK_DICTATION_URL = "https://duck.ai/duckchat/v1/dictation"
+_DUCK_MIN_UTTERANCE = 0.3  # seconds of human speech before uploading
+
+
+def _get_duck_provider():
+    """Lazily instantiate the everyllm DuckAI provider (reuses its VQD solver)."""
+    global _duck_provider
+    if _duck_provider is None:
+        try:
+            from robov_core.everyllm.providers import DuckAIProvider
+        except ImportError:
+            from ..everyllm.providers import DuckAIProvider
+        _duck_provider = DuckAIProvider()
+    return _duck_provider
+
+
+_duck_provider = None
+
+
+def _mp3_from_int16(pcm: np.ndarray) -> bytes:
+    import lameenc
+
+    enc = lameenc.Encoder()
+    enc.set_bit_rate(128)
+    enc.set_in_sample_rate(SAMPLE_RATE)
+    enc.set_channels(1)
+    enc.set_quality(2)
+    return enc.encode(pcm.tobytes()) + enc.flush()
+
+
+def _dictation_headers(vqd: str) -> dict:
+    return {
+        "accept": "text/event-stream",
+        "accept-language": "en-US,en;q=0.9",
+        "content-type": "audio/mpeg",
+        "pragma": "no-cache",
+        "priority": "u=0",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://duck.ai/",
+        "x-vqd-hash-1": vqd,
+    }
+
+
+def _dictate(mp3_bytes: bytes) -> str:
+    """Transcribe an MP3 clip via duck.ai /dictation (blocks)."""
+    import time
+
+    import requests
+
+    last = None
+    delays = [1.0, 3.0, 7.0, 15.0]
+    for attempt, delay in enumerate(delays + [0.0]):
+        try:
+            vqd = _get_duck_provider()._get_vqd()
+            r = requests.post(
+                _DUCK_DICTATION_URL,
+                data=mp3_bytes,
+                headers=_dictation_headers(vqd),
+                timeout=60,
+            )
+            if r.status_code == 200:
+                return r.json().get("text", "")
+            last = f"HTTP {r.status_code}: {r.text[:200]}"
+        except Exception as e:  # noqa: BLE001
+            last = str(e)
+        if delay:
+            time.sleep(delay)
+    raise RuntimeError(f"dictation failed: {last}")
+
+
 class VoiceListener:
     """Streaming voice recognition with Silero VAD.
 
@@ -161,8 +244,9 @@ class VoiceListener:
         listener.stop()
     """
 
-    def __init__(self):
+    def __init__(self, use_offline_stt: bool = False):
         global _listener
+        self.use_offline_stt = use_offline_stt
         self._handler = print
         self._activation_check = None
         self._stop = threading.Event()
@@ -170,8 +254,10 @@ class VoiceListener:
         self._thread = None
         _listener = self
 
-        _ensure_models()
-        self.recognizer = _load_recognizer()
+        _ensure_models(asr_needed=self.use_offline_stt)
+        self.recognizer = None
+        if self.use_offline_stt:
+            self._ensure_recognizer()
 
         silero_cfg = sherpa_onnx.SileroVadModelConfig(
             model=VAD_MODEL,
@@ -213,6 +299,41 @@ class VoiceListener:
         if self._thread:
             self._thread.join(timeout=5)
 
+    def _ensure_recognizer(self):
+        if self.recognizer is not None:
+            return
+        _ensure_models(asr_needed=True)
+        self.recognizer = _load_recognizer()
+
+    def _fallback_to_offline(self):
+        if self.use_offline_stt:
+            return
+        print("duck.ai dictation failed — switching to offline ASR", flush=True)
+        self.use_offline_stt = True
+        self._ensure_recognizer()
+
+    def _handle_online_utterance(self, raw_chunks):
+        """Transcribe a VAD-cut speech clip via duck.ai and dispatch the text."""
+        if not raw_chunks:
+            return
+        pcm = np.concatenate(raw_chunks)
+        if len(pcm) < int(SAMPLE_RATE * _DUCK_MIN_UTTERANCE):
+            return
+        try:
+            mp3 = _mp3_from_int16(pcm)
+            text = _dictate(mp3)
+        except Exception as e:  # noqa: BLE001
+            print(f"dictation error: {e}", flush=True)
+            self._fallback_to_offline()
+            return
+        final = _fix_text(text.strip())
+        if final:
+            print(f"voice text {final}", flush=True)
+            if self._activation_check is None or self._activation_check(final):
+                if any(w in final for w in TRIGGER_WORDS):
+                    _play_sound_blocking(SOUND_OFF, self.mic)
+                self._handler(final)
+
     def input_cycle(self, function=None, activation_check=None):
         """Block and process voice input in a loop (Ctrl+C to stop)."""
         if function is not None:
@@ -250,6 +371,7 @@ class VoiceListener:
         rec_stream = None
         state = "SLEEP"
         command_text = ""
+        utterance_raw = []
 
         try:
             while not self._stop.is_set():
@@ -286,20 +408,24 @@ class VoiceListener:
                     if vad.is_speech_detected():
                         state = "ACTIVE"
                         command_text = ""
-                        if ctx_count >= ctx_size:
-                            ctx_full = np.concatenate([
-                                ctx_buf[ctx_pos:],
-                                ctx_buf[:ctx_pos],
-                            ])
-                        else:
-                            ctx_full = ctx_buf[:ctx_count].copy()
+                        utterance_raw = []
+                        if self.use_offline_stt:
+                            if ctx_count >= ctx_size:
+                                ctx_full = np.concatenate([
+                                    ctx_buf[ctx_pos:],
+                                    ctx_buf[:ctx_pos],
+                                ])
+                            else:
+                                ctx_full = ctx_buf[:ctx_count].copy()
 
-                        rec_stream = self.recognizer.create_stream()
-                        rec_stream.accept_waveform(SAMPLE_RATE, ctx_full)
-                        while self.recognizer.is_ready(rec_stream):
-                            self.recognizer.decode_stream(rec_stream)
+                            rec_stream = self.recognizer.create_stream()
+                            rec_stream.accept_waveform(SAMPLE_RATE, ctx_full)
+                            while self.recognizer.is_ready(rec_stream):
+                                self.recognizer.decode_stream(rec_stream)
                     continue
 
+                if not self.use_offline_stt:
+                    utterance_raw.append(raw)
                 if rec_stream is not None:
                     rec_stream.accept_waveform(SAMPLE_RATE, audio_f32)
                     while self.recognizer.is_ready(rec_stream):
@@ -310,15 +436,19 @@ class VoiceListener:
                         command_text = _fix_text(result)
 
                     if not vad.is_speech_detected():
-                        final = _fix_text(command_text.strip())
-                        if final:
-                            print(f"voice text {final}", flush=True)
-                            if self._activation_check is None or self._activation_check(final):
-                                if any(w in final for w in TRIGGER_WORDS):
-                                    _play_sound_blocking(SOUND_OFF, self.mic)
-                                self._handler(final)
+                        if self.use_offline_stt:
+                            final = _fix_text(command_text.strip())
+                            if final:
+                                print(f"voice text {final}", flush=True)
+                                if self._activation_check is None or self._activation_check(final):
+                                    if any(w in final for w in TRIGGER_WORDS):
+                                        _play_sound_blocking(SOUND_OFF, self.mic)
+                                    self._handler(final)
+                        else:
+                            self._handle_online_utterance(utterance_raw)
                         state = "SLEEP"
                         command_text = ""
+                        utterance_raw = []
                         rec_stream = None
 
         finally:

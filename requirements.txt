@@ -33,6 +33,9 @@ websockets>=11.0.0
 # Audio - may need system deps: apt-get install libportaudio2
 sounddevice>=0.4.6
 
+# MP3 encoding for duck.ai /dictation (online STT); has manylinux aarch64 wheels
+lameenc>=1.8
+
 # Scientific computing - heavy, install only if needed
 
 # Optional: RKNN-Toolkit-Lite2 for NPU acceleration (Orange Pi / RK3588 only)
