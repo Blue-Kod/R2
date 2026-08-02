@@ -37,7 +37,11 @@ sounddevice>=0.4.6
 lameenc>=1.8
 
 # Web tools (AI agent): internet search, Wikipedia, HTTP fetch
-ddgs>=8.0
+# NOTE: ddgs is NOT used - it requires 'primp' (Rust) with no Python 3.9 / aarch64 wheels.
+# search-engine-parser provides DuckDuckGo search (deps: lxml<5, bs4, fake-useragent, aiohttp).
+# aiohttp pinned to 3.9.x: 3.10+ drops cp39 wheels (pip would build from source on the robot).
+search-engine-parser>=0.6.8
+aiohttp>=3.9.0,<3.10
 wikipedia>=1.4.0
 httpx>=0.24.0
 

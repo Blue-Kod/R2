@@ -405,8 +405,20 @@ class ToolExecutor:
 
         def _target():
             try:
-                from ddgs import DDGS
-                result[0] = DDGS().text(query, max_results=max_results)
+                from search_engine_parser.core.engines.duckduckgo import Search as DDGSearch
+                from urllib.parse import urlparse, parse_qs, unquote
+                import asyncio
+                raw = asyncio.run(DDGSearch().async_search(query, page=1, cache=False))
+                items = []
+                for title, link, desc in zip(raw["titles"], raw["links"], raw["descriptions"]):
+                    href = str(link)
+                    if href.startswith("//"):
+                        href = "https:" + href
+                    qs = parse_qs(urlparse(href).query)
+                    if qs.get("uddg"):
+                        href = unquote(qs["uddg"][0])
+                    items.append({"title": str(title), "href": href, "body": str(desc)})
+                result[0] = items[:max_results]
             except Exception as e:  # noqa: BLE001
                 exception[0] = e
 

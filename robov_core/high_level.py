@@ -582,6 +582,8 @@ def start_background() -> None:
 
     from robov_core.web import create_app
     app = create_app()
+    import logging
+    logging.getLogger("werkzeug").setLevel(logging.ERROR)
     web_thread = threading.Thread(
         target=lambda: app.run(host=HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True, use_reloader=False),
         daemon=True,
