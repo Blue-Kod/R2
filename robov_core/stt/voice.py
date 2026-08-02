@@ -309,8 +309,11 @@ class VoiceListener:
         if self.use_offline_stt:
             return
         print("duck.ai dictation failed — switching to offline ASR", flush=True)
-        self.use_offline_stt = True
-        self._ensure_recognizer()
+        try:
+            self._ensure_recognizer()
+            self.use_offline_stt = True
+        except Exception as e:  # noqa: BLE001
+            print(f"offline ASR unavailable, staying online: {e}", flush=True)
 
     def _handle_online_utterance(self, raw_chunks):
         """Transcribe a VAD-cut speech clip via duck.ai and dispatch the text."""
@@ -409,6 +412,8 @@ class VoiceListener:
                         state = "ACTIVE"
                         command_text = ""
                         utterance_raw = []
+                        if not self.use_offline_stt:
+                            utterance_raw.append(raw)
                         if self.use_offline_stt:
                             if ctx_count >= ctx_size:
                                 ctx_full = np.concatenate([
@@ -435,7 +440,8 @@ class VoiceListener:
                     if result:
                         command_text = _fix_text(result)
 
-                    if not vad.is_speech_detected():
+                if not vad.is_speech_detected():
+                    try:
                         if self.use_offline_stt:
                             final = _fix_text(command_text.strip())
                             if final:
@@ -446,10 +452,12 @@ class VoiceListener:
                                     self._handler(final)
                         else:
                             self._handle_online_utterance(utterance_raw)
-                        state = "SLEEP"
-                        command_text = ""
-                        utterance_raw = []
-                        rec_stream = None
+                    except Exception as e:  # noqa: BLE001
+                        print(f"STT dispatch error: {e}", flush=True)
+                    state = "SLEEP"
+                    command_text = ""
+                    utterance_raw = []
+                    rec_stream = None
 
         finally:
             self.mic.stop()
