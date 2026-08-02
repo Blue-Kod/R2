@@ -244,7 +244,7 @@ class VoiceListener:
         listener.stop()
     """
 
-    def __init__(self, use_offline_stt: bool = False):
+    def __init__(self, use_offline_stt: bool = True):
         global _listener
         self.use_offline_stt = use_offline_stt
         self._handler = print
