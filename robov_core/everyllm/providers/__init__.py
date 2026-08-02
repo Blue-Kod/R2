@@ -3,12 +3,6 @@ from .agnes import AgnesProvider
 from .glm import GlmProvider
 from .opencode import OpenCodeProvider
 from .anyapi import AnyApiProvider
-from .hf_spaces import (
-    MiniMaxTextProvider,
-    MiniMaxVLProvider,
-    StepFlashProvider,
-    QwenOmniProvider,
-)
 from .duckai import DuckAIProvider
 
 __all__ = [
@@ -17,9 +11,5 @@ __all__ = [
     "GlmProvider",
     "OpenCodeProvider",
     "AnyApiProvider",
-    "MiniMaxTextProvider",
-    "MiniMaxVLProvider",
-    "StepFlashProvider",
-    "QwenOmniProvider",
     "DuckAIProvider",
 ]

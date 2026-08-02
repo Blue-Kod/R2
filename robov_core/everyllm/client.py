@@ -19,10 +19,6 @@ from .providers import (
     GlmProvider,
     OpenCodeProvider,
     AnyApiProvider,
-    MiniMaxTextProvider,
-    MiniMaxVLProvider,
-    StepFlashProvider,
-    QwenOmniProvider,
     DuckAIProvider,
 )
 
@@ -129,10 +125,6 @@ class EveryLLM:
                 )
 
         free_providers = [
-            MiniMaxTextProvider,
-            MiniMaxVLProvider,
-            StepFlashProvider,
-            QwenOmniProvider,
             DuckAIProvider,
         ]
         for provider_cls in free_providers:
