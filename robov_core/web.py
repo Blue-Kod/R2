@@ -43,7 +43,9 @@ threading.Thread(target=_mjpeg_fps_worker, daemon=True, name="mjpeg-fps").start(
 
 
 def create_app() -> Flask:
-    app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
+    app = Flask(__name__,
+                template_folder=str(ROOT_DIR / "templates"),
+                static_folder=str(ROOT_DIR / "static"))
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.jinja_env.auto_reload = True
     app.secret_key = os.urandom(24).hex()

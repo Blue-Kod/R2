@@ -9,7 +9,7 @@
         :root {
             --bg: #0a0a0a; --panel: #121212; --panel-2: #151515;
             --text: #f0f0f0; --muted: #9c9c9c; --line: #2a2a2a;
-            --accent: #44944a; --danger: #8b0000; --cam-w: 960px; --cam-h: 540px;
+            --accent: #44944a; --danger: #8b0000;
         }
         html, body { height: 100%; background: var(--bg); }
         body { overflow: hidden; color: var(--text); font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
@@ -25,14 +25,14 @@
         .stats { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
         .stats div { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 12px; padding: 6px 12px; background: var(--panel); }
         .stats span { color: var(--text); font-weight: 600; margin-left: 4px; }
-        .container { display: grid; grid-template-columns: 260px minmax(0, var(--cam-w)) 1fr; gap: 14px; flex: 1; min-height: 0; overflow: hidden; }
+        .container { display: grid; grid-template-columns: 280px minmax(0, 1fr) 400px; gap: 14px; flex: 1; min-height: 0; overflow: hidden; }
         .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 20px; padding: 14px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
         .panel-title { font-size: 11px; letter-spacing: 1.2px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; font-weight: 500; }
         .terminal-box { flex: 1; border-radius: 14px; border: 1px solid var(--line); background: #0d0d0d; padding: 12px; overflow-y: auto; font-size: 12px; line-height: 1.45; white-space: pre-wrap; font-family: 'JetBrains Mono', Consolas, monospace; color: #e0e0e0; }
         .tabs { display: flex; gap: 6px; margin-bottom: 10px; padding: 4px; border-radius: 40px; background: rgba(20, 20, 20, 0.8); border: 1px solid var(--line); width: 100%; }
         .tabs button { cursor: pointer; border: none; border-radius: 30px; padding: 6px 14px; font-size: 12px; font-weight: 500; color: var(--muted); background: transparent; transition: 0.2s; flex: 1; text-align: center; }
         .tabs button.active { color: white; background: #44944a; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
-        #video-container { width: 100%; height: var(--cam-h); position: relative; border-radius: 16px; border: 1px solid var(--line); background: #070707; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+        #video-container { width: 100%; flex: 1; min-height: 0; position: relative; border-radius: 16px; border: 1px solid var(--line); background: #070707; overflow: hidden; display: flex; justify-content: center; align-items: center; }
         #video-feed { width: 100%; height: 100%; object-fit: cover; }
         .hidden { display: none !important; }
         .servo-controls { overflow-y: auto; flex: 1; padding-right: 6px; }
@@ -54,12 +54,11 @@
         .loading-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
         @keyframes spin { to { transform: rotate(360deg); } }
         #help-sidebar button.active { background:#44944a30; color:#44944a; }
-        @media (max-width: 1280px) {
+        @media (max-width: 900px) {
             .container { grid-template-columns: 1fr; overflow: auto; }
             body { overflow: auto; }
             .layout { height: auto; min-height: 100vh; }
-            #video-container { width: 100%; height: auto; aspect-ratio: 16/9; }
-            :root { --cam-h: auto; --cam-w: 100%; }
+            #video-container { height: auto; aspect-ratio: 16/9; flex: none; }
             .stats { justify-content: flex-start; }
             .topbar { grid-template-columns: 1fr; }
         }
@@ -85,13 +84,13 @@
             .nav-links a { padding: 6px 10px; font-size: 11px; }
         }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.10/marked.min.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/theme/monokai.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/python/python.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/edit/matchbrackets.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/edit/closebrackets.min.js"></script>
+    <script src="/static/vendor/marked.min.js"></script>
+    <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css">
+    <link rel="stylesheet" href="/static/vendor/codemirror/theme/monokai.min.css">
+    <script src="/static/vendor/codemirror/lib/codemirror.min.js"></script>
+    <script src="/static/vendor/codemirror/mode/python/python.min.js"></script>
+    <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js"></script>
+    <script src="/static/vendor/codemirror/addon/edit/closebrackets.min.js"></script>
 </head>
 <body>
 <div class="layout">
