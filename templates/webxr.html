@@ -48,7 +48,8 @@ const NECK_MIN = 45, NECK_MAX = 135;
 const TILT_MIN = 45, TILT_MAX = 135;
 const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
 const GRIP_CLOSE = 180, GRIP_OPEN = 0;
-const ORIGIN_Y_OFFSET = 0.15;  // 15 см ниже шлема
+const ROBOT_DISTANCE = 1.0;    // м вперёд от пользователя при входе в VR
+const ROBOT_Y_OFFSET = -0.3;   // м: торс ниже уровня глаз
 const SEND_HZ = 8;
 const ANGLE_DEADBAND = 1.0;   // градусы
 const TARGET_DEADBAND = 20;   // мм
@@ -210,6 +211,10 @@ const euler = new THREE.Euler();
 function frame(time, xrFrame) {
     pollFreeze();
 
+    // Видео: в XR-сессии img.onload может не срабатывать повторно,
+    // поэтому каждый кадр принудительно перекачиваем текстуру на GPU.
+    if (camImg.complete) camTex.needsUpdate = true;
+
     // Поза головы: берём из XR-кадра (three.js обновляет камеру только внутри render(),
     // поэтому camera.getWorldPosition в колбэке был бы устаревшим). На desktop — камера.
     const presenting = renderer.xr.isPresenting;
@@ -231,21 +236,27 @@ function frame(time, xrFrame) {
     const neck = Math.round(clamp(90 + yaw, NECK_MIN, NECK_MAX));
     const tilt = Math.round(clamp(90 - pitch, TILT_MIN, TILT_MAX));
 
-    // точка отсчёта: 15 см ниже шлема (мировая Y)
-    tmpOrigin.copy(tmpV1);
-    tmpOrigin.y -= ORIGIN_Y_OFFSET;
-
-    // базис головы без крена (yaw+pitch)
-    euler.z = 0;
-    tmpQHead.setFromEuler(euler);
-    tmpQHeadInv.copy(tmpQHead).invert();
+    // Фиксированный якорь робота в комнате: ставим один раз при входе,
+    // чтобы руки НЕ ездили за головой. Ориентация = поза головы при входе
+    // (без крена), позиция = ROBOT_DISTANCE вперёд по взгляду и ниже уровня глаз.
+    if (!robotAnchorCaptured) {
+        euler.z = 0;
+        robotAnchorQuat.setFromEuler(euler);
+        robotAnchorQuatInv.copy(robotAnchorQuat).invert();
+        tmpDir.set(0, 0, -1).applyQuaternion(robotAnchorQuat);
+        tmpDir.y = 0;
+        tmpDir.normalize();
+        robotAnchorPos.copy(tmpV1).addScaledVector(tmpDir, ROBOT_DISTANCE);
+        robotAnchorPos.y += ROBOT_Y_OFFSET;
+        robotAnchorCaptured = true;
+    }
 
     const targets = { right: null, left: null };
     for (const side of ['right', 'left']) {
         const ctrl = ctrlByHand[side];
         if (!ctrl) continue;
         ctrl.getWorldPosition(tmpV2);
-        tmpV2.sub(tmpOrigin).applyQuaternion(tmpQHeadInv);
+        tmpV2.sub(robotAnchorPos).applyQuaternion(robotAnchorQuatInv);
         targets[side] = {
             x: Math.round(tmpV2.x * 1000),
             y: Math.round(tmpV2.y * 1000),
@@ -320,10 +331,10 @@ function gripText() { return `П:${grip.right ?? '—'} Л:${grip.left ?? '—'}
 
 // ==== Отрисовка рук ====
 function drawArms(pose) {
-    // переносим систему координат робота в точку отсчёта под шлемом, ориентация = голова
-    armsGroup.position.copy(tmpOrigin);
-    tmpQHead2.copy(tmpQHead);
-    armsGroup.quaternion.copy(tmpQHead2);
+    // руки закреплены на фиксированном якоре робота в комнате,
+    // а не ездят за головой пользователя
+    armsGroup.position.copy(robotAnchorPos);
+    armsGroup.quaternion.copy(robotAnchorQuat);
 
     for (const side of ['left', 'right']) {
         const fk = armFk(side, servoAngles);
@@ -358,9 +369,14 @@ function pollFreeze() {
 const prevFreezeState = new Set();
 
 // ==== Вход в WebXR ====
-const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpOrigin = new THREE.Vector3();
-const tmpQ = new THREE.Quaternion(), tmpQHead = new THREE.Quaternion(),
-      tmpQHeadInv = new THREE.Quaternion(), tmpQHead2 = new THREE.Quaternion();
+const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
+const tmpQ = new THREE.Quaternion();
+// Якорь робота в комнате (фиксируется при входе в VR)
+const robotAnchorPos = new THREE.Vector3();
+const robotAnchorQuat = new THREE.Quaternion();
+const robotAnchorQuatInv = new THREE.Quaternion();
+const tmpDir = new THREE.Vector3();
+let robotAnchorCaptured = false;
 
 const enterBtn = document.getElementById('enterBtn');
 const xrStatus = document.getElementById('xr-status');
@@ -385,6 +401,7 @@ async function enterVR() {
         });
         await renderer.xr.setSession(session);
         frozen = false;
+        robotAnchorCaptured = false;
         freezeBadge.classList.remove('show');
         prevFreezeState.clear();
         enterBtn.classList.add('hidden');

@@ -631,7 +631,8 @@ def set_servo_command(channel: int, angle: int) -> bool:
     """Установить угол серво (логический, как в servo.py/high_level.py).
 
     Инверсию правых каналов (INVERTED_CHANNELS) применяет
-    ServoController.set_servo внутри.
+    ServoController.set_servo внутри. smooth=True — плавное движение
+    с разгоном/торможением через per-channel mover-поток.
     """
     servo = _servo
     if servo is None:
@@ -641,14 +642,7 @@ def set_servo_command(channel: int, angle: int) -> bool:
     min_angle, max_angle = servo.command_limits.get(
         channel, servo.channel_configs[channel][:2])
     angle = int(max(min_angle, min(max_angle, angle)))
-    threading.Thread(
-        target=servo.set_servo,
-        args=(channel, angle),
-        kwargs={"smooth": True, "step_delay": 0.01, "step_angle": 2},
-        daemon=True,
-        name=f"servo-ch{channel}",
-    ).start()
-    return True
+    return servo.set_servo(channel, angle, smooth=True)
 
 
 def ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
