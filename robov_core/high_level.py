@@ -13,6 +13,7 @@ import psutil
 
 from robov_core.camera import StereoCamera
 from robov_core.servo import ServoController
+from robov_core import arm_kinematics
 
 _HAS_DISPLAY = False
 EyeDisplay = None
@@ -27,11 +28,6 @@ CAMERA_PARAMS_FILE = "cam_params.json"
 LAUNCHER_SCRIPT = "launcher.py"
 EYES_SCALE_FACTOR = 1.3
 APP_PASSWORD = "admin."
-
-DEFAULT_SERVO_ANGLES: Dict[int, int] = {
-    0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
-    5: 45, 6: 135, 7: 135, 8: 90, 9: 90
-}
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -210,7 +206,8 @@ def _init_hardware() -> None:
         try:
             _servo = ServoController(bus=0, address=0x40, freq=50)
             log("Servo controller initialized")
-            for channel, angle in DEFAULT_SERVO_ANGLES.items():
+            # Поза по умолчанию — из servo.py (current_angles)
+            for channel, angle in _servo.current_angles.items():
                 if channel in _servo.channel_configs:
                     _servo.set_servo(channel, angle, smooth=False)
         except Exception as exc:
@@ -617,6 +614,94 @@ def get_servo_angles_physical() -> Dict[int, int]:
     except Exception as e:
         log(f"Error getting physical servo angles: {e}")
         return {}
+
+
+def get_servo_limits() -> Dict[int, List[int]]:
+    """Диапазоны каналов [min, max] из servo.py (channel_configs)."""
+    servo = _servo
+    if servo is None:
+        return {}
+    try:
+        with servo.lock:
+            return {ch: [cfg[0], cfg[1]] for ch, cfg in servo.channel_configs.items()}
+    except Exception as e:
+        log(f"Error getting servo limits: {e}")
+        return {}
+
+
+def set_servo_command(channel: int, angle: int) -> bool:
+    """Установить угол серво (логический, как в servo.py/high_level.py).
+
+    Инверсию правых каналов (INVERTED_CHANNELS) применяет
+    ServoController.set_servo внутри.
+    """
+    servo = _servo
+    if servo is None:
+        return False
+    if channel not in servo.channel_configs:
+        return False
+    min_angle, max_angle, _, _ = servo.channel_configs[channel]
+    angle = int(max(min_angle, min(max_angle, angle)))
+    threading.Thread(
+        target=servo.set_servo,
+        args=(channel, angle),
+        kwargs={"smooth": True, "step_delay": 0.01, "step_angle": 2},
+        daemon=True,
+        name=f"servo-ch{channel}",
+    ).start()
+    return True
+
+
+def ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
+    """Полный результат IK для web/API в системе координат камеры."""
+    return arm_kinematics.ik_solve(x, y, z, left=left)
+
+
+def _ik_tuple(result: dict, left: bool) -> Tuple[bool, float, float, float]:
+    """Публичный компактный формат: ok, pan, shoulder, elbow."""
+    commands = result.get("servo")
+    if not commands:
+        return bool(result.get("ok")), 0.0, 0.0, 0.0
+    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
+    return (
+        bool(result.get("ok")),
+        float(commands[channels["shoulder_z"]]),
+        float(commands[channels["shoulder_x"]]),
+        float(commands[channels["elbow_x"]]),
+    )
+
+
+def ik(x: float, y: float, z: float, left: bool = False) -> Tuple[bool, float, float, float]:
+    """Вернуть (достижима_в_пределах_1см, pan, shoulder, elbow).
+
+    Углы — логические команды серво, в порядке pan, shoulder, elbow.
+    """
+    return _ik_tuple(ik_detail(x, y, z, left), left)
+
+
+def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
+    """Вычислить IK и, только если цель в пределах 10 мм, двигать руку."""
+    result = ik_detail(x, y, z, left)
+    result["moved"] = False
+    if not result["ok"] or not result["servo"]:
+        return result
+    for channel, angle_value in result["servo"].items():
+        if not set_servo_command(channel, angle_value):
+            result["message"] += "; не удалось запустить движение серво"
+            return result
+    result["moved"] = True
+    return result
+
+
+def move_to_ik(x: float, y: float, z: float, left: bool = False) -> Tuple[bool, float, float, float]:
+    """Вычислить IK, переместить выбранную руку и вернуть формат ik()."""
+    result = ik(x, y, z, left)
+    if not result[0]:
+        return result
+    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
+    for name, angle_value in zip(("shoulder_z", "shoulder_x", "elbow_x"), result[1:]):
+        set_servo_command(channels[name], int(round(angle_value)))
+    return result
 
 
 def set_servo_physical(channel: int, physical_angle: int) -> bool:

@@ -22,9 +22,10 @@ from robov_core.high_level import (
     shell_output, shell_start, shell_write,
     set_emote, get_emote, supported_emotes,
     set_eyes_position, get_eyes_position, get_logs,
-    get_servo_angles_physical, get_servo_offsets,
-    set_servo_physical, log, cleanup, servo_toggle,
+    get_servo_angles, get_servo_offsets, get_servo_limits,
+    set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
 )
+from robov_core.arm_kinematics import browser_config
 
 
 _mjpeg_counter: int = 0
@@ -108,7 +109,8 @@ def create_app() -> Flask:
                     "img_size": getattr(camera, 'img_size', [640, 360]),
                 }
 
-        servo_angles = get_servo_angles_physical()
+        servo_angles = get_servo_angles()
+        servo_limits = get_servo_limits()
         servo_offsets = get_servo_offsets()
 
         current_emote = get_emote()
@@ -120,8 +122,10 @@ def create_app() -> Flask:
         return render_template("index.html",
                                camera_params=camera_params,
                                servo_angles=servo_angles,
-                               servo_offsets=servo_offsets,
-                               current_emote=current_emote,
+                               servo_limits=servo_limits,
+                                servo_offsets=servo_offsets,
+                                ik_config=browser_config(),
+                                current_emote=current_emote,
                                eyes_position={"x": eyes_x, "y": eyes_y},
                                supported_emotes=supported_emotes(),
                                system_data=system_data)
@@ -271,9 +275,40 @@ def create_app() -> Flask:
         min_angle, max_angle, _, _ = servo_ref.channel_configs[channel]
         if angle < min_angle or angle > max_angle:
             return jsonify({"error": f"Angle must be {min_angle}-{max_angle}"}), 400
-        if set_servo_physical(channel, angle):
+        # angle — логический угол команды (как в servo.py/high_level.py).
+        # Инверсию правых каналов применяет ServoController.set_servo.
+        if set_servo_command(channel, angle):
             return jsonify({"status": "ok", "channel": channel, "angle": angle})
         return jsonify({"error": "Failed to set servo"}), 500
+
+    @app.route("/api/servo/angles")
+    @require_auth
+    def servo_angles():
+        return jsonify({"angles": get_servo_angles()})
+
+    def ik_request_data():
+        data = request.get_json(silent=True) or {}
+        try:
+            point = (float(data["x"]), float(data["y"]), float(data["z"]))
+        except (KeyError, TypeError, ValueError):
+            return None, None
+        return point, bool(data.get("left", False))
+
+    @app.route("/api/ik", methods=["POST"])
+    @require_auth
+    def api_ik():
+        point, left = ik_request_data()
+        if point is None:
+            return jsonify({"error": "x, y and z must be numbers"}), 400
+        return jsonify(ik_detail(*point, left=left))
+
+    @app.route("/api/ik/move", methods=["POST"])
+    @require_auth
+    def api_ik_move():
+        point, left = ik_request_data()
+        if point is None:
+            return jsonify({"error": "x, y and z must be numbers"}), 400
+        return jsonify(move_ik_detail(*point, left=left))
 
     # --- Emote / Eyes ---
 

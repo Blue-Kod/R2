@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Set, Tuple
 # отрицательное — меньше.
 # ----------------------------------------------------------------------
 DEFAULT_OFFSETS: Dict[int, float] = {
-    0: 0.0, 1: 0, 2: 0, 3: 0.0, 4: 0,
+    0: 0.0, 1: 0, 2: 0, 3: 0.0, 4: -10,
     5: 0, 6: 0.0, 7: 0, 8: 0.0, 9: 0.0
 }
 
@@ -24,7 +24,31 @@ DEFAULT_OFFSETS: Dict[int, float] = {
 INVERTED_CHANNELS: Set[int] = {1, 4, 6, 8}
 # ----------------------------------------------------------------------
 
+# ----------------------------------------------------------------------
+# Поза по умолчанию (логические углы на старте).
+# Единый источник правды: контроллер, high_level и dev-инструменты
+# берут значения отсюда.
+# ----------------------------------------------------------------------
+DEFAULT_POSE: Dict[int, int] = {
+    0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
+    5: 45, 6: 180, 7: 180, 8: 90, 9: 90
+}
+# ----------------------------------------------------------------------
+
 ChannelConfig = Tuple[int, int, int, int]
+
+# ----------------------------------------------------------------------
+# Конфигурация каналов по умолчанию: (min_angle, max_angle, min_pulse,
+# max_pulse). Единый источник правды для диапазонов углов.
+# ----------------------------------------------------------------------
+DEFAULT_CHANNEL_CONFIGS: Dict[int, ChannelConfig] = {
+    0: (0, 180, 120, 520), 1: (0, 270, 102, 540),
+    2: (0, 270, 102, 540), 3: (0, 180, 120, 520),
+    4: (0, 270, 102, 540), 5: (0, 270, 102, 540),
+    6: (0, 270, 102, 540), 7: (0, 270, 102, 540),
+    8: (0, 180, 120, 520), 9: (0, 180, 120, 520),
+}
+# ----------------------------------------------------------------------
 
 
 class ServoError(Exception):
@@ -45,10 +69,7 @@ class ServoController:
         self.pwm = None
         self.initialized: bool = False
 
-        self.current_angles: Dict[int, int] = {
-            0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
-            5: 45, 6: 180, 7: 180, 8: 90, 9: 90
-        }
+        self.current_angles: Dict[int, int] = dict(DEFAULT_POSE)
         self.lock: threading.Lock = threading.Lock()
         self._move_locks: Dict[int, threading.Lock] = {}
 
@@ -56,13 +77,8 @@ class ServoController:
         self.inverted_channels: Set[int] = set(INVERTED_CHANNELS)
 
         if channel_configs is None:
-            self.channel_configs: Dict[int, ChannelConfig] = {
-                0: (0, 180, 120, 520), 1: (0, 270, 102, 540),
-                2: (0, 270, 102, 540), 3: (0, 180, 120, 520),
-                4: (0, 270, 102, 540), 5: (0, 270, 102, 540),
-                6: (0, 270, 102, 540), 7: (0, 270, 102, 540),
-                8: (0, 180, 120, 520), 9: (0, 180, 120, 520),
-            }
+            self.channel_configs: Dict[int, ChannelConfig] = \
+                dict(DEFAULT_CHANNEL_CONFIGS)
         else:
             self.channel_configs = channel_configs
 
