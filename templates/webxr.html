@@ -194,6 +194,12 @@ function onFreezeButton(handedness, pressed) {
 let servoAngles = {};
 for (const [k, v] of Object.entries(serverData.servo_angles || {})) servoAngles[Number(k)] = v;
 
+// Командуемые углы рук: обновляются сразу из IK-ответа сервера, чтобы
+// отрисовка рук шла за рукой пользователя, а не за реальными (медленными)
+// сервами. Реальные углы приходят из /api/servo/angles раз в 500 мс.
+let commandedAngles = {};
+for (const [k, v] of Object.entries(serverData.servo_angles || {})) commandedAngles[Number(k)] = v;
+
 let lastAngles = { neck: null, tilt: null };
 let lastTargets = { right: null, left: null };
 
@@ -334,6 +340,14 @@ function sendTeleop(payload) {
                 lastTargets.right = payload.targets.right || null;
                 lastTargets.left = payload.targets.left || null;
             }
+            // Командованные углы рук из IK-ответа: руки в VR следуют за
+            // контроллером мгновенно (реальные сервы догоняют плавно).
+            for (const side of ['right', 'left']) {
+                const servo = d && d[side] && d[side].servo;
+                if (servo) {
+                    for (const [ch, v] of Object.entries(servo)) commandedAngles[Number(ch)] = v;
+                }
+            }
             if (payload.grip) {
                 if (payload.grip.right !== undefined) lastGrip.right = payload.grip.right;
                 if (payload.grip.left !== undefined) lastGrip.left = payload.grip.left;
@@ -354,7 +368,7 @@ function drawArms(pose) {
     armsGroup.quaternion.copy(robotAnchorQuat);
 
     for (const side of ['left', 'right']) {
-        const fk = armFk(side, servoAngles);
+        const fk = armFk(side, commandedAngles);
         const m = armMeshes[side];
         const p = v => new THREE.Vector3(fk[v][0] / 1000, fk[v][1] / 1000, -fk[v][2] / 1000);
         const s = p('S'), e = p('E'), ee = p('EE');
