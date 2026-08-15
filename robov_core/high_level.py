@@ -662,10 +662,15 @@ def ik(x: float, y: float, z: float, left: bool = False) -> Tuple[bool, float, f
 
 
 def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
-    """Вычислить IK и, только если цель в пределах 10 мм, двигать руку."""
+    """Вычислить IK и двигать руку к ближайшей достижимой позе.
+
+    Если цель недостижима, рука едет в ближайшую достижимую точку
+    (решение есть в result["servo"]); не двигаемся только когда решения
+    нет вообще (цель внутри туловища/головы).
+    """
     result = ik_detail(x, y, z, left)
     result["moved"] = False
-    if not result["ok"] or not result["servo"]:
+    if not result["servo"]:
         return result
     for channel, angle_value in result["servo"].items():
         if not set_servo_command(channel, angle_value):
@@ -676,14 +681,13 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
 
 
 def move_to_ik(x: float, y: float, z: float, left: bool = False) -> Tuple[bool, float, float, float]:
-    """Вычислить IK, переместить выбранную руку и вернуть формат ik()."""
-    result = ik(x, y, z, left)
-    if not result[0]:
-        return result
-    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
-    for name, angle_value in zip(("shoulder_z", "shoulder_x", "elbow_x"), result[1:]):
-        set_servo_command(channels[name], int(round(angle_value)))
-    return result
+    """Вычислить IK и переместить выбранную руку к ближайшей достижимой позе."""
+    detail = ik_detail(x, y, z, left)
+    if not detail["servo"]:
+        return _ik_tuple(detail, left)
+    for channel, angle_value in detail["servo"].items():
+        set_servo_command(channel, int(round(angle_value)))
+    return _ik_tuple(detail, left)
 
 
 def set_servo_offset(channel: int, offset: float) -> bool:
