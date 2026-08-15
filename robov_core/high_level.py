@@ -484,11 +484,7 @@ def servo_toggle(enable: bool) -> None:
         for ch in servo.channel_configs:
             servo.set_servo(ch, servo.current_angles.get(ch, 90), smooth=False)
     else:
-        for ch in servo.channel_configs:
-            try:
-                servo.pwm.set_pwm(ch, 0, 0)
-            except Exception:
-                pass
+        servo.relax_all()
 
 
 def cleanup() -> None:
@@ -502,6 +498,10 @@ def cleanup() -> None:
     _shell_running = False
 
     stop_display()
+
+    if _servo is not None:
+        log("Relaxing servos...")
+        _servo.relax_all()
 
     if _camera:
         _camera.stop_continuous_capture()

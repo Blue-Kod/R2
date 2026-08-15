@@ -187,30 +187,35 @@ class ServoController:
 
         min_angle, max_angle, _, _ = self.channel_configs[channel]
         command_min, command_max = self.command_limits[channel]
+        offset = self.offsets.get(channel, 0)
         target_command = int(max(command_min, min(command_max, angle)))
 
+        def logical_cmd(command: int) -> int:
+            adjusted = command + int(round(offset))
+            return int(max(command_min, min(command_max, adjusted)))
+
         def physical_command(command: int) -> int:
+            logical = logical_cmd(command)
             if channel in self.inverted_channels:
-                return max_angle - (command - min_angle)
-            return command
+                return (command_min + command_max) - logical
+            return logical
 
         move_lock = self._get_move_lock(channel)
         with move_lock:
             with self.lock:
                 current = self.current_angles.get(channel, target_command)
-                offset = self.offsets.get(channel, 0)
 
             if not smooth or current == target_command:
                 return self._set_servo_immediate(
-                    channel, physical_command(target_command) + offset,
+                    channel, physical_command(target_command),
                     target_command)
 
             step = step_angle if target_command > current else -step_angle
             for cmd in range(int(current), int(target_command), step):
-                self._set_servo_immediate(channel, physical_command(cmd) + offset, cmd)
+                self._set_servo_immediate(channel, physical_command(cmd), cmd)
                 time.sleep(step_delay)
             self._set_servo_immediate(
-                channel, physical_command(target_command) + offset,
+                channel, physical_command(target_command),
                 target_command)
             return True
 
@@ -232,6 +237,19 @@ class ServoController:
         except Exception as e:
             print(f"Ошибка установки сервопривода {channel}: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # Расслабление сервоприводов
+    # ------------------------------------------------------------------
+    def relax_all(self) -> None:
+        """Отключить PWM всех каналов — сервы перестают держать нагрузку."""
+        if not self.initialized or self.pwm is None:
+            return
+        for ch in self.channel_configs:
+            try:
+                self.pwm.set_pwm(ch, 0, 0)
+            except Exception as e:
+                print(f"Не удалось расслабить серво {ch}: {e}")
 
     # ------------------------------------------------------------------
     # Тест и калибровка
