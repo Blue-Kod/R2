@@ -41,6 +41,7 @@ class StereoCamera:
         self.actual_height: int = 0
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
+        self._jpeg_seq: int = 0
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
 
@@ -163,6 +164,7 @@ class StereoCamera:
                     self._latest_frame = frame
                     if jpeg is not None:
                         self._latest_jpeg = jpeg
+                        self._jpeg_seq += 1
                     self._frame_count += 1
                     now = time.time()
                     if now - self._last_frame_time >= 1.0:
@@ -193,6 +195,6 @@ class StereoCamera:
         cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         return frame
 
-    def get_latest_jpeg(self) -> Optional[bytes]:
+    def get_latest_jpeg(self) -> Tuple[Optional[bytes], int]:
         with self.lock:
-            return self._latest_jpeg
+            return self._latest_jpeg, self._jpeg_seq

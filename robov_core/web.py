@@ -203,18 +203,27 @@ def create_app() -> Flask:
     def video_feed():
         def stream():
             global _mjpeg_counter
+            last_seq = -1
+            last_placeholder = 0.0
             while True:
                 camera = get_stereo_camera()
-                jpeg = camera.get_latest_jpeg() if camera else None
-                if jpeg is None:
+                jpeg, seq = camera.get_latest_jpeg() if camera else (None, -1)
+                now = time.time()
+                if jpeg is not None and seq != last_seq:
+                    last_seq = seq
+                    with _mjpeg_lock:
+                        _mjpeg_counter += 1
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                elif jpeg is None and now - last_placeholder >= 1.0:
+                    last_placeholder = now
                     frame = np.zeros((360, 640, 3), dtype=np.uint8)
                     cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                     jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
-
-                with _mjpeg_lock:
-                    _mjpeg_counter += 1
-
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                    with _mjpeg_lock:
+                        _mjpeg_counter += 1
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                else:
+                    time.sleep(0.005)
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
