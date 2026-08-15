@@ -20,7 +20,7 @@ class StereoCamera:
         self,
         camera_param_file: str = "cam_params.json",
         source: int = 0,
-        capture_width: int = 1280,
+        capture_width: int = 2560,
         capture_height: int = 720,
     ):
         self.camera_param_file: str = camera_param_file
