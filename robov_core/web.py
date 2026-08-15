@@ -568,4 +568,5 @@ def create_app() -> Flask:
         except Exception as e:
             return f"Ошибка загрузки справки: {e}", 500
 
+    return app
     # --- Servo ---
