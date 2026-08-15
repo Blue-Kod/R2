@@ -635,8 +635,19 @@ def set_servo_command(channel: int, angle: int) -> bool:
 
 
 def ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
-    """Полный результат IK для web/API в системе координат камеры."""
-    return arm_kinematics.ik_solve(x, y, z, left=left)
+    """Полный результат IK для web/API в системе координат камеры.
+
+    В качестве стартовой позы для выбора решения берутся текущие углы руки,
+    чтобы при равной ошибке предпочитать позу, ближайшую к текущей.
+    """
+    start = None
+    servo = _servo
+    if servo is not None:
+        channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
+        start = arm_kinematics.theta_from_commands(
+            {ch: servo.current_angles.get(ch, 90) for ch in channels.values()},
+            left=left)
+    return arm_kinematics.ik_solve(x, y, z, left=left, start=start)
 
 
 def _ik_tuple(result: dict, left: bool) -> Tuple[bool, float, float, float]:

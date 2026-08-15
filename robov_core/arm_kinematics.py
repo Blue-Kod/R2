@@ -235,11 +235,22 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     results.sort(key=lambda item: item[0])
     best_error, best_theta = results[0]
     if start is not None:
+        # При равной ошибке предпочитаем позу, ближайшую к текущей, с
+        # приоритетом по суставам: pan (у головы) важнее плеча, плечо — локтя.
+        weights = (1.0, 0.5, 0.25)
+        tie_error = best_error + 1.0
+
+        def angle_cost(theta):
+            return sum(w * (a - b) ** 2
+                       for w, a, b in zip(weights, theta, start))
+
+        best_cost = angle_cost(best_theta)
         for error, theta in results:
-            if error <= best_error + 1.0:
-                if sum((a - b) ** 2 for a, b in zip(theta, start)) < \
-                   sum((a - b) ** 2 for a, b in zip(best_theta, start)):
+            if error <= tie_error:
+                cost = angle_cost(theta)
+                if cost < best_cost:
                     best_error, best_theta = error, theta
+                    best_cost = cost
 
     if best_error <= IK_ERR_OK:
         status = "ok"
