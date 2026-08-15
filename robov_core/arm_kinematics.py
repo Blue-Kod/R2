@@ -170,7 +170,10 @@ def _ranges(left: bool, step: float, window: Optional[float],
         lo, hi = model_limits[name]
         if window is not None and current is not None:
             lo, hi = max(lo, current - window), min(hi, current + window)
-        out.append(np.arange(lo, hi + step * 0.5, step))
+        grid = np.arange(lo, hi + step * 0.5, step)
+        if grid.size == 0:
+            grid = np.array([lo], dtype=float)
+        out.append(grid)
     return tuple(out)
 
 
@@ -208,15 +211,24 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     coarse = _ranges(left, *GRID_STEPS[0])
     positions = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - target, axis=-1)
-    errors += np.where(_point_zone_clearance(positions, ARM_RADIUS) <= 0.0,
-                       1e6, 0.0)
+    clearance = _point_zone_clearance(positions, ARM_RADIUS)
+    errors += np.where(clearance <= 0.0, 1e6, 0.0)
     count = min(6, errors.size)
-    starts = []
-    for index in np.argpartition(errors.ravel(), count - 1)[:count]:
-        i1, i2, i3 = np.unravel_index(index, errors.shape)
-        theta = (float(coarse[0][i1]), float(coarse[1][i2]), float(coarse[2][i3]))
-        if all(max(abs(a - b) for a, b in zip(theta, old)) > 10.0 for old in starts):
-            starts.append(theta)
+
+    def _pick_start(scores):
+        picked = []
+        for index in np.argpartition(scores.ravel(), count - 1)[:count]:
+            i1, i2, i3 = np.unravel_index(index, scores.shape)
+            theta = (float(coarse[0][i1]), float(coarse[1][i2]),
+                     float(coarse[2][i3]))
+            if all(max(abs(a - b) for a, b in zip(theta, old)) > 10.0
+                   for old in picked):
+                picked.append(theta)
+        return picked
+
+    # Кандидаты стартов — несколько веток IK по чистой ошибке,
+    # чтобы глобальный минимум не терялся из-за локальных минимумов.
+    starts = _pick_start(errors)
 
     if start is not None:
         # Текущая поза — всегда кандидат: удерживаем ветку при непрерывном
@@ -237,36 +249,33 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         return _result(None, "blocked",
                        "Цель достижима только с касанием туловища или головы",
                        left)
+
     results.sort(key=lambda item: item[0])
     best_error, best_theta = results[0]
     if start is not None:
-        # Среди решений с близкой ошибкой предпочитаем позу, ближайшую к
-        # текущей (непрерывность), а также «естественную»: локоть впереди
-        # (плечо > 0) и рука не «через верх» (pan <= 135).
+        # Приоритет — непрерывность: рука должна оставаться близкой к
+        # последней позе по углам и не дёргаться при небольших движениях
+        # цели. Cost = error + λ·Δθ², но штраф за углы НАСЫЩАЕТСЯ:
+        # при малых Δθ он отсекает перескоки между ветками IK, а при очень
+        # больших Δθ (цель ушла далеко, надо перейти в другую ветку) не
+        # блокирует точное решение.
         weights = (1.0, 0.5, 0.25)
-        tie_error = best_error + 40.0
-
-        def natural_penalty(theta):
-            penalty = 0.0
-            if theta[1] < 0.0:
-                penalty += 40.0
-            if theta[0] > 135.0:
-                penalty += 30.0
-            return penalty
+        angle_weight = 0.2
+        max_angle_penalty = 100.0
 
         def angle_cost(theta):
-            cost = natural_penalty(theta)
-            for w, a, b in zip(weights, theta, start):
-                cost += w * (a - b) ** 2
-            return cost
+            return sum(w * (a - b) ** 2 for w, a, b in zip(weights, theta, start))
 
-        best_cost = angle_cost(best_theta)
+        def total_cost(error, theta):
+            penalty = angle_weight * angle_cost(theta)
+            return error + min(penalty, max_angle_penalty)
+
+        best_cost = total_cost(best_error, best_theta)
         for error, theta in results:
-            if error <= tie_error:
-                cost = angle_cost(theta)
-                if cost < best_cost:
-                    best_error, best_theta = error, theta
-                    best_cost = cost
+            cost = total_cost(error, theta)
+            if cost < best_cost:
+                best_error, best_theta = error, theta
+                best_cost = cost
 
     if best_error <= IK_ERR_OK:
         status = "ok"

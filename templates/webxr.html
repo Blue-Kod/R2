@@ -49,7 +49,7 @@ const TILT_MIN = 45, TILT_MAX = 135;
 const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
 const GRIP_CLOSE = 180, GRIP_OPEN = 0;
 const ROBOT_DISTANCE = 1.0;    // м вперёд от пользователя при входе в VR
-const ROBOT_Y_OFFSET = -0.3;   // м: торс ниже уровня глаз
+const ROBOT_Y_OFFSET = -0.15;  // м: торс ниже шлема на 15 см
 const SEND_HZ = 8;
 const ANGLE_DEADBAND = 1.0;   // градусы
 const TARGET_DEADBAND = 20;   // мм
@@ -237,8 +237,9 @@ function frame(time, xrFrame) {
     const tilt = Math.round(clamp(90 - pitch, TILT_MIN, TILT_MAX));
 
     // Фиксированный якорь робота в комнате: ставим один раз при входе,
-    // чтобы руки НЕ ездили за головой. Ориентация = поза головы при входе
-    // (без крена), позиция = ROBOT_DISTANCE вперёд по взгляду и ниже уровня глаз.
+    // чтобы руки НЕ ездили за головой по X/Z. Ориентация = поза головы при
+    // входе (без крена), X/Z = ROBOT_DISTANCE вперёд по взгляду.
+    // По Y тело следует за шлемом (на ROBOT_Y_OFFSET ниже) — приседаем/встаём.
     if (!robotAnchorCaptured) {
         euler.z = 0;
         robotAnchorQuat.setFromEuler(euler);
@@ -247,9 +248,9 @@ function frame(time, xrFrame) {
         tmpDir.y = 0;
         tmpDir.normalize();
         robotAnchorPos.copy(tmpV1).addScaledVector(tmpDir, ROBOT_DISTANCE);
-        robotAnchorPos.y += ROBOT_Y_OFFSET;
         robotAnchorCaptured = true;
     }
+    robotAnchorPos.y = tmpV1.y + ROBOT_Y_OFFSET;
 
     const targets = { right: null, left: null };
     for (const side of ['right', 'left']) {
