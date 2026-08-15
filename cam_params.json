@@ -1,4 +1,8 @@
 {
+    "camera_backend": "ffmpeg",
+    "capture_width": 2560,
+    "capture_height": 720,
+    "fps_target": 30,
     "Kl": [
         [
             985.6750039391018,

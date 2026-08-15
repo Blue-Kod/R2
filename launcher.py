@@ -39,6 +39,7 @@ REQUIREMENTS_APT = [
     "python3-pip",
     "libopencv-dev",
     "python3-opencv",
+    "ffmpeg",
     "i2c-tools",
     "espeak-ng"
 ]
