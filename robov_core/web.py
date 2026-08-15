@@ -272,7 +272,8 @@ def create_app() -> Flask:
             return jsonify({"error": "Servo controller not initialized"}), 500
         if channel not in servo_ref.channel_configs:
             return jsonify({"error": f"Channel {channel} not configured"}), 400
-        min_angle, max_angle, _, _ = servo_ref.channel_configs[channel]
+        min_angle, max_angle = servo_ref.command_limits.get(
+            channel, servo_ref.channel_configs[channel][:2])
         if angle < min_angle or angle > max_angle:
             return jsonify({"error": f"Angle must be {min_angle}-{max_angle}"}), 400
         # angle — логический угол команды (как в servo.py/high_level.py).

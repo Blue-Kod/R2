@@ -10,7 +10,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from robov_core.servo import DEFAULT_CHANNEL_CONFIGS, DEFAULT_POSE
+from robov_core.servo import DEFAULT_COMMAND_LIMITS, DEFAULT_POSE
 
 
 BASE_X = 115.0
@@ -50,7 +50,7 @@ def rest_angles(left: bool = False) -> Dict[int, int]:
 
 
 def servo_ranges(left: bool = False) -> Dict[int, Tuple[int, int]]:
-    return {ch: tuple(DEFAULT_CHANNEL_CONFIGS[ch][:2])
+    return {ch: tuple(DEFAULT_COMMAND_LIMITS[ch])
             for ch in _channels(left).values()}
 
 

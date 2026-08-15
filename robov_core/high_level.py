@@ -596,34 +596,15 @@ def get_servo_angles() -> Dict[int, int]:
         return {}
 
 
-def get_servo_angles_physical() -> Dict[int, int]:
-    servo = _servo
-    if servo is None:
-        return {}
-    try:
-        with servo.lock:
-            physical_angles = {}
-            for ch, angle in servo.current_angles.items():
-                if ch in servo.inverted_channels:
-                    min_angle, max_angle, _, _ = servo.channel_configs[ch]
-                    physical_angle = max_angle - (angle - min_angle)
-                    physical_angles[ch] = physical_angle
-                else:
-                    physical_angles[ch] = angle
-            return physical_angles
-    except Exception as e:
-        log(f"Error getting physical servo angles: {e}")
-        return {}
-
-
 def get_servo_limits() -> Dict[int, List[int]]:
-    """Диапазоны каналов [min, max] из servo.py (channel_configs)."""
+    """Логические диапазоны команд [min, max] из servo.py."""
     servo = _servo
     if servo is None:
         return {}
     try:
         with servo.lock:
-            return {ch: [cfg[0], cfg[1]] for ch, cfg in servo.channel_configs.items()}
+            return {ch: list(servo.command_limits.get(ch, cfg[:2]))
+                    for ch, cfg in servo.channel_configs.items()}
     except Exception as e:
         log(f"Error getting servo limits: {e}")
         return {}
@@ -640,7 +621,8 @@ def set_servo_command(channel: int, angle: int) -> bool:
         return False
     if channel not in servo.channel_configs:
         return False
-    min_angle, max_angle, _, _ = servo.channel_configs[channel]
+    min_angle, max_angle = servo.command_limits.get(
+        channel, servo.channel_configs[channel][:2])
     angle = int(max(min_angle, min(max_angle, angle)))
     threading.Thread(
         target=servo.set_servo,
@@ -702,28 +684,6 @@ def move_to_ik(x: float, y: float, z: float, left: bool = False) -> Tuple[bool, 
     for name, angle_value in zip(("shoulder_z", "shoulder_x", "elbow_x"), result[1:]):
         set_servo_command(channels[name], int(round(angle_value)))
     return result
-
-
-def set_servo_physical(channel: int, physical_angle: int) -> bool:
-    servo = _servo
-    if servo is None:
-        return False
-    if channel not in servo.channel_configs:
-        return False
-    min_angle, max_angle, _, _ = servo.channel_configs[channel]
-    physical_angle = max(min_angle, min(max_angle, physical_angle))
-    if channel in servo.inverted_channels:
-        logical_angle = max_angle - (physical_angle - min_angle)
-    else:
-        logical_angle = physical_angle
-    threading.Thread(
-        target=servo.set_servo,
-        args=(channel, int(logical_angle)),
-        kwargs={"smooth": True, "step_delay": 0.01, "step_angle": 2},
-        daemon=True,
-        name=f"servo-ch{channel}",
-    ).start()
-    return True
 
 
 def set_servo_offset(channel: int, offset: float) -> bool:

@@ -50,6 +50,16 @@ DEFAULT_CHANNEL_CONFIGS: Dict[int, ChannelConfig] = {
 }
 # ----------------------------------------------------------------------
 
+# Логические пределы команд. Они не меняют физическую PWM-калибровку:
+# шея и наклон ограничены ±45° от позы по умолчанию, локти — 0..180°.
+# Сервоприводы остаются откалиброванными по полным шкалам configs выше.
+DEFAULT_COMMAND_LIMITS: Dict[int, Tuple[int, int]] = {
+    ch: (cfg[0], cfg[1]) for ch, cfg in DEFAULT_CHANNEL_CONFIGS.items()
+}
+DEFAULT_COMMAND_LIMITS.update({0: (45, 135), 3: (45, 135),
+                               6: (0, 180), 7: (0, 180)})
+# ----------------------------------------------------------------------
+
 
 class ServoError(Exception):
     pass
@@ -81,6 +91,10 @@ class ServoController:
                 dict(DEFAULT_CHANNEL_CONFIGS)
         else:
             self.channel_configs = channel_configs
+        self.command_limits: Dict[int, Tuple[int, int]] = {
+            ch: tuple(DEFAULT_COMMAND_LIMITS.get(ch, cfg[:2]))
+            for ch, cfg in self.channel_configs.items()
+        }
 
         for ch in self.channel_configs:
             self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
@@ -161,32 +175,43 @@ class ServoController:
     # Управление сервоприводом
     # ------------------------------------------------------------------
     def set_servo(self, channel: int, angle: int, smooth: bool = True, step_delay: float = 0.01, step_angle: int = 2) -> bool:
+        """Move a servo using a logical command angle.
+
+        ``current_angles`` deliberately stores the logical command from
+        DEFAULT_POSE/UI, never the inverted physical PWM angle. This keeps
+        servo.py, the browser and IK in one coordinate system.
+        """
         if not self.initialized or self.pwm is None:
             print(f"PCA9685 не инициализирована, канал {channel} не установлен")
             return False
 
-        # Применяем инверсию (если канал инвертирован)
-        if channel in self.inverted_channels:
-            min_angle, max_angle, _, _ = self.channel_configs[channel]
-            angle = max_angle - (angle - min_angle)   # зеркалируем
+        min_angle, max_angle, _, _ = self.channel_configs[channel]
+        command_min, command_max = self.command_limits[channel]
+        target_command = int(max(command_min, min(command_max, angle)))
+
+        def physical_command(command: int) -> int:
+            if channel in self.inverted_channels:
+                return max_angle - (command - min_angle)
+            return command
 
         move_lock = self._get_move_lock(channel)
         with move_lock:
             with self.lock:
-                current = self.current_angles.get(channel, None)
-                if current is None:
-                    current = angle
-                target_command = angle
+                current = self.current_angles.get(channel, target_command)
                 offset = self.offsets.get(channel, 0)
 
             if not smooth or current == target_command:
-                return self._set_servo_immediate(channel, target_command + offset, target_command)
+                return self._set_servo_immediate(
+                    channel, physical_command(target_command) + offset,
+                    target_command)
 
             step = step_angle if target_command > current else -step_angle
             for cmd in range(int(current), int(target_command), step):
-                self._set_servo_immediate(channel, cmd + offset, cmd)
+                self._set_servo_immediate(channel, physical_command(cmd) + offset, cmd)
                 time.sleep(step_delay)
-            self._set_servo_immediate(channel, target_command + offset, target_command)
+            self._set_servo_immediate(
+                channel, physical_command(target_command) + offset,
+                target_command)
             return True
 
     def _set_servo_immediate(self, channel: int, physical_angle: float, command_angle: Optional[int] = None) -> bool:
