@@ -23,6 +23,7 @@ optimize_for_arm = None
 APP_VERSION = "0.2"
 HTTP_HOST = "0.0.0.0"
 HTTP_PORT = 80
+HTTPS_PORT = 443
 CAMERA_SOURCE = 0
 CAMERA_PARAMS_FILE = "cam_params.json"
 LAUNCHER_SCRIPT = "launcher.py"
@@ -449,6 +450,22 @@ def start_background() -> None:
     )
     web_thread.start()
     _all_threads.append(web_thread)
+
+    try:
+        from robov_core.tls import get_cert_paths
+        cert_file, key_file = get_cert_paths()
+        https_thread = threading.Thread(
+            target=lambda: app.run(host=HTTP_HOST, port=HTTPS_PORT, debug=False,
+                                   threaded=True, use_reloader=False,
+                                   ssl_context=(str(cert_file), str(key_file))),
+            daemon=True,
+            name="r2-https-thread"
+        )
+        https_thread.start()
+        _all_threads.append(https_thread)
+        log(f"HTTPS: https://<robot-ip>:{HTTPS_PORT}/webxr (self-signed, подтвердите в браузере шлема)")
+    except Exception as e:
+        log(f"HTTPS disabled: {e}")
 
     if _HAS_DISPLAY:
         global _display_thread

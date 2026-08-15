@@ -8,3 +8,6 @@
 *~
 __pycache__/
 *.pyc
+
+# Self-signed TLS certificates (generated at runtime)
+/certs/
