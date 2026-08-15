@@ -60,7 +60,10 @@ def limits(left: bool = False, ik_only: bool = False) -> Dict[str, Tuple[float, 
     result = {}
     for name, ch in _channels(left).items():
         lo, hi = ranges[ch]
-        result[name] = (float(lo - rest[ch]), float(hi - rest[ch]))
+        if name == "elbow_x":
+            result[name] = (float(rest[ch] - hi), float(rest[ch] - lo))
+        else:
+            result[name] = (float(lo - rest[ch]), float(hi - rest[ch]))
     if ik_only:
         # Pan command 45..225: the safe half-turn used by IK only.
         result["shoulder_z"] = (0.0, 180.0)
@@ -74,8 +77,13 @@ def base(left: bool = False) -> np.ndarray:
 def theta_from_commands(commands: Dict[int, float], left: bool = False) -> Tuple[float, float, float]:
     rest = rest_angles(left)
     ch = _channels(left)
-    return tuple(float(commands.get(ch[name], rest[ch[name]]) - rest[ch[name]])
-                 for name in JOINT_NAMES)
+    theta = []
+    for name in JOINT_NAMES:
+        cmd = commands.get(ch[name], rest[ch[name]]) - rest[ch[name]]
+        if name == "elbow_x":
+            cmd = -cmd
+        theta.append(float(cmd))
+    return tuple(theta)
 
 
 def to_servo_commands(theta: Sequence[float], left: bool = False) -> Dict[int, int]:
@@ -85,7 +93,11 @@ def to_servo_commands(theta: Sequence[float], left: bool = False) -> Dict[int, i
     for name, value in zip(JOINT_NAMES, theta):
         ch = _channels(left)[name]
         lo, hi = ranges[ch]
-        result[ch] = int(round(max(lo, min(hi, rest[ch] + float(value)))))
+        if name == "elbow_x":
+            command = rest[ch] - float(value)
+        else:
+            command = rest[ch] + float(value)
+        result[ch] = int(round(max(lo, min(hi, command))))
     return result
 
 

@@ -331,7 +331,7 @@ function ikFk(side) {
     const rest = ikConfig.rest;
     const t1 = ((ikAngles[ch.shoulder_z] ?? rest[ch.shoulder_z]) - rest[ch.shoulder_z]) * Math.PI / 180;
     const t2 = ((ikAngles[ch.shoulder_x] ?? rest[ch.shoulder_x]) - rest[ch.shoulder_x]) * Math.PI / 180;
-    const t3 = ((ikAngles[ch.elbow_x] ?? rest[ch.elbow_x]) - rest[ch.elbow_x]) * Math.PI / 180;
+    const t3 = (rest[ch.elbow_x] - (ikAngles[ch.elbow_x] ?? rest[ch.elbow_x])) * Math.PI / 180;
     const c1=Math.cos(t1), s1=Math.sin(t1), c2=Math.cos(t2), s2=Math.sin(t2);
     const c23=Math.cos(t2+t3), s23=Math.sin(t2+t3);
     const sign = side === 'left' ? -1 : 1;
