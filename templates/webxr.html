@@ -49,6 +49,9 @@ const TILT_MIN = 45, TILT_MAX = 135;
 const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
 const GRIP_CLOSE = 180, GRIP_OPEN = 0;
 const ROBOT_Y_OFFSET = -0.15;  // м: торс ниже шлема на 15 см
+const BASE_DEADZONE_DEG = 45;   // гр: база доворачивается, если взгляд отклонился больше
+const BASE_YAW_SPEED = 60;      // гр/сек: скорость доворота базы за головой
+const DEG2RAD = Math.PI / 180;
 const SEND_HZ = 8;
 const ANGLE_DEADBAND = 1.0;   // градусы
 const TARGET_DEADBAND = 20;   // мм
@@ -207,6 +210,7 @@ function updateAnglesFromServer() {
 
 // ==== Главный цикл ====
 const euler = new THREE.Euler();
+const robotBaseEuler = new THREE.Euler();
 function frame(time, xrFrame) {
     pollFreeze();
 
@@ -235,18 +239,34 @@ function frame(time, xrFrame) {
     const neck = Math.round(clamp(90 + yaw, NECK_MIN, NECK_MAX));
     const tilt = Math.round(clamp(90 - pitch, TILT_MIN, TILT_MAX));
 
-    // Фиксированный якорь робота в комнате: ставим один раз при входе,
-    // чтобы руки НЕ ездили за головой по X/Z. Центр отсчёта — там, где шлем
-    // (X/Z), БЕЗ учёта поворота головы: робот всегда смотрит вдоль мирового
-    // -Z (вперёд камеры при входе). По Y тело следует за шлемом
-    // (на ROBOT_Y_OFFSET ниже) — приседаем/встаём.
+    // Якорь робота: ставится один раз при входе (X/Z шлема), чтобы руки НЕ
+    // ездили за головой при ходьбе. По Y тело следует за шлемом.
+    // База повёрнута по yaw головы: при старте фиксируется, но если взгляд
+    // отклонился от базы более чем на BASE_DEADZONE_DEG, база плавно
+    // доворачивается за головой (с отставанием) — робот всегда «перед нами».
     if (!robotAnchorCaptured) {
-        robotAnchorQuat.identity();
-        robotAnchorQuatInv.identity();
         robotAnchorPos.copy(tmpV1);
+        robotBaseYaw = euler.y;
         robotAnchorCaptured = true;
     }
     robotAnchorPos.y = tmpV1.y + ROBOT_Y_OFFSET;
+
+    // Плавный доворот базы за yaw головы (только при значительном отклонении)
+    if (lastFrameTime != null) {
+        const dt = Math.min((time - lastFrameTime) / 1000, 0.1);
+        let diff = euler.y - robotBaseYaw;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // нормализуем в [-PI, PI]
+        const dead = BASE_DEADZONE_DEG * DEG2RAD;
+        if (Math.abs(diff) > dead) {
+            const excess = Math.abs(diff) - dead;          // насколько вышли из мёртвой зоны
+            const maxStep = BASE_YAW_SPEED * DEG2RAD * dt; // скорость доворота (гр/сек)
+            robotBaseYaw += Math.sign(diff) * Math.min(excess, maxStep);
+        }
+    }
+    lastFrameTime = time;
+
+    robotAnchorQuat.setFromEuler(robotBaseEuler.set(0, robotBaseYaw, 0));
+    robotAnchorQuatInv.copy(robotAnchorQuat).invert();
 
     const targets = { right: null, left: null };
     for (const side of ['right', 'left']) {
@@ -373,6 +393,8 @@ const robotAnchorPos = new THREE.Vector3();
 const robotAnchorQuat = new THREE.Quaternion();
 const robotAnchorQuatInv = new THREE.Quaternion();
 let robotAnchorCaptured = false;
+let robotBaseYaw = 0;       // текущий yaw базы (радианы), поворот вокруг вертикали
+let lastFrameTime = null;   // для dt плавного доворота базы
 
 const enterBtn = document.getElementById('enterBtn');
 const xrStatus = document.getElementById('xr-status');
