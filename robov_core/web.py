@@ -130,6 +130,55 @@ def create_app() -> Flask:
                                supported_emotes=supported_emotes(),
                                system_data=system_data)
 
+    # --- WebXR teleop ---
+
+    @app.route("/webxr")
+    @require_auth
+    def webxr():
+        camera = get_stereo_camera()
+        camera_params = {}
+        if camera:
+            with camera.lock:
+                camera_params = {
+                    "show_left": getattr(camera, 'show_left', True),
+                    "img_size": getattr(camera, 'img_size', [640, 360]),
+                }
+        return render_template("webxr.html",
+                               ik_config=browser_config(),
+                               servo_angles=get_servo_angles(),
+                               camera_params=camera_params)
+
+    @app.route("/api/webxr/teleop", methods=["POST"])
+    @require_auth
+    def api_webxr_teleop():
+        data = request.get_json(silent=True) or {}
+        frozen = bool(data.get("frozen", False))
+        result = {"frozen": frozen}
+        if frozen:
+            return jsonify(result)
+
+        neck = data.get("neck")
+        tilt = data.get("tilt")
+        if neck is not None:
+            set_servo_command(0, int(round(neck)))
+        if tilt is not None:
+            set_servo_command(3, int(round(tilt)))
+
+        targets = data.get("targets") or {}
+        for side, left in (("right", False), ("left", True)):
+            target = targets.get(side)
+            if target and all(isinstance(target.get(k), (int, float))
+                              for k in ("x", "y", "z")):
+                result[side] = move_ik_detail(
+                    target["x"], target["y"], target["z"], left=left)
+
+        grip = data.get("grip") or {}
+        for side, channel in (("right", 8), ("left", 9)):
+            value = grip.get(side)
+            if value is not None:
+                set_servo_command(channel, int(round(value)))
+        return jsonify(result)
+
     # --- API ---
 
     @app.route("/api/data")

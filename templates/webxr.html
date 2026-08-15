@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>R2 — WebXR телеоп</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; background: #0a0a0a; }
+        body { overflow: hidden; color: #f0f0f0; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+        #xr-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+        .hud { position: fixed; left: 12px; top: 12px; z-index: 10; display: flex; flex-direction: column; gap: 6px; pointer-events: none; font-size: 12px; }
+        .hud .chip { background: rgba(10,10,10,0.72); border: 1px solid #2a2a2a; border-radius: 10px; padding: 6px 10px; max-width: 340px; line-height: 1.45; }
+        .hud .chip b { color: #fff; }
+        .hud .warn { color: #ff6a4d; }
+        .hud .ok { color: #44944a; }
+        .freeze-badge { position: fixed; right: 14px; top: 14px; z-index: 10; background: #8b0000; color: #fff; border-radius: 10px; padding: 8px 14px; font-weight: 700; letter-spacing: 1px; display: none; }
+        .freeze-badge.show { display: block; }
+        #enterBtn { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 20; background: #44944a; color: #fff; border: none; border-radius: 14px; padding: 14px 28px; font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.4); }
+        #enterBtn:hover { background: #54a85a; }
+        #enterBtn.hidden { display: none; }
+    </style>
+    <script src="/static/vendor/three.min.js"></script>
+</head>
+<body>
+<canvas id="xr-canvas"></canvas>
+
+<div class="hud">
+    <div class="chip" id="xr-status">WebXR: <b>инициализация…</b></div>
+    <div class="chip" id="teleop-status">—</div>
+    <div class="chip" id="hint">Шлем — голова (±45°). Контроллеры — цели рук. Курок — схват (зажат = 180). Кнопка A/X — FREEZE.</div>
+</div>
+<div class="freeze-badge" id="freezeBadge">⏸ FREEZE</div>
+<button id="enterBtn" class="hidden">Войти в VR</button>
+
+<script>
+const serverData = {
+    ik_config: {{ ik_config | tojson }},
+    servo_angles: {{ servo_angles | tojson }},
+    camera_params: {{ camera_params | tojson }}
+};
+
+// ==== Калибровочные константы (знаки при необходимости флипать) ====
+const HEAD_YAW_SIGN = 1;    // +yaw (влево) -> шея 135 (лево)
+const HEAD_PITCH_SIGN = 1;  // +pitch (вверх) -> наклон 45 (назад-вверх)
+const NECK_CH = 0, TILT_CH = 3;
+const NECK_MIN = 45, NECK_MAX = 135;
+const TILT_MIN = 45, TILT_MAX = 135;
+const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
+const GRIP_CLOSE = 180, GRIP_OPEN = 0;
+const ORIGIN_Y_OFFSET = 0.15;  // 15 см ниже шлема
+const SEND_HZ = 8;
+const ANGLE_DEADBAND = 1.0;   // градусы
+const TARGET_DEADBAND = 20;   // мм
+const FREEZE_BUTTON_INDEX = 3; // A (правая) / X (левая)
+// ================================================
+
+const ik = serverData.ik_config;
+const rest = ik.rest;
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// ==== three.js setup ====
+const canvas = document.getElementById('xr-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a0a);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+scene.add(new THREE.DirectionalLight(0xffffff, 0.8));
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 100);
+
+// ==== Фон: камера ====
+const camImg = new Image();
+const camTex = new THREE.Texture(camImg);
+camTex.colorSpace = THREE.SRGBColorSpace;
+const bgPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(8, 4.5),
+    new THREE.MeshBasicMaterial({ map: camTex })
+);
+bgPlane.position.set(0, 0, -6);
+bgPlane.rotation.y = Math.PI;
+camera.add(bgPlane);
+scene.add(camera);
+
+function startVideo() {
+    camImg.onload = () => { camTex.needsUpdate = true; };
+    camImg.src = '/video_feed';
+}
+setTimeout(startVideo, 0);
+
+// ==== Робот: торс + руки (полупрозрачные, серые, 25%) ====
+const armsGroup = new THREE.Group();
+scene.add(armsGroup);
+
+const ARM_MAT = new THREE.MeshStandardMaterial({
+    color: 0x888888, transparent: true, opacity: 0.25, depthWrite: false
+});
+const armMeshes = {};
+function makeArm(side) {
+    const g = new THREE.Group();
+    const cylGeom = new THREE.CylinderGeometry(0.02, 0.02, 1, 10);
+    cylGeom.translate(0, -0.5, 0);
+    const seg1 = new THREE.Mesh(cylGeom, ARM_MAT);
+    const seg2 = new THREE.Mesh(cylGeom, ARM_MAT);
+    const joints = [0, 0, 0].map(() => new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 12), ARM_MAT));
+    g.add(seg1, seg2, ...joints);
+    armsGroup.add(g);
+    armMeshes[side] = { g, seg1, seg2, joints };
+    return g;
+}
+makeArm('left');
+makeArm('right');
+
+// торс
+const torso = new THREE.Mesh(
+    new THREE.BoxGeometry(2 * ik.torso.half_width / 1000, 2 * ik.torso.half_height / 1000, 2 * ik.torso.half_depth / 1000),
+    new THREE.MeshStandardMaterial({ color: 0x444444, transparent: true, opacity: 0.25, depthWrite: false })
+);
+armsGroup.add(torso);
+
+function armFk(side, angles) {
+    const ch = ik.channels[side];
+    const t1 = ((angles[ch.shoulder_z] ?? rest[ch.shoulder_z]) - rest[ch.shoulder_z]) * Math.PI / 180;
+    const t2 = ((angles[ch.shoulder_x] ?? rest[ch.shoulder_x]) - rest[ch.shoulder_x]) * Math.PI / 180;
+    const t3 = (rest[ch.elbow_x] - (angles[ch.elbow_x] ?? rest[ch.elbow_x])) * Math.PI / 180;
+    const c1 = Math.cos(t1), s1 = Math.sin(t1), c2 = Math.cos(t2), s2 = Math.sin(t2);
+    const c23 = Math.cos(t2 + t3), s23 = Math.sin(t2 + t3);
+    const sign = side === 'left' ? -1 : 1;
+    const S = [sign * ik.base_x, 0, 0];
+    const E = [S[0] + sign * ik.l1 * s1 * c2, -ik.l1 * c1 * c2, ik.l1 * s2];
+    const EE = [E[0] + sign * ik.l2 * s1 * c23, -ik.l2 * c1 * c23, ik.l2 * s23];
+    return { S, E, EE };
+}
+
+function setCyl(mesh, a, b) {
+    const dir = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const len = Math.hypot(...dir) || 1e-6;
+    mesh.scale.set(1, len, 1);
+    mesh.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0),
+        new THREE.Vector3(dir[0] / len, dir[1] / len, dir[2] / len));
+}
+
+// ==== Контроллеры: полупрозрачные голубые сферы ====
+const CTRL_MAT = new THREE.MeshBasicMaterial({
+    color: 0x4488ff, transparent: true, opacity: 0.25, depthWrite: false
+});
+const controllerR = renderer.xr.getController(0);
+const controllerL = renderer.xr.getController(1);
+controllerR.add(new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 14), CTRL_MAT));
+controllerL.add(new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 14), CTRL_MAT));
+scene.add(controllerR, controllerL);
+
+let ctrlByHand = { right: null, left: null };
+let grip = { right: null, left: null };
+let lastGrip = { right: null, left: null };
+let frozen = false;
+
+const allControllers = [controllerR, controllerL];
+allControllers.forEach((ctrl) => {
+    ctrl.addEventListener('connected', (e) => {
+        ctrlByHand[e.data.handedness] = ctrl;
+    });
+    ctrl.addEventListener('disconnected', (e) => {
+        if (ctrlByHand[e.data.handedness] === ctrl) ctrlByHand[e.data.handedness] = null;
+        grip[e.data.handedness] = GRIP_OPEN;
+    });
+    ctrl.addEventListener('selectstart', (e) => {
+        grip[e.data.handedness] = GRIP_CLOSE;
+    });
+    ctrl.addEventListener('selectend', (e) => {
+        grip[e.data.handedness] = GRIP_OPEN;
+    });
+});
+
+function onFreezeButton(handedness, pressed) {
+    if (!pressed) return;
+    frozen = !frozen;
+    document.getElementById('freezeBadge').classList.toggle('show', frozen);
+    setStatus(`FREEZE ${frozen ? 'ВКЛ' : 'ВЫКЛ'}${frozen ? ' — управление остановлено' : ''}`);
+    lastSendTime = 0;
+    if (frozen) sendTeleop({ frozen: true });
+}
+
+// ==== Состояние ====
+let servoAngles = {};
+for (const [k, v] of Object.entries(serverData.servo_angles || {})) servoAngles[Number(k)] = v;
+
+let lastAngles = { neck: null, tilt: null };
+let lastTargets = { right: null, left: null };
+
+function setStatus(text) {
+    document.getElementById('teleop-status').innerHTML = text;
+}
+
+function updateAnglesFromServer() {
+    fetch('/api/servo/angles', { cache: 'no-store' })
+        .then(r => r.json())
+        .then(d => { if (d && d.angles) for (const [k, v] of Object.entries(d.angles)) servoAngles[Number(k)] = v; })
+        .catch(() => {});
+}
+
+// ==== Главный цикл ====
+const euler = new THREE.Euler();
+function frame(time, xrFrame) {
+    pollFreeze();
+
+    // Поза головы: берём из XR-кадра (three.js обновляет камеру только внутри render(),
+    // поэтому camera.getWorldPosition в колбэке был бы устаревшим). На desktop — камера.
+    const presenting = renderer.xr.isPresenting;
+    const refSpace = renderer.xr.getReferenceSpace();
+    const viewerPose = presenting && refSpace && xrFrame ? xrFrame.getViewerPose(refSpace) : null;
+    if (viewerPose) {
+        const t = viewerPose.transform;
+        tmpQ.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+        tmpV1.set(t.position.x, t.position.y, t.position.z);
+    } else {
+        camera.getWorldPosition(tmpV1);
+        camera.getWorldQuaternion(tmpQ);
+    }
+
+    euler.setFromQuaternion(tmpQ, 'YXZ');
+    const yaw = HEAD_YAW_SIGN * THREE.MathUtils.radToDeg(euler.y);
+    const pitch = HEAD_PITCH_SIGN * THREE.MathUtils.radToDeg(euler.x);
+
+    const neck = Math.round(clamp(90 + yaw, NECK_MIN, NECK_MAX));
+    const tilt = Math.round(clamp(90 - pitch, TILT_MIN, TILT_MAX));
+
+    // точка отсчёта: 15 см ниже шлема (мировая Y)
+    tmpOrigin.copy(tmpV1);
+    tmpOrigin.y -= ORIGIN_Y_OFFSET;
+
+    // базис головы без крена (yaw+pitch)
+    euler.z = 0;
+    tmpQHead.setFromEuler(euler);
+    tmpQHeadInv.copy(tmpQHead).invert();
+
+    const targets = { right: null, left: null };
+    for (const side of ['right', 'left']) {
+        const ctrl = ctrlByHand[side];
+        if (!ctrl) continue;
+        ctrl.getWorldPosition(tmpV2);
+        tmpV2.sub(tmpOrigin).applyQuaternion(tmpQHeadInv);
+        targets[side] = {
+            x: Math.round(tmpV2.x * 1000),
+            y: Math.round(tmpV2.y * 1000),
+            z: Math.round(-tmpV2.z * 1000)
+        };
+    }
+
+    // заголовок руки в мировых координатах для визуализации
+    const pose = { neck, tilt };
+    drawArms(pose);
+
+    // троттлинг: слать только изменения (заморожено — не шлём ничего)
+    if (!frozen) {
+        const now = performance.now();
+        const changed = angleChanged(pose) || targetChanged(targets) ||
+            grip.right !== lastGrip.right || grip.left !== lastGrip.left;
+        if (changed && (!lastSendTime || now - lastSendTime >= 1000 / SEND_HZ)) {
+            lastSendTime = now;
+            sendTeleop({ neck, tilt, targets, grip, frozen });
+        }
+    }
+
+    renderer.render(scene, camera);
+}
+
+function angleChanged(pose) {
+    return Math.abs(pose.neck - lastAngles.neck) > ANGLE_DEADBAND ||
+        Math.abs(pose.tilt - lastAngles.tilt) > ANGLE_DEADBAND;
+}
+function targetChanged(targets) {
+    for (const side of ['right', 'left']) {
+        const a = targets[side], b = lastTargets[side];
+        if (!a && !b) continue;
+        if (!a || !b) return true;
+        if (Math.abs(a.x - b.x) > TARGET_DEADBAND ||
+            Math.abs(a.y - b.y) > TARGET_DEADBAND ||
+            Math.abs(a.z - b.z) > TARGET_DEADBAND) return true;
+    }
+    return false;
+}
+
+let lastSendTime = 0;
+let sendBusy = false;
+function sendTeleop(payload) {
+    if (sendBusy) return;
+    sendBusy = true;
+    fetch('/api/webxr/teleop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (d && d.frozen) { setStatus('⏸ Заморожено — управление остановлено'); return; }
+            if (payload.neck !== undefined) { lastAngles.neck = payload.neck; }
+            if (payload.tilt !== undefined) { lastAngles.tilt = payload.tilt; }
+            if (payload.targets) {
+                lastTargets.right = payload.targets.right || null;
+                lastTargets.left = payload.targets.left || null;
+            }
+            if (payload.grip) {
+                if (payload.grip.right !== undefined) lastGrip.right = payload.grip.right;
+                if (payload.grip.left !== undefined) lastGrip.left = payload.grip.left;
+            }
+            setStatus(`голова: шея ${payload.neck ?? '—'}° наклон ${payload.tilt ?? '—'}° · руки: П[${fmt(payload.targets?.right)}] Л[${fmt(payload.targets?.left)}] · схват: ${gripText()}`);
+        })
+        .catch(() => {})
+        .finally(() => { sendBusy = false; });
+}
+function fmt(t) { return t ? `${t.x},${t.y},${t.z}` : '—'; }
+function gripText() { return `П:${grip.right ?? '—'} Л:${grip.left ?? '—'}`; }
+
+// ==== Отрисовка рук ====
+function drawArms(pose) {
+    // переносим систему координат робота в точку отсчёта под шлемом, ориентация = голова
+    armsGroup.position.copy(tmpOrigin);
+    tmpQHead2.copy(tmpQHead);
+    armsGroup.quaternion.copy(tmpQHead2);
+
+    for (const side of ['left', 'right']) {
+        const fk = armFk(side, servoAngles);
+        const m = armMeshes[side];
+        const p = v => new THREE.Vector3(fk[v][0] / 1000, fk[v][1] / 1000, -fk[v][2] / 1000);
+        const s = p('S'), e = p('E'), ee = p('EE');
+        setCyl(m.seg1, s, e);
+        setCyl(m.seg2, e, ee);
+        m.joints[0].position.copy(s);
+        m.joints[1].position.copy(e);
+        m.joints[2].position.copy(ee);
+    }
+}
+
+// ==== Freeze: кнопка A (правая) / X (левая) ====
+function pollFreeze() {
+    if (!renderer.xr.isPresenting) return;
+    const session = renderer.xr.getSession();
+    if (!session) return;
+    const frames = session.inputSources;
+    for (const src of frames) {
+        if (!src.gamepad) continue;
+        const b = src.gamepad.buttons[FREEZE_BUTTON_INDEX];
+        if (!b) continue;
+        const pressed = !!b.pressed;
+        if (pressed && !prevFreezeState.has(src)) {
+            onFreezeButton(src.handedness, true);
+        }
+        if (pressed) prevFreezeState.add(src); else prevFreezeState.delete(src);
+    }
+}
+const prevFreezeState = new Set();
+
+// ==== Вход в WebXR ====
+const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpOrigin = new THREE.Vector3();
+const tmpQ = new THREE.Quaternion(), tmpQHead = new THREE.Quaternion(),
+      tmpQHeadInv = new THREE.Quaternion(), tmpQHead2 = new THREE.Quaternion();
+
+const enterBtn = document.getElementById('enterBtn');
+const xrStatus = document.getElementById('xr-status');
+const freezeBadge = document.getElementById('freezeBadge');
+
+let anglesTimer = null;
+let desktopLoop = null;
+
+async function enterVR() {
+    if (!navigator.xr || !navigator.xr.isSessionSupported) {
+        xrStatus.innerHTML = 'WebXR: <b class="warn">недоступен</b> — нужен secure context (HTTPS или флаг браузера)';
+        return;
+    }
+    try {
+        const supported = await navigator.xr.isSessionSupported('immersive-vr');
+        if (!supported) {
+            xrStatus.innerHTML = 'WebXR: <b class="warn">immersive-vr не поддерживается</b> этим устройством';
+            return;
+        }
+        const session = await navigator.xr.requestSession('immersive-vr', {
+            optionalFeatures: ['local-floor', 'bounded-floor']
+        });
+        await renderer.xr.setSession(session);
+        frozen = false;
+        freezeBadge.classList.remove('show');
+        prevFreezeState.clear();
+        enterBtn.classList.add('hidden');
+        xrStatus.innerHTML = 'WebXR: <b class="ok">активна</b>';
+        setStatus('телеоп запущен');
+        renderer.setAnimationLoop(frame);
+        if (!anglesTimer) anglesTimer = setInterval(updateAnglesFromServer, 500);
+        session.addEventListener('end', () => {
+            renderer.setAnimationLoop(desktopLoop);
+            frozen = true;
+            freezeBadge.classList.add('show');
+            xrStatus.innerHTML = 'WebXR: <b>завершена</b>';
+            setStatus('⏸ Выход: управление остановлено, поза сохранена');
+            enterBtn.classList.remove('hidden');
+        });
+    } catch (err) {
+        xrStatus.innerHTML = 'WebXR: <b class="warn">ошибка входа</b> ' + String(err);
+    }
+}
+
+enterBtn.addEventListener('click', enterVR);
+
+// ==== Desktop fallback: рисуем сцену без XR ====
+if (!navigator.xr) {
+    xrStatus.innerHTML = 'WebXR: <b class="warn">недоступен</b> — нужен secure context (HTTPS или флаг браузера). Без него вход в VR невозможен.';
+} else if (navigator.xr.isSessionSupported) {
+    xrStatus.innerHTML = 'WebXR: <b>готов</b> — нажмите «Войти в VR»';
+    enterBtn.classList.remove('hidden');
+}
+
+camera.position.set(0, 0.4, 1.6);
+camera.lookAt(0, 0.2, 0);
+desktopLoop = () => renderer.render(scene, camera);
+renderer.setAnimationLoop(desktopLoop);
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
