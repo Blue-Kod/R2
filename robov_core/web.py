@@ -203,17 +203,16 @@ def create_app() -> Flask:
             global _mjpeg_counter
             while True:
                 camera = get_stereo_camera()
-                frame = camera.get_latest_frame() if camera else None
-                if frame is None:
+                jpeg = camera.get_latest_jpeg() if camera else None
+                if jpeg is None:
                     frame = np.zeros((360, 640, 3), dtype=np.uint8)
                     cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-                _, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                    jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
 
                 with _mjpeg_lock:
                     _mjpeg_counter += 1
 
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
