@@ -248,7 +248,7 @@ def create_app() -> Flask:
         )
         return jsonify({"status": "ok"})
 
-    # --- Object Detection (removed) ---
+    # --- Servo ---
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     @require_auth
@@ -569,4 +569,3 @@ def create_app() -> Flask:
             return f"Ошибка загрузки справки: {e}", 500
 
     return app
-    # --- Servo ---
