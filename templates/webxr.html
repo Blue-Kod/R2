@@ -81,10 +81,9 @@ const camTex = new THREE.Texture(camImg);
 camTex.colorSpace = THREE.SRGBColorSpace;
 const bgPlane = new THREE.Mesh(
     new THREE.PlaneGeometry(8, 4.5),
-    new THREE.MeshBasicMaterial({ map: camTex })
+    new THREE.MeshBasicMaterial({ map: camTex, side: THREE.DoubleSide })
 );
 bgPlane.position.set(0, 0, -6);
-bgPlane.rotation.y = Math.PI;
 camera.add(bgPlane);
 scene.add(camera);
 

@@ -218,6 +218,11 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         if all(max(abs(a - b) for a, b in zip(theta, old)) > 10.0 for old in starts):
             starts.append(theta)
 
+    if start is not None:
+        # Текущая поза — всегда кандидат: удерживаем ветку при непрерывном
+        # движении цели, чтобы рука не «перелётывала» между ветками IK.
+        starts.append(tuple(float(v) for v in start))
+
     results = []
     for theta in starts:
         current = theta
@@ -235,14 +240,25 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     results.sort(key=lambda item: item[0])
     best_error, best_theta = results[0]
     if start is not None:
-        # При равной ошибке предпочитаем позу, ближайшую к текущей, с
-        # приоритетом по суставам: pan (у головы) важнее плеча, плечо — локтя.
+        # Среди решений с близкой ошибкой предпочитаем позу, ближайшую к
+        # текущей (непрерывность), а также «естественную»: локоть впереди
+        # (плечо > 0) и рука не «через верх» (pan <= 135).
         weights = (1.0, 0.5, 0.25)
-        tie_error = best_error + 1.0
+        tie_error = best_error + 40.0
+
+        def natural_penalty(theta):
+            penalty = 0.0
+            if theta[1] < 0.0:
+                penalty += 40.0
+            if theta[0] > 135.0:
+                penalty += 30.0
+            return penalty
 
         def angle_cost(theta):
-            return sum(w * (a - b) ** 2
-                       for w, a, b in zip(weights, theta, start))
+            cost = natural_penalty(theta)
+            for w, a, b in zip(weights, theta, start):
+                cost += w * (a - b) ** 2
+            return cost
 
         best_cost = angle_cost(best_theta)
         for error, theta in results:
