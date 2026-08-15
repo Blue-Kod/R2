@@ -16,7 +16,6 @@ ptyprocess>=0.7.0
 # OpenCV - use opencv-python-headless for server environments (no GUI deps)
 # For Orange Pi with display, use opencv-python instead
 opencv-python==4.9.0.80
-opencv-contrib-python==4.9.0.80
 
 # NumPy - pinned for ARM compatibility
 numpy>=1.24.0,<2.0.0
@@ -29,28 +28,3 @@ python-dotenv>=1.0.0
 
 # WebSocket support
 websockets>=11.0.0
-
-# Audio - may need system deps: apt-get install libportaudio2
-sounddevice>=0.4.6
-
-# MP3 encoding for duck.ai /dictation (online STT); has manylinux aarch64 wheels
-lameenc>=1.8
-
-# Web tools (AI agent): internet search, Wikipedia, HTTP fetch
-# NOTE: ddgs is NOT used - it requires 'primp' (Rust) with no Python 3.9 / aarch64 wheels.
-# search-engine-parser provides DuckDuckGo search (deps: lxml<5, bs4, fake-useragent, aiohttp).
-# aiohttp pinned to 3.9.x: 3.10+ drops cp39 wheels (pip would build from source on the robot).
-search-engine-parser>=0.6.8
-aiohttp>=3.9.0,<3.10
-wikipedia>=1.4.0
-httpx>=0.24.0
-
-# Scientific computing - heavy, install only if needed
-
-# Optional: RKNN-Toolkit-Lite2 for NPU acceleration (Orange Pi / RK3588 only)
-# Install manually on the NPU device: pip install rknn-toolkit-lite2
-
-# AI / LLM (EveryLLM backend)
-
-# 3D Visualization (Rerun viewer)
-openai>=1.0.0

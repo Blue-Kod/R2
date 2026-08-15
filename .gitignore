@@ -6,8 +6,5 @@
 *.swp
 *.swo
 *~
-KEYS.json
-/weights/
-
-# Models (downloaded from separate repo)
-/models/
+__pycache__/
+*.pyc

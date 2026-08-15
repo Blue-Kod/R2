@@ -1,19 +1,14 @@
 import os
 import platform
-import queue
 import re
 import socket
 import subprocess
 import sys
 import threading
-import time
 from collections import deque
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple
 
-import cv2
-import numpy as np
 import psutil
 
 from robov_core.camera import StereoCamera
@@ -22,25 +17,6 @@ from robov_core.servo import ServoController
 _HAS_DISPLAY = False
 EyeDisplay = None
 optimize_for_arm = None
-
-
-@dataclass
-class Position:
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
-
-
-@dataclass
-class RealObject:
-    name: str = ""
-    confidence: float = 0.0
-    position: Optional[Position] = None
-    bbox: Dict[str, int] = field(default_factory=dict)
-    depth: float = 0.0
-    vx: float = 0.0
-    vy: float = 0.0
-    vz: float = 0.0
 
 # --- Configuration ---
 APP_VERSION = "0.2"
@@ -62,7 +38,6 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 # --- Global state ---
 _camera: Optional[StereoCamera] = None
 _servo: Optional[ServoController] = None
-_tof = None
 _display: Optional[EyeDisplay] = None
 _eye_api = None
 _lock: threading.Lock = threading.Lock()
@@ -120,10 +95,6 @@ _all_threads: List[threading.Thread] = []
 _tts_ready: bool = False
 _tts_lock: threading.Lock = threading.Lock()
 
-_ai_agent = None
-_last_speech_time: float = 0.0
-_SPEECH_WINDOW = 15.0
-
 _ESPEAK_VOICE = "ru"
 _ESPEAK_SPEED = 90
 _ESPEAK_PITCH = 40
@@ -133,7 +104,6 @@ def _init_tts():
     """Check that espeak-ng is available."""
     global _tts_ready
     try:
-        import subprocess
         subprocess.run(
             ["espeak-ng", "--version"],
             capture_output=True, timeout=5,
@@ -147,27 +117,13 @@ def _init_tts():
 
 
 def speak(text: str) -> None:
-    global _tts_ready, _last_speech_time
+    global _tts_ready
     if not _tts_ready:
         _init_tts()
     if not _tts_ready:
         return
-    _last_speech_time = time.time()
-
-    stripped = _strip_speech(text)
-    if stripped and _ai_agent and hasattr(_ai_agent, 'display') and _ai_agent.display:
-        _ai_agent.display.update(
-            ticker_text=stripped,
-            ticker_duration=max(3.0, len(stripped) / 15.0 + 1.0),
-            is_speaking=True,
-        )
-
-    from robov_core.stt.voice import _listener
-    if _listener is not None:
-        _listener.pause()
 
     try:
-        import subprocess
         espeak = subprocess.Popen(
             ["espeak-ng", "-v", _ESPEAK_VOICE,
              "-s", str(_ESPEAK_SPEED), "-p", str(_ESPEAK_PITCH),
@@ -191,13 +147,6 @@ def speak(text: str) -> None:
         aplay.wait()
     except Exception as e:
         log(f"TTS error: {e}")
-    finally:
-        if _listener is not None:
-            _listener.unpause()
-        if _ai_agent and hasattr(_ai_agent, 'display') and _ai_agent.display:
-            _ai_agent.display.update(is_speaking=False)
-
-_SENTENCE_END = re.compile(r"[.!?…]\s")
 
 
 def _strip_speech(text: str) -> str:
@@ -220,85 +169,13 @@ def _strip_speech(text: str) -> str:
     text = re.sub(r"\n{2,}", " ", text)
     return text.strip()
 
-class StreamingSpeaker:
-    """Buffers LLM tokens and speaks complete sentences in a background thread."""
-
-    def __init__(self):
-        self._buf = ""
-        self._queue: queue.Queue = queue.Queue()
-        self._current_sentence: str = ""
-        self._spoken_buf: str = ""
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
-        self._thread.start()
-
-    def feed(self, text: str) -> None:
-        self._buf += text
-        self._try_split()
-
-    def flush(self) -> None:
-        rest = self._buf.strip()
-        self._buf = ""
-        if rest:
-            self._queue.put(rest)
-        self._queue.put(None)
-        self._thread.join()
-
-    def reset(self) -> None:
-        self._buf = ""
-        with self._lock:
-            self._current_sentence = ""
-            self._spoken_buf = ""
-        self._queue.put(None)
-        self._queue = queue.Queue()
-        self._thread = threading.Thread(target=self._worker, args=(self._queue,), daemon=True)
-        self._thread.start()
-
-    def get_current_sentence(self) -> str:
-        with self._lock:
-            return self._current_sentence
-
-    def get_spoken_text(self) -> str:
-        with self._lock:
-            return self._spoken_buf
-
-    def _try_split(self) -> None:
-        while True:
-            m = _SENTENCE_END.search(self._buf)
-            if not m:
-                return
-            end = m.end()
-            sentence = self._buf[:end].strip()
-            if sentence:
-                self._queue.put(sentence)
-            self._buf = self._buf[end:]
-
-    @staticmethod
-    def _clean(text: str) -> str:
-        return _strip_speech(text)
-
-    def _worker(self, q: queue.Queue) -> None:
-        while True:
-            chunk = q.get()
-            if chunk is None:
-                with self._lock:
-                    self._current_sentence = ""
-                break
-            with self._lock:
-                self._current_sentence = chunk
-            cleaned = StreamingSpeaker._clean(chunk)
-            if cleaned:
-                speak(cleaned)
-                with self._lock:
-                    self._spoken_buf += cleaned + " "
-
 
 def log(message: str) -> None:
     print(message)
 
 
 def _init_hardware() -> None:
-    global _camera, _servo, _tof
+    global _camera, _servo
 
     cam_path = ROOT_DIR / CAMERA_PARAMS_FILE
     if cam_path.exists():
@@ -339,19 +216,6 @@ def _init_hardware() -> None:
         except Exception as exc:
             log(f"Servo init error: {exc}")
             log("Falling back to mock servo")
-
-        try:
-            from robov_core.vl53l0x import VL53L0X
-            _tof = VL53L0X(i2c_bus=1)
-            _tof.open()
-            log("VL53L0X TOF sensor initialized on i2c-1")
-        except Exception as exc:
-            log(f"TOF init error: {exc}")
-            _tof = None
-
-        if _camera and _tof:
-            _camera.set_tof(_tof)
-            log("TOF linked to stereo camera for depth calibration")
 
 
 def _shell_reader() -> None:
@@ -564,9 +428,6 @@ def start_display() -> None:
     _all_threads.append(t)
 
 
-# --- Shell ---
-
-
 def start_background() -> None:
     global _hardware_initialized, _all_threads
 
@@ -592,8 +453,6 @@ def start_background() -> None:
     web_thread.start()
     _all_threads.append(web_thread)
 
-    # WebSocket terminal server disabled — terminal uses polling via REST API
-
     if _HAS_DISPLAY:
         global _display_thread
         _display_thread = threading.Thread(target=_display_worker, daemon=True, name="r2-display-thread")
@@ -616,53 +475,6 @@ def start_background() -> None:
             name="r2-wifi-setup"
         )
         wifi_thread.start()
-
-    # Initialize AI agent
-    try:
-        from robov_core.ai import init_agent
-        global _ai_agent
-        _ai_agent = init_agent(cwd=str(ROOT_DIR))
-
-        # Inject robot API into AI's python environment
-        _ai_agent.executor.python_env.update({
-            "angle": angle,
-            "emote": emote,
-            "speak": speak,
-            "set_emote": set_emote,
-            "get_emote": get_emote,
-            "set_eyes_position": set_eyes_position,
-            "get_eyes_position": get_eyes_position,
-            "get_stereo_camera": get_stereo_camera,
-            "get_raw_frame": get_raw_frame,
-            "get_coords_stereo": get_coords_stereo,
-            "tof_distance": get_tof_distance,
-            "calibrate_depth": calibrate_depth,
-            "get_tof_info": get_tof_info,
-            "find": find_object,
-            "precise_find": precise_find,
-            "scan": scan,
-            "goto": goto,
-            "grab": grab,
-            "move_arm_to": move_arm_to,
-            "health_snapshot": health_snapshot,
-            "ip_address": ip_address,
-            "log": log,
-            "cleanup": cleanup,
-            "shell_start": shell_start,
-            "shell_write": shell_write,
-            "shell_output": shell_output,
-            "shell_onetime": shell_onetime,
-            "get_servo_angles": get_servo_angles,
-            "get_servo_offsets": get_servo_offsets,
-            "set_servo_physical": set_servo_physical,
-            "get_servo_angles_physical": get_servo_angles_physical,
-            "set_emote": set_emote,
-            "supported_emotes": supported_emotes,
-            "reinit_object_detection": reinit_object_detection,
-        })
-        log("AI agent initialized")
-    except Exception as e:
-        log(f"AI agent init error: {e}")
 
     _hardware_initialized = True
 
@@ -698,12 +510,6 @@ def cleanup() -> None:
         _camera.stop_continuous_capture()
         _camera.release_camera()
 
-    if _tof:
-        try:
-            _tof.close()
-        except Exception:
-            pass
-
     if _shell_thread and _shell_thread.is_alive():
         _shell_thread.join(timeout=2.0)
 
@@ -729,7 +535,7 @@ def get_stereo_camera() -> Optional[StereoCamera]:
     return _camera
 
 
-def get_camera(left: bool) -> Optional[np.ndarray]:
+def get_camera(left: bool) -> Optional:
     camera = get_stereo_camera()
     if camera is None:
         return None
@@ -741,7 +547,7 @@ def get_camera(left: bool) -> Optional[np.ndarray]:
     return frame
 
 
-def get_raw_frame(left: bool = True) -> Optional[np.ndarray]:
+def get_raw_frame(left: bool = True):
     camera = get_stereo_camera()
     if camera is not None:
         return camera.get_rectified_frame(left)
@@ -752,41 +558,6 @@ def angle(servo: int, angle_value: int) -> bool:
     if _servo is None:
         return False
     return _servo.set_servo(servo, angle_value, smooth=True, step_delay=0.01, step_angle=2)
-
-
-def find_object(name: str) -> Optional[dict]:
-    camera = get_stereo_camera()
-    if camera is None:
-        return None
-    return camera.find(name)
-
-
-def precise_find(names: str) -> List[RealObject]:
-    camera = get_stereo_camera()
-    if camera is None:
-        return []
-    results = camera.scan(prompts=names)
-    objects = []
-    for r in results:
-        pos = None
-        if "x" in r and "y" in r and "z" in r:
-            pos = Position(x=r["x"], y=r["y"], z=r["z"])
-        obj = RealObject(
-            name=r["name"],
-            confidence=r.get("confidence", 0.0),
-            position=pos,
-            bbox=r.get("bbox", {}),
-            depth=r.get("depth", 0.0),
-            vx=r.get("vx", 0.0),
-            vy=r.get("vy", 0.0),
-            vz=r.get("vz", 0.0),
-        )
-        objects.append(obj)
-    return objects
-
-
-def scan(prompts: str = "") -> List[RealObject]:
-    return precise_find(prompts)
 
 
 def goto(target) -> bool:
@@ -802,21 +573,6 @@ def grab(target) -> bool:
 def move_arm_to(target, left: bool = False) -> bool:
     log(f"move_arm_to() stub called — target={target}, left={left}")
     return False
-
-
-def get_coords_stereo(stereo_image, x: int, y: int) -> Optional[Tuple[float, float, float]]:
-    _ = stereo_image
-    camera = get_stereo_camera()
-    if camera is None:
-        return None
-    try:
-        coords = camera.get_real_coords(x, y)
-        if coords is None:
-            return None
-        return coords['x'], coords['y'], coords['z']
-    except Exception as e:
-        log(f"get_coords_stereo error: {e}")
-        return None
 
 
 def emote(emotion_name: str) -> bool:
@@ -890,135 +646,3 @@ def set_servo_offset(channel: int, offset: float) -> bool:
     if servo is None:
         return False
     return servo.set_offset(channel, offset)
-
-
-def get_ai_agent():
-    return _ai_agent
-
-
-_VOICE_TRIGGER_WORDS = ["r2", "два", "робот", "работа", "работай"]
-
-
-def is_voice_active(text: str) -> bool:
-    """Check if voice input should be processed (trigger word or recent speech window)."""
-    t = text.lower()
-    if any(w in t for w in _VOICE_TRIGGER_WORDS):
-        return True
-    return (time.time() - _last_speech_time) < _SPEECH_WINDOW
-
-
-def get_depth_provider():
-    if _camera is None:
-        return None
-    return _camera.depth_provider.name if _camera.depth_provider else None
-
-
-def get_tof_distance():
-    if _tof is None:
-        return None
-    try:
-        dist = _tof.read_single()
-        if dist is not None and dist < 8190:
-            return dist / 1000.0
-        return None
-    except Exception as e:
-        log(f"TOF read error: {e}")
-        return None
-
-
-def calibrate_depth():
-    if _camera is None or _tof is None:
-        return None
-    result = _camera.calibrate_depth_scale()
-    if result is not None:
-        log(f"Depth scale calibrated: {result:.4f} (TOF-based, #{_camera._tof_calibrations})")
-    return result
-
-
-def get_tof_info():
-    if _tof is None:
-        return {"available": False}
-    return {
-        "available": True,
-        "correction": round(_camera._tof_correction, 4) if _camera else 1.0,
-        "depth_scale": round(_camera.depth_scale, 4) if _camera else None,
-        "calibrations": _camera._tof_calibrations if _camera else 0,
-    }
-
-
-def reinit_object_detection(model_name: str) -> bool:
-    if _camera is None:
-        return False
-    ok = _camera.detector.reinit_object_detection(model_name)
-    if ok:
-        log(f"Detection model switched to {model_name}")
-    else:
-        log(f"Failed to switch detection model to {model_name}")
-    return ok
-
-
-def set_depth_provider(name: str) -> bool:
-    if _camera is None:
-        return False
-    from robov_core.depth_providers import StereoSGBMDepthProvider
-    name = name.strip().upper()
-    if name == "SGBM":
-        provider = StereoSGBMDepthProvider()
-    else:
-        log(f"Unknown depth provider: {name}")
-        return False
-    _camera.set_depth_provider(provider)
-    log(f"Depth provider switched to {provider.name}")
-    return True
-
-
-def refresh_models(timeout: float = 8.0) -> list[dict]:
-    """Refresh model rankings and return the ranked list from BEST_MODELS.json."""
-    agent = _ai_agent
-    if agent is None:
-        log("AI agent not initialized")
-        return []
-    if not agent.llm.models():
-        log("No LLM providers available — check KEYS.json for API keys")
-        return []
-    try:
-        results = agent.llm.refresh(asynchronously=False, timeout=timeout)
-        ok = sum(1 for r in results.values() if r.get("ok"))
-        fail = sum(1 for r in results.values() if not r.get("ok"))
-        log(f"EveryLLM: refresh done — {ok} ok, {fail} failed out of {len(results)}")
-        for name, r in results.items():
-            if not r.get("ok"):
-                log(f"  FAIL: {name} — {r.get('error', 'unknown')}")
-    except Exception as e:
-        log(f"EveryLLM refresh error: {e}")
-    best = agent.llm.ttft_scores()
-    if best:
-        winner = min(best, key=best.get)
-        agent.display.update(current_model=winner)
-    return agent.llm.best_models()
-    return agent.llm.best_models()
-
-
-def set_reasoning(enabled: bool) -> None:
-    """Enable or disable reasoning mode on the AI agent."""
-    agent = _ai_agent
-    if agent is None:
-        log("AI agent not initialized")
-        return
-    agent.reasoning_enabled = bool(enabled)
-
-
-def get_reasoning() -> bool:
-    """Return current reasoning state."""
-    agent = _ai_agent
-    if agent is None:
-        return True
-    return agent.reasoning_enabled
-
-
-def command(text: str) -> None:
-    """Send a command to the AI agent (for use in the Python tab)."""
-    if _ai_agent is None:
-        log("AI agent not initialized")
-        return
-    _ai_agent.command(text)

@@ -1,4 +1,3 @@
-import json as _json
 import os
 import subprocess
 import sys
@@ -7,7 +6,6 @@ import time
 import shutil
 import mimetypes
 import functools
-import queue
 from pathlib import Path
 from typing import Optional
 
@@ -15,25 +13,18 @@ import cv2
 import numpy as np
 from flask import (
     Flask, Response, jsonify, render_template, request,
-    send_file, session, redirect, url_for, abort
+    send_file, session, redirect, url_for
 )
 
 from robov_core.high_level import (
-    APP_PASSWORD, HTTP_HOST, HTTP_PORT, ROOT_DIR,
+    APP_PASSWORD, ROOT_DIR,
     get_stereo_camera, health_snapshot, ip_address,
     shell_output, shell_start, shell_write,
     set_emote, get_emote, supported_emotes,
     set_eyes_position, get_eyes_position, get_logs,
-    get_servo_angles, get_servo_angles_physical, get_servo_offsets,
+    get_servo_angles_physical, get_servo_offsets,
     set_servo_physical, log, cleanup, servo_toggle,
-    set_reasoning, get_reasoning,
-    get_depth_provider, set_depth_provider,
-    refresh_models,
-    reinit_object_detection as hl_reinit_object_detection,
-    scan as hl_scan,
 )
-
-from robov_core.ai import init_agent
 
 
 _mjpeg_counter: int = 0
@@ -110,12 +101,7 @@ def create_app() -> Flask:
         if camera:
             with camera.lock:
                 camera_params = {
-                    "depth_enabled": getattr(camera, 'depth_enabled', False),
-                    "hud_enabled": getattr(camera, 'hud_enabled', False),
-                    "wls_enabled": getattr(camera, 'wls_enabled', False),
-                    "alpha_depth": getattr(camera, 'alpha_depth', 0.3),
                     "show_left": getattr(camera, 'show_left', True),
-                    "num_disp": getattr(camera, 'num_disp', 128),
                     "fps": round(getattr(camera, 'fps', 0.0), 1),
                     "img_size": getattr(camera, 'img_size', [640, 360]),
                 }
@@ -240,26 +226,10 @@ def create_app() -> Flask:
         if not camera:
             return jsonify({"error": "Camera not initialized"}), 500
         data = request.get_json(silent=True) or {}
-        alpha = data.get("alpha_depth")
-        alpha = float(alpha) / 100.0 if alpha is not None else None
         camera.update_params(
-            alpha_depth=alpha,
             show_left=data.get("show_left"),
-            num_disp=data.get("num_disp"),
         )
         return jsonify({"ok": True})
-
-    @app.route("/api/depth", methods=["POST"])
-    @require_auth
-    def depth_at():
-        data = request.get_json(silent=True) or {}
-        x, y = data.get("x"), data.get("y")
-        if x is None or y is None:
-            return jsonify({"error": "Missing coordinates"}), 400
-        camera = get_stereo_camera()
-        if not camera:
-            return jsonify({"depth": None})
-        return jsonify({"depth": camera.get_depth_at(int(x), int(y))})
 
     @app.route("/api/camera/params", methods=["GET", "POST"])
     @require_auth
@@ -270,117 +240,15 @@ def create_app() -> Flask:
         if request.method == "GET":
             with camera.lock:
                 return jsonify({
-                    "depth_enabled": camera.depth_enabled,
-                    "hud_enabled": camera.hud_enabled,
-                    "wls_enabled": camera.wls_enabled,
-                    "detection_enabled": camera.detection_enabled,
-                    "detection_prompts": camera.detection_prompts,
-                    "alpha_depth": camera.alpha_depth,
                     "show_left": camera.show_left,
-                    "num_disp": camera.num_disp,
-                    "depth_scale": camera.depth_scale,
                 })
         data = request.get_json(silent=True) or {}
         camera.update_params(
-            depth_enabled=data.get("depth_enabled"),
-            hud_enabled=data.get("hud_enabled"),
-            wls_enabled=data.get("wls_enabled"),
-            detection_enabled=data.get("detection_enabled"),
-            detection_prompts=data.get("detection_prompts"),
-            alpha_depth=data.get("alpha_depth"),
             show_left=data.get("show_left"),
-            num_disp=data.get("num_disp"),
-            depth_scale=data.get("depth_scale"),
         )
         return jsonify({"status": "ok"})
 
-    @app.route("/api/camera/depth_provider", methods=["GET", "POST"])
-    @require_auth
-    def camera_depth_provider():
-        if request.method == "GET":
-            name = get_depth_provider()
-            return jsonify({"provider": name or "unknown"})
-        data = request.get_json(silent=True) or {}
-        provider_name = str(data.get("provider", "")).strip()
-        if not provider_name:
-            return jsonify({"error": "Missing 'provider' field"}), 400
-        if set_depth_provider(provider_name):
-            return jsonify({"status": "ok", "provider": provider_name.upper()})
-        return jsonify({"error": f"Failed to switch to {provider_name}"}), 400
-
-    # --- Object Detection ---
-
-    @app.route("/api/detections")
-    @require_auth
-    def get_detections():
-        camera = get_stereo_camera()
-        if camera is None:
-            return jsonify({"detections": [], "available": False})
-        return jsonify({
-            "detections": [
-                {"name": d.name, "confidence": round(d.confidence, 3),
-                 "bbox": {"x1": d.x1, "y1": d.y1, "x2": d.x2, "y2": d.y2},
-                 "center": {"x": d.center_x, "y": d.center_y}}
-                for d in camera._last_detections
-            ],
-            "available": camera.detector.available,
-            "enabled": camera.detection_enabled,
-        })
-
-    @app.route("/api/find")
-    @require_auth
-    def api_find():
-        name = request.args.get("name", "").strip()
-        if not name:
-            return jsonify({"error": "Missing ?name="}), 400
-        camera = get_stereo_camera()
-        if camera is None:
-            return jsonify({"error": "Camera not available"}), 503
-        result = camera.find(name)
-        if result is None:
-            return jsonify({"found": False, "name": name})
-        return jsonify({"found": True, **result})
-
-    @app.route("/api/scan")
-    @require_auth
-    def api_scan():
-        camera = get_stereo_camera()
-        if camera is None:
-            return jsonify({"error": "Camera not available"}), 503
-        prompts = request.args.get("prompts", "").strip()
-        results = hl_scan(prompts=prompts)
-        objects = []
-        for obj in results:
-            item = {
-                "name": obj.name,
-                "confidence": obj.confidence,
-                "bbox": obj.bbox,
-                "vx": round(obj.vx, 3),
-                "vy": round(obj.vy, 3),
-                "vz": round(obj.vz, 3),
-            }
-            if obj.position:
-                item["x"] = round(obj.position.x, 3)
-                item["y"] = round(obj.position.y, 3)
-                item["z"] = round(obj.position.z, 3)
-                item["depth"] = round(obj.depth, 3)
-            objects.append(item)
-        return jsonify({"objects": objects, "count": len(objects)})
-
-    @app.route("/api/detection/model", methods=["POST"])
-    @require_auth
-    def api_set_detection_model():
-        from flask import request as flask_request
-        data = flask_request.get_json(silent=True) or {}
-        model_name = data.get("model", "").strip()
-        if not model_name:
-            return jsonify({"error": "model required"}), 400
-        ok = hl_reinit_object_detection(model_name)
-        if ok:
-            return jsonify({"ok": True, "model": model_name})
-        return jsonify({"error": f"failed to load {model_name}"}), 400
-
-    # --- Servo ---
+    # --- Object Detection (removed) ---
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
     @require_auth
@@ -700,113 +568,4 @@ def create_app() -> Flask:
         except Exception as e:
             return f"Ошибка загрузки справки: {e}", 500
 
-    # --- Visualization ---
-
-    @app.route("/view")
-    @require_auth
-    def view_page():
-        return render_template("view.html")
-
-    @app.route("/api/cursor_xyz", methods=["POST"])
-    @require_auth
-    def cursor_xyz():
-        camera = get_stereo_camera()
-        if camera is None:
-            return jsonify({"error": "Camera not available"}), 503
-        data = request.get_json(silent=True) or {}
-        x = int(data.get("x", 0))
-        y = int(data.get("y", 0))
-        coords = camera.get_real_coords(x, y)
-        if coords is None:
-            return jsonify({"x": 0, "y": 0, "z": 0, "valid": False})
-        return jsonify({
-            "x": round(coords["x"], 3),
-            "y": round(coords["y"], 3),
-            "z": round(coords["z"], 3),
-            "depth": round(coords["depth"], 3),
-            "valid": True,
-        })
-
-    # --- AI Agent ---
-
-    @app.route("/api/ai/command", methods=["POST"])
-    @require_auth
-    def ai_command():
-        data = request.get_json(silent=True) or {}
-        prompt = str(data.get("prompt", "")).strip()
-        if not prompt:
-            return jsonify({"error": "No prompt"}), 400
-        try:
-            agent = init_agent()
-            agent.command(prompt)
-            return jsonify({"status": "ok"})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    @app.route("/api/ai/stop", methods=["POST"])
-    @require_auth
-    def ai_stop():
-        try:
-            agent = init_agent()
-            agent.stop()
-            return jsonify({"status": "ok"})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    @app.route("/api/ai/reasoning", methods=["GET", "POST"])
-    @require_auth
-    def ai_reasoning():
-        try:
-            if request.method == "POST":
-                data = request.get_json(silent=True) or {}
-                set_reasoning(bool(data.get("enabled", True)))
-            return jsonify({"enabled": get_reasoning()})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    @app.route("/api/ai/status")
-    @require_auth
-    def ai_status():
-        try:
-            agent = init_agent()
-            return jsonify(agent.display.get_all())
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    @app.route("/api/ai/models/refresh", methods=["POST"])
-    @require_auth
-    def ai_refresh_models():
-        try:
-            results = refresh_models(timeout=12.0)
-            return jsonify({"status": "ok", "models": results})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    @app.route("/api/ai/stream")
-    @require_auth
-    def ai_stream():
-        def generate():
-            q = queue.Queue()
-            agent = init_agent()
-            agent.display.add_sse_listener(q)
-            try:
-                while True:
-                    try:
-                        data = q.get(timeout=15)
-                        yield f"data: {_json.dumps(data, ensure_ascii=False)}\n\n"
-                    except queue.Empty:
-                        yield f": keepalive\n\n"
-            except GeneratorExit:
-                agent.display.remove_sse_listener(q)
-
-        return Response(
-            generate(),
-            mimetype="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
-        )
-
-    return app
+    # --- Servo ---
