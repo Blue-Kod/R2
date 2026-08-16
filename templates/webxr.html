@@ -55,9 +55,6 @@ const TARGET_DEADBAND = 8;    // мм
 const RECENTER_HOLD_MS = 400; // мс: удержание A/X дольше этого — ресет центра/направления
 // ================================================
 
-const ik = serverData.ik_config;
-const rest = ik.rest;
-
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 // ==== three.js setup ====
@@ -176,68 +173,9 @@ function startVideo() {
 }
 setTimeout(startVideo, 0);
 
-// ==== Робот: торс + руки (полупрозрачные, серые, 25%) ====
-const armsGroup = new THREE.Group();
-scene.add(armsGroup);
-
-const ARM_MAT = new THREE.MeshStandardMaterial({
-    color: 0x888888, transparent: true, opacity: 0.25, depthWrite: false
-});
-const armMeshes = {};
-function makeArm(side) {
-    const g = new THREE.Group();
-    const cylGeom = new THREE.CylinderGeometry(0.02, 0.02, 1, 10);
-    cylGeom.translate(0, -0.5, 0);
-    const seg1 = new THREE.Mesh(cylGeom, ARM_MAT);
-    const seg2 = new THREE.Mesh(cylGeom, ARM_MAT);
-    const joints = [0, 0, 0].map(() => new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 12), ARM_MAT));
-    g.add(seg1, seg2, ...joints);
-    armsGroup.add(g);
-    armMeshes[side] = { g, seg1, seg2, joints };
-    return g;
-}
-makeArm('left');
-makeArm('right');
-
-// торс
-const torso = new THREE.Mesh(
-    new THREE.BoxGeometry(2 * ik.torso.half_width / 1000, 2 * ik.torso.half_height / 1000, 2 * ik.torso.half_depth / 1000),
-    new THREE.MeshStandardMaterial({ color: 0x444444, transparent: true, opacity: 0.25, depthWrite: false })
-);
-armsGroup.add(torso);
-
-function armFk(side, angles) {
-    const ch = ik.channels[side];
-    let t1 = ((angles[ch.shoulder_z] ?? rest[ch.shoulder_z]) - rest[ch.shoulder_z]) * Math.PI / 180;
-    let t2 = ((angles[ch.shoulder_x] ?? rest[ch.shoulder_x]) - rest[ch.shoulder_x]) * Math.PI / 180;
-    const t3 = (rest[ch.elbow_x] - (angles[ch.elbow_x] ?? rest[ch.elbow_x])) * Math.PI / 180;
-    if (side === 'right') t1 = -t1; // правая поворотная зеркальна (см. arm_kinematics)
-    const c1 = Math.cos(t1), s1 = Math.sin(t1), c2 = Math.cos(t2), s2 = Math.sin(t2);
-    const c23 = Math.cos(t2 + t3), s23 = Math.sin(t2 + t3);
-    const sign = side === 'left' ? -1 : 1;
-    const S = [sign * ik.base_x, 0, 0];
-    const E = [S[0] + sign * ik.l1 * s1 * c2, -ik.l1 * c1 * c2, ik.l1 * s2];
-    const EE = [E[0] + sign * ik.l2 * s1 * c23, -ik.l2 * c1 * c23, ik.l2 * s23];
-    return { S, E, EE };
-}
-
-function setCyl(mesh, a, b) {
-    const dir = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    const len = Math.hypot(...dir) || 1e-6;
-    mesh.scale.set(1, len, 1);
-    mesh.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0),
-        new THREE.Vector3(dir[0] / len, dir[1] / len, dir[2] / len));
-}
-
-// ==== Контроллеры: полупрозрачные голубые сферы ====
-const CTRL_MAT = new THREE.MeshBasicMaterial({
-    color: 0x4488ff, transparent: true, opacity: 0.25, depthWrite: false
-});
+// ==== Контроллеры (визуальные маркеры не отображаем) ====
 const controllerR = renderer.xr.getController(0);
 const controllerL = renderer.xr.getController(1);
-controllerR.add(new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 14), CTRL_MAT));
-controllerL.add(new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 14), CTRL_MAT));
 scene.add(controllerR, controllerL);
 
 let ctrlByHand = { right: null, left: null };
@@ -272,27 +210,11 @@ function onFreezeButton(handedness, pressed) {
 }
 
 // ==== Состояние ====
-let servoAngles = {};
-for (const [k, v] of Object.entries(serverData.servo_angles || {})) servoAngles[Number(k)] = v;
-
-// Командуемые углы рук: обновляются сразу из IK-ответа сервера, чтобы
-// отрисовка рук шла за рукой пользователя, а не за реальными (медленными)
-// сервами. Реальные углы приходят из /api/servo/angles раз в 500 мс.
-let commandedAngles = {};
-for (const [k, v] of Object.entries(serverData.servo_angles || {})) commandedAngles[Number(k)] = v;
-
 let lastAngles = { neck: null, tilt: null };
 let lastTargets = { right: null, left: null };
 
 function setStatus(text) {
     document.getElementById('teleop-status').innerHTML = text;
-}
-
-function updateAnglesFromServer() {
-    fetch('/api/servo/angles', { cache: 'no-store' })
-        .then(r => r.json())
-        .then(d => { if (d && d.angles) for (const [k, v] of Object.entries(d.angles)) servoAngles[Number(k)] = v; })
-        .catch(() => {});
 }
 
 // ==== Главный цикл ====
@@ -336,11 +258,12 @@ function frame(time, xrFrame) {
         robotBaseYaw = euler.y;
         robotAnchorCaptured = true;
     }
-    // Ресет удержанием A/X: разворачиваем базу туда, куда смотришь
-    // (центр якоря и так следует за головой каждый кадр).
-    if (recenterActive) {
+    // Ресет удержанием A/X: одноразово (при отпускании) разворачиваем базу
+    // туда, куда смотришь (центр якоря и так следует за головой каждый кадр).
+    if (recenterRequested) {
         robotBaseYaw = euler.y;
         robotAnchorCaptured = true;
+        recenterRequested = false;
     }
     robotAnchorPos.set(tmpV1.x, tmpV1.y + ROBOT_Y_OFFSET, tmpV1.z);
 
@@ -360,9 +283,7 @@ function frame(time, xrFrame) {
         };
     }
 
-    // заголовок руки в мировых координатах для визуализации
     const pose = { neck, tilt };
-    drawArms(pose);
 
     // троттлинг: слать только изменения (заморожено — не шлём ничего)
     if (!frozen) {
@@ -413,14 +334,6 @@ function sendTeleop(payload) {
                 lastTargets.right = payload.targets.right || null;
                 lastTargets.left = payload.targets.left || null;
             }
-            // Командованные углы рук из IK-ответа: руки в VR следуют за
-            // контроллером мгновенно (реальные сервы догоняют плавно).
-            for (const side of ['right', 'left']) {
-                const servo = d && d[side] && d[side].servo;
-                if (servo) {
-                    for (const [ch, v] of Object.entries(servo)) commandedAngles[Number(ch)] = v;
-                }
-            }
             if (payload.grip) {
                 if (payload.grip.right !== undefined) lastGrip.right = payload.grip.right;
                 if (payload.grip.left !== undefined) lastGrip.left = payload.grip.left;
@@ -433,28 +346,11 @@ function sendTeleop(payload) {
 function fmt(t) { return t ? `${t.x},${t.y},${t.z}` : '—'; }
 function gripText() { return `П:${grip.right ?? '—'} Л:${grip.left ?? '—'}`; }
 
-// ==== Отрисовка рук ====
-function drawArms(pose) {
-    // руки следуют за телом, которое всегда под шлемом (см. frame)
-    armsGroup.position.copy(robotAnchorPos);
-    armsGroup.quaternion.copy(robotAnchorQuat);
-
-    for (const side of ['left', 'right']) {
-        const fk = armFk(side, commandedAngles);
-        const m = armMeshes[side];
-        const p = v => new THREE.Vector3(fk[v][0] / 1000, fk[v][1] / 1000, -fk[v][2] / 1000);
-        const s = p('S'), e = p('E'), ee = p('EE');
-        setCyl(m.seg1, s, e);
-        setCyl(m.seg2, e, ee);
-        m.joints[0].position.copy(s);
-        m.joints[1].position.copy(e);
-        m.joints[2].position.copy(ee);
-    }
-}
-
 // ==== Freeze / ресет: кнопка A (правая) / X (левая) ====
 // Тап (< RECENTER_HOLD_MS) — тоггл FREEZE. Удержание дольше порога — ресет
-// центра и направления: робот разворачивается туда, куда смотришь.
+// центра и направления: срабатывает ОДИН раз при отпускании, робот
+// разворачивается туда, куда смотришь. Никакого непрерывного следования —
+// рука никогда не поворачивается вместе с головой.
 function freezeButtonIndex(src) {
     // 0=стик, 1=триггер, 2=squeeze. Дальше профили расходятся:
     // Oculus/Meta Touch: 3 = A/X, 4 = B/Y, 5 = нажатие стика.
@@ -464,8 +360,7 @@ function freezeButtonIndex(src) {
 }
 const prevFreezeState = new Set();
 const holdState = new Map();   // src -> {start, long}
-let recenterHeld = false;      // A/X зажата
-let recenterActive = false;    // удержание перевалило порог — идёт ресет
+let recenterRequested = false; // длинное удержание отпущено — одноразовый ресет
 function pollFreeze() {
     if (!renderer.xr.isPresenting) return;
     const session = renderer.xr.getSession();
@@ -475,7 +370,6 @@ function pollFreeze() {
     // XR-геймпады лежат на тех же индексах, что inputSources.
     const gps = (navigator.getGamepads && navigator.getGamepads()) || [];
     const sources = session.inputSources;
-    recenterHeld = false;
     for (let i = 0; i < sources.length; i++) {
         const src = sources[i];
         let gp = src.gamepad;
@@ -492,22 +386,23 @@ function pollFreeze() {
             const st = holdState.get(src);
             if (st) {
                 holdState.delete(src);
-                if (!st.long) onFreezeButton(src.handedness, true); // тап -> тоггл freeze
+                if (st.long) {
+                    recenterRequested = true;  // удержание -> ресет при отпускании
+                } else {
+                    onFreezeButton(src.handedness, true); // тап -> тоггл freeze
+                }
             }
             prevFreezeState.delete(src);
             continue;
         }
         prevFreezeState.add(src);
-        recenterHeld = true;
         let st = holdState.get(src);
         if (!st) {
             holdState.set(src, { start: now, long: false });
         } else if (!st.long && now - st.start >= RECENTER_HOLD_MS) {
             st.long = true;
-            recenterActive = true;
         }
     }
-    if (!recenterHeld) recenterActive = false;
 }
 
 // ==== Вход в WebXR ====
@@ -524,7 +419,6 @@ const enterBtn = document.getElementById('enterBtn');
 const xrStatus = document.getElementById('xr-status');
 const freezeBadge = document.getElementById('freezeBadge');
 
-let anglesTimer = null;
 let desktopLoop = null;
 
 async function enterVR() {
@@ -547,13 +441,11 @@ async function enterVR() {
         freezeBadge.classList.remove('show');
         prevFreezeState.clear();
         holdState.clear();
-        recenterHeld = false;
-        recenterActive = false;
+        recenterRequested = false;
         enterBtn.classList.add('hidden');
         xrStatus.innerHTML = 'WebXR: <b class="ok">активна</b>';
         setStatus('телеоп запущен');
         renderer.setAnimationLoop(frame);
-        if (!anglesTimer) anglesTimer = setInterval(updateAnglesFromServer, 500);
         session.addEventListener('end', () => {
             renderer.setAnimationLoop(desktopLoop);
             frozen = true;
