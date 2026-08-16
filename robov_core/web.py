@@ -143,6 +143,7 @@ def create_app() -> Flask:
                     "show_left": getattr(camera, 'show_left', True),
                     "img_size": getattr(camera, 'img_size', [640, 360]),
                 }
+            camera_params["layout"] = camera.layout()
         return render_template("webxr.html",
                                ik_config=browser_config(),
                                servo_angles=get_servo_angles(),
@@ -280,6 +281,40 @@ def create_app() -> Flask:
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+    @app.route("/video_stereo")
+    @require_auth
+    def video_stereo():
+        """Полный стерео-кадр (оба глаза) для WebXR-фона.
+
+        Клиент сам выбирает UV-регион левого/правого глаза по раскладке
+        из /api/camera/params, поэтому в VR появляется глубина.
+        """
+        def stream():
+            global _mjpeg_counter
+            last_seq = -1
+            last_placeholder = 0.0
+            while True:
+                camera = get_stereo_camera()
+                jpeg, seq = camera.get_stereo_jpeg() if camera else (None, -1)
+                now = time.time()
+                if jpeg is not None and seq != last_seq:
+                    last_seq = seq
+                    with _mjpeg_lock:
+                        _mjpeg_counter += 1
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                elif jpeg is None and now - last_placeholder >= 1.0:
+                    last_placeholder = now
+                    frame = np.zeros((720, 2560, 3), dtype=np.uint8)
+                    cv2.putText(frame, "No Camera", (900, 380), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+                    with _mjpeg_lock:
+                        _mjpeg_counter += 1
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                else:
+                    time.sleep(0.005)
+
+        return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
     # --- Camera ---
 
     @app.route("/update", methods=["POST"])
@@ -301,10 +336,10 @@ def create_app() -> Flask:
         if not camera:
             return jsonify({"error": "Camera not initialized"}), 500
         if request.method == "GET":
-            with camera.lock:
-                return jsonify({
-                    "show_left": camera.show_left,
-                })
+            return jsonify({
+                "show_left": camera.show_left,
+                "layout": camera.layout(),
+            })
         data = request.get_json(silent=True) or {}
         camera.update_params(
             show_left=data.get("show_left"),

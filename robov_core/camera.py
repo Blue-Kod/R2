@@ -54,11 +54,15 @@ class StereoCamera:
         self._eye_crop_w: int = self.eye_w
         self._layout_checked: bool = False
         self._layout_attempts: int = 0
+        self._recal_pass: int = 0
+        self._RECAL_MAX: int = 3
         self._best_layout: Optional[Tuple[float, int, int, int]] = None
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
         self._jpeg_seq: int = 0
         self._raw_jpeg: Optional[bytes] = None
+        self._latest_stereo_jpeg: Optional[bytes] = None
+        self._stereo_seq: int = 0
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
 
@@ -220,22 +224,111 @@ class StereoCamera:
             self.cap.release()
             self.cap = None
 
+    def _col_content(self, gray: np.ndarray) -> np.ndarray:
+        """Маска «содержательных» колонок: яркие или текстурированные.
+
+        Чёрные поля/зазоры между глазами почти однородны (std≈0) и темны
+        (mean≈0), поэтому отсекаются. Глаза — яркие и/или детальные.
+        """
+        col_mean = gray.mean(axis=0)
+        col_std = gray.std(axis=0)
+        return (col_std > 5.0) | (col_mean > 30.0)
+
+    def _content_runs(self, content: np.ndarray) -> list:
+        """Связанные интервалы «содержательных» колонок (микрозазоры слить)."""
+        runs: list = []
+        in_run = False
+        start = 0
+        for i in range(content.size + 1):
+            c = bool(content[i]) if i < content.size else False
+            if c and not in_run:
+                start, in_run = i, True
+            elif not c and in_run:
+                runs.append((start, i))
+                in_run = False
+        merged: list = []
+        for a, b in runs:
+            if merged and a - merged[-1][1] <= 4:
+                merged[-1] = (merged[-1][0], b)
+            else:
+                merged.append((a, b))
+        return merged
+
+    def _crop_content_fraction(self, gray: np.ndarray, x0: int, W: int) -> float:
+        """Доля «содержательных» колонок в кадре [x0, x0+W)."""
+        h, w = gray.shape
+        x1 = min(x0 + W, w)
+        if x0 >= x1:
+            return 0.0
+        content = self._col_content(gray[:, x0:x1])
+        if content.size == 0:
+            return 0.0
+        return float(content.mean())
+
+    def _apply_layout(self, x0: int, W: int, x1: int, ncc: float) -> None:
+        self._best_layout = (float(ncc), float(ncc), x0, W, x1)
+        self._eye_x0 = x0
+        self._eye_x1 = x1
+        self._eye_crop_w = W
+        self._layout_checked = True
+        print(f"[Camera] layout: left x={x0}, right x={x1}, "
+              f"eye w={W}, ncc={ncc:.3f} (frame {self.actual_width}x{self.actual_height})",
+              flush=True)
+
     def _calibrate_layout(self, raw: np.ndarray) -> bool:
         """Автопоиск раскладки стерео-кадра по одному кадру.
 
-        Ищем (x0_левого, ширина, x0_правого), где половинки кадра максимально
-        похожи (NCC колонных профилей яркости — стерео-пара почти идентична).
-        Покрывает кадр шире 2560, зазор между глазами и правый глаз не на
-        [1280:2560]. Возвращает True, если найдена уверенная пара (ncc >= 0.6).
+        Первичный метод — границы «содержательных» колонок (глаза всегда
+        ярче/детальнее чёрных полей и зазоров). Если метод не дал уверенной
+        пары — фолбэк на NCC колонных профилей (стерео-пара почти
+        идентична). Возвращает True, если раскладка принята.
         """
         h, w = raw.shape[:2]
         if w < 2 * 600:
             return False
         try:
-            gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
         except cv2.error:
             return False
-        col = gray.mean(axis=0)
+
+        eye_lo = max(600, int(self.eye_w * 0.6))
+        eye_hi = min(w // 2, int(self.eye_w * 1.4))
+        runs = [r for r in self._content_runs(self._col_content(gray))
+                if r[1] - r[0] >= 0.5 * self.eye_w]
+
+        if len(runs) >= 2:
+            left_run, right_run = runs[0], runs[1]
+            if right_run[0] - left_run[0] >= 0.8 * self.eye_w:
+                W0 = min(max(left_run[1] - left_run[0], eye_lo), eye_hi)
+                W1 = min(max(right_run[1] - right_run[0], eye_lo), eye_hi)
+                W = min(W0, W1)
+                x0, x1 = left_run[0], right_run[0]
+                if (self._crop_content_fraction(gray, x0, W) >= 0.5
+                        and self._crop_content_fraction(gray, x1, W) >= 0.5
+                        and x1 + W <= w):
+                    self._apply_layout(x0, W, x1, 1.0)
+                    return True
+        elif len(runs) == 1:
+            a, b = runs[0]
+            rw = b - a
+            if 1.6 * self.eye_w <= rw <= 2.6 * self.eye_w:
+                x0, x1, W = a, a + rw // 2, rw // 2
+                if (self._crop_content_fraction(gray, x0, W) >= 0.5
+                        and self._crop_content_fraction(gray, x1, W) >= 0.5):
+                    self._apply_layout(x0, W, x1, 1.0)
+                    return True
+
+        return self._calibrate_layout_ncc(gray, w)
+
+    def _calibrate_layout_ncc(self, gray: np.ndarray, w: int) -> bool:
+        """Фолбэк: NCC колонных профилей яркости.
+
+        Покрывает кадр шире 2560, зазор между глазами и правый глаз не на
+        [1280:2560]. Возвращает True, если найдена уверенная пара
+        (ncc >= 0.6) или кончились попытки (тогда принимаем лучшее).
+        """
+        h = gray.shape[0]
+        col = gray.astype(np.float32).mean(axis=0)
         col -= col.mean()
         norm_all = float(np.sqrt(float(np.sum(col * col)))) + 1e-9
         if norm_all <= 1e-6:
@@ -270,23 +363,31 @@ class StereoCamera:
         if best is None:
             return False
         score, ncc, x0, W, x1 = best
-        self._best_layout = best
         if ncc >= 0.6 or self._layout_attempts >= 5:
-            self._eye_x0 = x0
-            self._eye_x1 = x1
-            self._eye_crop_w = W
-            self._layout_checked = True
-            print(f"[Camera] layout: left x={x0}, right x={x1}, "
-                  f"eye w={W}, ncc={ncc:.3f} (frame {self.actual_width}x{self.actual_height})",
-                  flush=True)
+            self._apply_layout(x0, W, x1, ncc)
             return ncc >= 0.6
         return False
 
     def _maybe_calibrate(self, raw: np.ndarray) -> None:
-        if self._layout_checked:
-            return
         self._layout_attempts += 1
-        self._calibrate_layout(raw)
+        if not self._layout_checked:
+            self._calibrate_layout(raw)
+            return
+        # Само-коррекция: раз в ~60 кадров проверяем, что кадры глаз не ушли
+        # в черноту (неверная раскладка дала бы «полглаза + чёрное поле»).
+        if (self._layout_attempts % 60 == 0
+                and self._recal_pass < self._RECAL_MAX):
+            try:
+                gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            except cv2.error:
+                return
+            if (self._crop_content_fraction(gray, self._eye_x0, self._eye_crop_w) < 0.35
+                    or self._crop_content_fraction(gray, self._eye_x1, self._eye_crop_w) < 0.35):
+                self._recal_pass += 1
+                print(f"[Camera] layout подозрителен — перекалибровка "
+                      f"#{self._recal_pass}", flush=True)
+                self._layout_checked = False
+                self._calibrate_layout(raw)
 
     def _process_frame(self, raw: np.ndarray, left: bool) -> np.ndarray:
         self._maybe_calibrate(raw)
@@ -405,6 +506,8 @@ class StereoCamera:
 
         with self.lock:
             self._raw_jpeg = raw
+            self._latest_stereo_jpeg = raw
+            self._stereo_seq += 1
             left = self.show_left
             self._jpeg_seq += 1
             self._frame_count += 1
@@ -453,14 +556,19 @@ class StereoCamera:
 
         try:
             jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+            stereo_jpeg = cv2.imencode(".jpg", raw, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
         except Exception:
             jpeg = None
+            stereo_jpeg = None
 
         with self.lock:
             self._latest_frame = frame
             if jpeg is not None:
                 self._latest_jpeg = jpeg
                 self._jpeg_seq += 1
+            if stereo_jpeg is not None:
+                self._latest_stereo_jpeg = stereo_jpeg
+                self._stereo_seq += 1
             self._frame_count += 1
             now = time.time()
             if now - self._last_frame_time >= 1.0:
@@ -497,3 +605,20 @@ class StereoCamera:
     def get_latest_jpeg(self) -> Tuple[Optional[bytes], int]:
         with self.lock:
             return self._latest_jpeg, self._jpeg_seq
+
+    def get_stereo_jpeg(self) -> Tuple[Optional[bytes], int]:
+        """Полный стерео-кадр (оба глаза) для VR-семплинга по UV."""
+        with self.lock:
+            return self._latest_stereo_jpeg, self._stereo_seq
+
+    def layout(self) -> dict:
+        """Раскладка глаз для клиента (UV-регионы левого/правого глаза)."""
+        with self.lock:
+            return {
+                "x0": self._eye_x0,
+                "x1": self._eye_x1,
+                "w": self._eye_crop_w,
+                "frame_w": self.actual_width,
+                "frame_h": self.actual_height,
+                "calibrated": self._layout_checked,
+            }

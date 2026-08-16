@@ -75,10 +75,17 @@ def limits(left: bool = False, ik_only: bool = False) -> Dict[str, Tuple[float, 
         else:
             result[name] = (float(lo - rest[ch]), float(hi - rest[ch]))
     if ik_only:
-        # Pan command 45..225: the safe half-turn used by IK only.
-        # Full range (-45..225) opens the natural branch with elbow down;
-        # the twisted branch is penalised at selection time (W_NAT).
-        result["shoulder_z"] = (-45.0, 225.0)
+        if left:
+            # Левая: cmd = rest + theta, полный ход команды 0..270 покрывает
+            # theta1 ∈ [-45, 225] — природная ветка (локоть вниз) на theta1<0,
+            # вывернутая штрафуется на этапе выбора (W_NAT).
+            result["shoulder_z"] = (-45.0, 225.0)
+        else:
+            # Правая после разворота направления (cmd = rest - theta):
+            # физически достижима только theta1 ∈ [-225, 35] (команда 270..10,
+            # физика 10..270). Дальше — упор сервы: раньше solver уводил
+            # правую «влево» и зажимал на лимите.
+            result["shoulder_z"] = (-225.0, 35.0)
     return result
 
 
@@ -439,8 +446,13 @@ if __name__ == "__main__":
         assert theta[0] < 0.0, f"shoulder_z должен быть природным, got {theta}"
         assert _elbow_above_line(theta, is_left) <= 0.0, \
             f"локоть вывернут вверх: {theta}"
-    # Край рабочей зоны (x=200) — точная природная ветка недостижима;
-    # допустим вывернутый fallback, но решение обязано существовать.
-    edge = ik_solve(200.0, 50.0, 250.0)
+    # Край рабочей зоны правой (после разворота shoulder_z достижима от
+    # -225° внутрь до +35° наружу) — решение обязано существовать.
+    edge = ik_solve(170.0, 50.0, 250.0)
     assert edge["ok"], edge
+    # Цель, которая раньше уводила правую поворотную за физический предел
+    # (theta1 > +35 -> упор сервы и «перелёт влево»), теперь обязана
+    # решаться внутри физического диапазона.
+    far = ik_solve(320.0, -200.0, 280.0)
+    assert far["ok"] and far["theta"][0] <= 35.0, far
     print("arm_kinematics: PASS")

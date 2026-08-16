@@ -78,21 +78,74 @@ scene.add(new THREE.DirectionalLight(0xffffff, 0.8));
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 100);
 
-// ==== Фон: камера ====
+// ==== Фон: стерео-камера (левый глаз -> левая камера, правый -> правая) ====
 const camImg = new Image();
 const camTex = new THREE.Texture(camImg);
 camTex.colorSpace = THREE.SRGBColorSpace;
+const bgMat = new THREE.ShaderMaterial({
+    uniforms: {
+        uTex: { value: camTex },
+        uEye: { value: 0 }, // 0 = левый view, 1 = правый
+        uRange: { value: new THREE.Vector4(0, 0.5, 0.5, 1.0) }
+    },
+    side: THREE.DoubleSide,
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+    fragmentShader: `
+        uniform sampler2D uTex;
+        uniform float uEye;
+        uniform vec4 uRange;
+        varying vec2 vUv;
+        void main() {
+            vec2 sel = uEye > 0.5 ? uRange.zw : uRange.xy;
+            vec2 uv = vec2(mix(sel.x, sel.y, vUv.x), vUv.y);
+            gl_FragColor = texture2D(uTex, uv);
+        }`
+});
 const bgPlane = new THREE.Mesh(
     new THREE.PlaneGeometry(8, 4.5),
-    new THREE.MeshBasicMaterial({ map: camTex, side: THREE.DoubleSide })
+    bgMat
 );
 bgPlane.position.set(0, 0, -6);
 camera.add(bgPlane);
 scene.add(camera);
 
+// Выбор глаза: в XR для каждого view three.js рендерит отдельной eye-камерой
+// (renderer.xr.getCamera().cameras = [левый, правый]). Вне XR — левый глаз.
+scene.onBeforeRender = (r, s, cam) => {
+    if (renderer.xr.isPresenting && renderer.xr.getCamera().cameras &&
+        renderer.xr.getCamera().cameras.length >= 2) {
+        bgMat.uniforms.uEye.value = (cam === renderer.xr.getCamera().cameras[1]) ? 1.0 : 0.0;
+    } else {
+        bgMat.uniforms.uEye.value = 0.0;
+    }
+};
+
+// Раскладка глаз (результат автокалибровки камеры) — UV-регионы для выборки.
+function updateCameraLayout() {
+    fetch('/api/camera/params', { cache: 'no-store' })
+        .then(r => r.json())
+        .then(d => {
+            const L = d && d.layout;
+            if (L && L.calibrated && L.frame_w > 0) {
+                bgMat.uniforms.uRange.value.set(
+                    L.x0 / L.frame_w, (L.x0 + L.w) / L.frame_w,
+                    L.x1 / L.frame_w, (L.x1 + L.w) / L.frame_w
+                );
+            }
+        })
+        .catch(() => {});
+}
+setTimeout(updateCameraLayout, 1500);
+setInterval(updateCameraLayout, 3000);
+
 function startVideo() {
     camImg.onload = () => { camTex.needsUpdate = true; };
-    camImg.src = '/video_feed';
+    camImg.src = '/video_stereo';
 }
 setTimeout(startVideo, 0);
 
@@ -156,8 +209,8 @@ const CTRL_MAT = new THREE.MeshBasicMaterial({
 });
 const controllerR = renderer.xr.getController(0);
 const controllerL = renderer.xr.getController(1);
-controllerR.add(new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 14), CTRL_MAT));
-controllerL.add(new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 14), CTRL_MAT));
+controllerR.add(new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 14), CTRL_MAT));
+controllerL.add(new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 14), CTRL_MAT));
 scene.add(controllerR, controllerL);
 
 let ctrlByHand = { right: null, left: null };
