@@ -52,11 +52,6 @@ class StereoCamera:
         self._eye_x0: int = 0
         self._eye_x1: int = self.eye_w
         self._eye_crop_w: int = self.eye_w
-        self._layout_checked: bool = False
-        self._layout_attempts: int = 0
-        self._recal_pass: int = 0
-        self._RECAL_MAX: int = 3
-        self._best_layout: Optional[Tuple[float, int, int, int]] = None
         self._eye_layout_override: bool = False
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
@@ -96,7 +91,6 @@ class StereoCamera:
                         self._eye_x0 = ox0
                         self._eye_x1 = ox1
                         self._eye_crop_w = ow
-                        self._layout_checked = True
                         self._eye_layout_override = True
                         print(f"[Camera] eye_layout override: left x={ox0}, "
                               f"right x={ox1}, eye w={ow}", flush=True)
@@ -241,271 +235,10 @@ class StereoCamera:
             self.cap.release()
             self.cap = None
 
-    def _col_content(self, gray: np.ndarray) -> np.ndarray:
-        """Маска «содержательных» колонок: яркие или текстурированные.
-
-        Чёрные поля/зазоры между глазами почти однородны (std≈0) и темны
-        (mean≈0), поэтому отсекаются. Глаза — яркие и/или детальные.
-        """
-        col_mean = gray.mean(axis=0)
-        col_std = gray.std(axis=0)
-        return (col_std > 4.0) | (col_mean > 20.0)
-
-    def _content_runs(self, content: np.ndarray) -> list:
-        """Связанные интервалы «содержательных» колонок (микрозазоры слить)."""
-        runs: list = []
-        in_run = False
-        start = 0
-        for i in range(content.size + 1):
-            c = bool(content[i]) if i < content.size else False
-            if c and not in_run:
-                start, in_run = i, True
-            elif not c and in_run:
-                runs.append((start, i))
-                in_run = False
-        merged: list = []
-        for a, b in runs:
-            if merged and a - merged[-1][1] <= 4:
-                merged[-1] = (merged[-1][0], b)
-            else:
-                merged.append((a, b))
-        return merged
-
-    def _crop_content_fraction(self, gray: np.ndarray, x0: int, W: int) -> float:
-        """Доля «содержательных» колонок в кадре [x0, x0+W)."""
-        h, w = gray.shape
-        x1 = min(x0 + W, w)
-        if x0 >= x1:
-            return 0.0
-        content = self._col_content(gray[:, x0:x1])
-        if content.size == 0:
-            return 0.0
-        return float(content.mean())
-
-    def _apply_layout(self, x0: int, W: int, x1: int, ncc: float, method: str = "variance") -> None:
-        self._best_layout = (float(ncc), float(ncc), x0, W, x1)
-        self._eye_x0 = x0
-        self._eye_x1 = x1
-        self._eye_crop_w = W
-        self._layout_checked = True
-        print(f"[Camera] layout ({method}): left x={x0}, right x={x1}, "
-              f"eye w={W}, ncc={ncc:.3f} (frame {self.actual_width}x{self.actual_height})",
-              flush=True)
-
-    def _candidate_layouts(self, gray: np.ndarray, w: int, runs: list,
-                           eye_lo: int, eye_hi: int) -> list:
-        """Гипотезы раскладки: (x0, W, x1).
-
-        1) Пары run-ов «содержательных» колонок (левая/правая камера);
-           2) один слитый run — зазор ищем как минимум яркости в средней
-           полосе (зазор часто не идеально чёрный, и оба глаза сливаются).
-        """
-        cands: list = []
-        for i in range(len(runs)):
-            for j in range(i + 1, len(runs)):
-                a, b = runs[i]
-                c, d = runs[j]
-                if c - a < 0.8 * self.eye_w:
-                    continue
-                W0 = min(max(b - a, eye_lo), eye_hi)
-                W1 = min(max(d - c, eye_lo), eye_hi)
-                W = min(W0, W1)
-                if c + W <= w:
-                    cands.append((a, W, c))
-        if len(runs) == 1:
-            a, b = runs[0]
-            rw = b - a
-            if 1.6 * self.eye_w <= rw <= 2.6 * self.eye_w:
-                # Середина — всегда запасной вариант (соседние глаза без зазора).
-                W_mid = min(max(rw // 2, eye_lo), eye_hi)
-                cands.append((a, W_mid, a + rw // 2))
-                # Реальный зазор (плоский и тёмный) — приоритетнее.
-                x1 = self._split_merged_run(gray, a, b)
-                if x1 > a:
-                    W0, W1 = x1 - a, b - x1
-                    W = min(W0, W1, eye_hi)
-                    if W < eye_lo:
-                        W = min(eye_lo, W1)
-                    if W > 0 and x1 + W <= w:
-                        cands.insert(-1, (a, W, x1))
-        return cands
-
-    @staticmethod
-    def _split_merged_run(gray: np.ndarray, a: int, b: int) -> int:
-        """Зазор в слитом run: широкая (>=6px) плоская И тёмная вставка
-        средней полосы. Возвращает её начало (x1) или 0, если зазора нет."""
-        rw = b - a
-        lo = a + int(rw * 0.30)
-        hi = a + int(rw * 0.70)
-        if hi - lo < 16:
-            return 0
-        f = gray.astype(np.float32)
-        std = f.std(axis=0)
-        bright = f.mean(axis=0)
-        band = std[lo:hi]
-        thr = 0.35 * (float(np.median(band)) + 1e-6)
-        band_bright_med = float(np.median(bright[lo:hi])) + 1e-6
-        best_start, best_len, cur_start, cur_len = 0, 0, 0, 0
-        for i in range(band.size):
-            flat = band[i] < thr
-            dark = bright[lo + i] < 0.8 * band_bright_med
-            if flat and dark:
-                if cur_len == 0:
-                    cur_start = i
-                cur_len += 1
-                if cur_len > best_len:
-                    best_len, best_start = cur_len, cur_start
-            else:
-                cur_len = 0
-        if best_len >= 6:
-            return lo + best_start
-        return 0
-
-    def _score_candidate(self, gray: np.ndarray, x0: int, W: int, x1: int):
-        """Оценка гипотезы. None — если хотя бы один кроп почти пустой.
-
-        Штрафуем «половину глаза + чёрное поле»: правая половина правого
-        глаза и левая половина левого обязаны содержать картинку.
-        """
-        fl = self._crop_content_fraction(gray, x0, W)
-        fr = self._crop_content_fraction(gray, x1, W)
-        if fl < 0.5 or fr < 0.5:
-            return None
-        hl = max(1, W // 2)
-        fr_rh = self._crop_content_fraction(gray, x1 + W - hl, hl)
-        fl_lh = self._crop_content_fraction(gray, x0, hl)
-        return fl + fr + 2.0 * fr_rh + 0.5 * fl_lh
-
-    def _calibrate_layout(self, raw: np.ndarray) -> bool:
-        """Автопоиск раскладки стерео-кадра по одному кадру.
-
-        Собираем все разумные гипотезы (пары run-ов / слитый run), оцениваем
-        их по доле контента с приоритетом «у глаз не может быть чёрной
-        половины», принимаем лучшую. Фолбэк — NCC колонных профилей.
-        """
-        h, w = raw.shape[:2]
-        if w < 2 * 600:
-            return False
-        try:
-            gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
-        except cv2.error:
-            return False
-
-        eye_lo = max(600, int(self.eye_w * 0.6))
-        eye_hi = min(w // 2, int(self.eye_w * 1.4))
-        runs = [r for r in self._content_runs(self._col_content(gray))
-                if r[1] - r[0] >= 0.5 * self.eye_w]
-
-        best = None
-        for x0, W, x1 in self._candidate_layouts(gray, w, runs, eye_lo, eye_hi):
-            score = self._score_candidate(gray, x0, W, x1)
-            if score is None:
-                continue
-            if best is None or score > best[0]:
-                best = (float(score), x0, W, x1)
-        if best is not None:
-            _, x0, W, x1 = best
-            self._apply_layout(x0, W, x1, 1.0, "variance")
-            return True
-
-        return self._calibrate_layout_ncc(gray, w)
-
-    def _calibrate_layout_ncc(self, gray: np.ndarray, w: int) -> bool:
-        """Фолбэк: NCC колонных профилей яркости.
-
-        Покрывает кадр шире 2560, зазор между глазами и правый глаз не на
-        [1280:2560]. Сначала проверяем лучшие кандидаты на содержание
-        (без «половины чёрного»), после исчерпания попыток принимаем лучшее.
-        """
-        h = gray.shape[0]
-        col = gray.astype(np.float32).mean(axis=0)
-        col -= col.mean()
-        norm_all = float(np.sqrt(float(np.sum(col * col)))) + 1e-9
-        if norm_all <= 1e-6:
-            return False
-        col /= norm_all
-        pref = np.zeros(w + 1, dtype=np.float64)
-        np.cumsum(col * col, out=pref[1:])
-
-        W_lo = max(600, int(self.eye_w * 0.6))
-        W_hi = min(w // 2, int(self.eye_w * 1.4))
-        A_hi = min(256, w // 8)
-        top: list = []
-        for A in range(0, A_hi + 1, 16):
-            for W in range(W_lo, W_hi + 1, 16):
-                if A + W > w // 2:
-                    continue
-                left = col[A:A + W]
-                n_left = float(np.sqrt(float(np.sum(left * left)))) + 1e-9
-                cc = np.correlate(col, left, mode="valid")
-                sq = pref[W:] - pref[:-W]
-                ncc = cc / (np.sqrt(sq) * n_left + 1e-9)
-                min_x1 = A + int(W * 0.8)
-                if min_x1 < len(ncc):
-                    ncc[:min_x1] = -np.inf
-                i = int(np.argmax(ncc))
-                # Tie-break: при близких ncc предпочитаем полный глаз
-                # (W ~ eye_w) и левый глаз от края кадра (A ~ 0).
-                score = ncc[i] + 0.001 * (W / self.eye_w) \
-                        + 0.0005 * (1.0 - A / max(A_hi, 1))
-                top.append((float(score), float(ncc[i]), A, W, i))
-        if not top:
-            return False
-        top.sort(key=lambda t: -t[0])
-        for score, ncc, x0, W, x1 in top[:6]:
-            if self._score_candidate(gray, x0, W, x1) is None:
-                continue
-            if ncc >= 0.6 or self._layout_attempts >= 5:
-                self._apply_layout(x0, W, x1, ncc, "ncc")
-                return ncc >= 0.6
-        if self._layout_attempts >= 5:
-            _, ncc, x0, W, x1 = top[0]
-            self._apply_layout(x0, W, x1, ncc, "ncc")
-            return ncc >= 0.6
-        return False
-
-    def _maybe_calibrate(self, raw: np.ndarray) -> None:
-        if self._eye_layout_override:
-            return
-        self._layout_attempts += 1
-        if not self._layout_checked:
-            self._calibrate_layout(raw)
-            return
-        # Само-коррекция: раз в ~60 кадров проверяем, что кадры глаз не ушли
-        # в черноту (неверная раскладка дала бы «полглаза + чёрное поле»).
-        if (self._layout_attempts % 60 == 0
-                and self._recal_pass < self._RECAL_MAX):
-            try:
-                gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
-            except cv2.error:
-                return
-            W = self._eye_crop_w
-            fl = self._crop_content_fraction(gray, self._eye_x0, W)
-            fr = self._crop_content_fraction(gray, self._eye_x1, W)
-            hl = max(1, W // 2)
-            fr_rh = self._crop_content_fraction(gray, self._eye_x1 + W - hl, hl)
-            if fl < 0.35 or fr < 0.35 or fr_rh < 0.2:
-                self._recal_pass += 1
-                print(f"[Camera] layout подозрителен (left={fl:.2f} "
-                      f"right={fr:.2f} right-half={fr_rh:.2f}) — "
-                      f"перекалибровка #{self._recal_pass}", flush=True)
-                self._layout_checked = False
-                self._calibrate_layout(raw)
-
     def _process_frame(self, raw: np.ndarray, left: bool) -> np.ndarray:
-        self._maybe_calibrate(raw)
         h, w = raw.shape[:2]
-        eye_w = self.eye_w
-        x0 = self._eye_x0 if left else self._eye_x1
-        W = self._eye_crop_w
-        if x0 + W <= w:
-            side = raw[:, x0:x0 + W]
-        elif w >= 2 * eye_w:
-            x0 = 0 if left else eye_w
-            side = raw[:, x0:x0 + eye_w]
-        else:
-            half_w = w // 2
-            side = raw[:, :half_w] if left else raw[:, half_w:]
+        half = w // 2
+        side = raw[:, :half] if left else raw[:, half:]
         h, w = side.shape[:2]
         if (w, h) != self.img_size:
             side = cv2.resize(side, self.img_size)
@@ -715,15 +448,24 @@ class StereoCamera:
             return self._latest_stereo_jpeg, self._stereo_seq
 
     def layout(self) -> dict:
-        """Раскладка глаз для клиента (UV-регионы левого/правого глаза)."""
+        """Раскладка глаз для клиента (UV-регионы левого/правого глаза).
+
+        По умолчанию — простой разрез кадра по середине. Ручной оверврайд
+        (eye_layout в cam_params.json) переопределяет значения.
+        """
         with self.lock:
+            if self._eye_layout_override:
+                x0, x1, W = self._eye_x0, self._eye_x1, self._eye_crop_w
+            else:
+                half = self.actual_width // 2
+                x0, x1, W = 0, half, half
             return {
-                "x0": self._eye_x0,
-                "x1": self._eye_x1,
-                "w": self._eye_crop_w,
+                "x0": x0,
+                "x1": x1,
+                "w": W,
                 "frame_w": self.actual_width,
                 "frame_h": self.actual_height,
-                "calibrated": self._layout_checked,
+                "calibrated": True,
             }
 
     def debug_frame(self) -> Optional[bytes]:
@@ -745,15 +487,15 @@ class StereoCamera:
             return None
         color = raw.copy() if raw.ndim == 3 else cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
         h, w = color.shape[:2]
-        with self.lock:
-            x0, x1, W, cal = self._eye_x0, self._eye_x1, self._eye_crop_w, self._layout_checked
+        if self._eye_layout_override:
+            x0, x1, W = self._eye_x0, self._eye_x1, self._eye_crop_w
+        else:
+            half = w // 2
+            x0, x1, W = 0, half, half
         green = (0, 200, 0)
         for xx, tag in ((x0, "L"), (x1, "R")):
             cv2.rectangle(color, (xx, 0), (xx + W, h), green, 2)
             cv2.putText(color, f"{tag} x={xx} w={W}",
                         (xx + 4, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, green, 2)
-        if not cal:
-            cv2.putText(color, "UNCALIBRATED", (w // 2 - 90, h - 18),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         return cv2.imencode(".jpg", color,
                             [int(cv2.IMWRITE_JPEG_QUALITY), 85])[1].tobytes()
