@@ -292,13 +292,96 @@ class StereoCamera:
               f"eye w={W}, ncc={ncc:.3f} (frame {self.actual_width}x{self.actual_height})",
               flush=True)
 
+    def _candidate_layouts(self, gray: np.ndarray, w: int, runs: list,
+                           eye_lo: int, eye_hi: int) -> list:
+        """Гипотезы раскладки: (x0, W, x1).
+
+        1) Пары run-ов «содержательных» колонок (левая/правая камера);
+           2) один слитый run — зазор ищем как минимум яркости в средней
+           полосе (зазор часто не идеально чёрный, и оба глаза сливаются).
+        """
+        cands: list = []
+        for i in range(len(runs)):
+            for j in range(i + 1, len(runs)):
+                a, b = runs[i]
+                c, d = runs[j]
+                if c - a < 0.8 * self.eye_w:
+                    continue
+                W0 = min(max(b - a, eye_lo), eye_hi)
+                W1 = min(max(d - c, eye_lo), eye_hi)
+                W = min(W0, W1)
+                if c + W <= w:
+                    cands.append((a, W, c))
+        if len(runs) == 1:
+            a, b = runs[0]
+            rw = b - a
+            if 1.6 * self.eye_w <= rw <= 2.6 * self.eye_w:
+                # Середина — всегда запасной вариант (соседние глаза без зазора).
+                W_mid = min(max(rw // 2, eye_lo), eye_hi)
+                cands.append((a, W_mid, a + rw // 2))
+                # Реальный зазор (плоский и тёмный) — приоритетнее.
+                x1 = self._split_merged_run(gray, a, b)
+                if x1 > a:
+                    W0, W1 = x1 - a, b - x1
+                    W = min(W0, W1, eye_hi)
+                    if W < eye_lo:
+                        W = min(eye_lo, W1)
+                    if W > 0 and x1 + W <= w:
+                        cands.insert(-1, (a, W, x1))
+        return cands
+
+    @staticmethod
+    def _split_merged_run(gray: np.ndarray, a: int, b: int) -> int:
+        """Зазор в слитом run: широкая (>=6px) плоская И тёмная вставка
+        средней полосы. Возвращает её начало (x1) или 0, если зазора нет."""
+        rw = b - a
+        lo = a + int(rw * 0.30)
+        hi = a + int(rw * 0.70)
+        if hi - lo < 16:
+            return 0
+        f = gray.astype(np.float32)
+        std = f.std(axis=0)
+        bright = f.mean(axis=0)
+        band = std[lo:hi]
+        thr = 0.35 * (float(np.median(band)) + 1e-6)
+        band_bright_med = float(np.median(bright[lo:hi])) + 1e-6
+        best_start, best_len, cur_start, cur_len = 0, 0, 0, 0
+        for i in range(band.size):
+            flat = band[i] < thr
+            dark = bright[lo + i] < 0.8 * band_bright_med
+            if flat and dark:
+                if cur_len == 0:
+                    cur_start = i
+                cur_len += 1
+                if cur_len > best_len:
+                    best_len, best_start = cur_len, cur_start
+            else:
+                cur_len = 0
+        if best_len >= 6:
+            return lo + best_start
+        return 0
+
+    def _score_candidate(self, gray: np.ndarray, x0: int, W: int, x1: int):
+        """Оценка гипотезы. None — если хотя бы один кроп почти пустой.
+
+        Штрафуем «половину глаза + чёрное поле»: правая половина правого
+        глаза и левая половина левого обязаны содержать картинку.
+        """
+        fl = self._crop_content_fraction(gray, x0, W)
+        fr = self._crop_content_fraction(gray, x1, W)
+        if fl < 0.5 or fr < 0.5:
+            return None
+        hl = max(1, W // 2)
+        fr_rh = self._crop_content_fraction(gray, x1 + W - hl, hl)
+        fl_lh = self._crop_content_fraction(gray, x0, hl)
+        return fl + fr + 2.0 * fr_rh + 0.5 * fl_lh
+
     def _calibrate_layout(self, raw: np.ndarray) -> bool:
         """Автопоиск раскладки стерео-кадра по одному кадру.
 
-        Первичный метод — границы «содержательных» колонок (глаза всегда
-        ярче/детальнее чёрных полей и зазоров). Если метод не дал уверенной
-        пары — фолбэк на NCC колонных профилей (стерео-пара почти
-        идентична). Возвращает True, если раскладка принята.
+        Собираем все разумные гипотезы (пары run-ов / слитый run), оцениваем
+        их по доле контента с приоритетом «у глаз не может быть чёрной
+        половины», принимаем лучшую. Фолбэк — NCC колонных профилей.
         """
         h, w = raw.shape[:2]
         if w < 2 * 600:
@@ -313,27 +396,17 @@ class StereoCamera:
         runs = [r for r in self._content_runs(self._col_content(gray))
                 if r[1] - r[0] >= 0.5 * self.eye_w]
 
-        if len(runs) >= 2:
-            left_run, right_run = runs[0], runs[1]
-            if right_run[0] - left_run[0] >= 0.8 * self.eye_w:
-                W0 = min(max(left_run[1] - left_run[0], eye_lo), eye_hi)
-                W1 = min(max(right_run[1] - right_run[0], eye_lo), eye_hi)
-                W = min(W0, W1)
-                x0, x1 = left_run[0], right_run[0]
-                if (self._crop_content_fraction(gray, x0, W) >= 0.5
-                        and self._crop_content_fraction(gray, x1, W) >= 0.5
-                        and x1 + W <= w):
-                    self._apply_layout(x0, W, x1, 1.0, "variance")
-                    return True
-        elif len(runs) == 1:
-            a, b = runs[0]
-            rw = b - a
-            if 1.6 * self.eye_w <= rw <= 2.6 * self.eye_w:
-                x0, x1, W = a, a + rw // 2, rw // 2
-                if (self._crop_content_fraction(gray, x0, W) >= 0.5
-                        and self._crop_content_fraction(gray, x1, W) >= 0.5):
-                    self._apply_layout(x0, W, x1, 1.0, "variance-single")
-                    return True
+        best = None
+        for x0, W, x1 in self._candidate_layouts(gray, w, runs, eye_lo, eye_hi):
+            score = self._score_candidate(gray, x0, W, x1)
+            if score is None:
+                continue
+            if best is None or score > best[0]:
+                best = (float(score), x0, W, x1)
+        if best is not None:
+            _, x0, W, x1 = best
+            self._apply_layout(x0, W, x1, 1.0, "variance")
+            return True
 
         return self._calibrate_layout_ncc(gray, w)
 
@@ -341,8 +414,8 @@ class StereoCamera:
         """Фолбэк: NCC колонных профилей яркости.
 
         Покрывает кадр шире 2560, зазор между глазами и правый глаз не на
-        [1280:2560]. Возвращает True, если найдена уверенная пара
-        (ncc >= 0.6) или кончились попытки (тогда принимаем лучшее).
+        [1280:2560]. Сначала проверяем лучшие кандидаты на содержание
+        (без «половины чёрного»), после исчерпания попыток принимаем лучшее.
         """
         h = gray.shape[0]
         col = gray.astype(np.float32).mean(axis=0)
@@ -357,7 +430,7 @@ class StereoCamera:
         W_lo = max(600, int(self.eye_w * 0.6))
         W_hi = min(w // 2, int(self.eye_w * 1.4))
         A_hi = min(256, w // 8)
-        best = None
+        top: list = []
         for A in range(0, A_hi + 1, 16):
             for W in range(W_lo, W_hi + 1, 16):
                 if A + W > w // 2:
@@ -375,12 +448,18 @@ class StereoCamera:
                 # (W ~ eye_w) и левый глаз от края кадра (A ~ 0).
                 score = ncc[i] + 0.001 * (W / self.eye_w) \
                         + 0.0005 * (1.0 - A / max(A_hi, 1))
-                if best is None or score > best[0]:
-                    best = (float(score), float(ncc[i]), A, W, i)
-        if best is None:
+                top.append((float(score), float(ncc[i]), A, W, i))
+        if not top:
             return False
-        score, ncc, x0, W, x1 = best
-        if ncc >= 0.6 or self._layout_attempts >= 5:
+        top.sort(key=lambda t: -t[0])
+        for score, ncc, x0, W, x1 in top[:6]:
+            if self._score_candidate(gray, x0, W, x1) is None:
+                continue
+            if ncc >= 0.6 or self._layout_attempts >= 5:
+                self._apply_layout(x0, W, x1, ncc, "ncc")
+                return ncc >= 0.6
+        if self._layout_attempts >= 5:
+            _, ncc, x0, W, x1 = top[0]
             self._apply_layout(x0, W, x1, ncc, "ncc")
             return ncc >= 0.6
         return False
@@ -400,11 +479,16 @@ class StereoCamera:
                 gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
             except cv2.error:
                 return
-            if (self._crop_content_fraction(gray, self._eye_x0, self._eye_crop_w) < 0.35
-                    or self._crop_content_fraction(gray, self._eye_x1, self._eye_crop_w) < 0.35):
+            W = self._eye_crop_w
+            fl = self._crop_content_fraction(gray, self._eye_x0, W)
+            fr = self._crop_content_fraction(gray, self._eye_x1, W)
+            hl = max(1, W // 2)
+            fr_rh = self._crop_content_fraction(gray, self._eye_x1 + W - hl, hl)
+            if fl < 0.35 or fr < 0.35 or fr_rh < 0.2:
                 self._recal_pass += 1
-                print(f"[Camera] layout подозрителен — перекалибровка "
-                      f"#{self._recal_pass}", flush=True)
+                print(f"[Camera] layout подозрителен (left={fl:.2f} "
+                      f"right={fr:.2f} right-half={fr_rh:.2f}) — "
+                      f"перекалибровка #{self._recal_pass}", flush=True)
                 self._layout_checked = False
                 self._calibrate_layout(raw)
 
@@ -641,3 +725,35 @@ class StereoCamera:
                 "frame_h": self.actual_height,
                 "calibrated": self._layout_checked,
             }
+
+    def debug_frame(self) -> Optional[bytes]:
+        """JPEG с нарисованными кропами глаз — визуальная диагностика.
+
+        Открыть в браузере, чтобы увидеть, что камера считает левым/правым
+        глазом (зелёные рамки + подписи x=...).
+        """
+        if self.backend == "ffmpeg":
+            raw = self._decode_latest()
+        else:
+            if not self.cap or not self.cap.isOpened():
+                if not self.initialize_camera():
+                    return None
+            ret, raw = self.cap.read()
+            if not ret:
+                return None
+        if raw is None:
+            return None
+        color = raw.copy() if raw.ndim == 3 else cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
+        h, w = color.shape[:2]
+        with self.lock:
+            x0, x1, W, cal = self._eye_x0, self._eye_x1, self._eye_crop_w, self._layout_checked
+        green = (0, 200, 0)
+        for xx, tag in ((x0, "L"), (x1, "R")):
+            cv2.rectangle(color, (xx, 0), (xx + W, h), green, 2)
+            cv2.putText(color, f"{tag} x={xx} w={W}",
+                        (xx + 4, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, green, 2)
+        if not cal:
+            cv2.putText(color, "UNCALIBRATED", (w // 2 - 90, h - 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        return cv2.imencode(".jpg", color,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), 85])[1].tobytes()

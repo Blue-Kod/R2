@@ -346,6 +346,17 @@ def create_app() -> Flask:
         )
         return jsonify({"status": "ok"})
 
+    @app.route("/api/camera/debug")
+    @require_auth
+    def camera_debug():
+        camera = get_stereo_camera()
+        if not camera:
+            return jsonify({"error": "Camera not initialized"}), 500
+        jpeg = camera.debug_frame()
+        if jpeg is None:
+            return jsonify({"error": "no frame"}), 500
+        return Response(jpeg, mimetype="image/jpeg")
+
     # --- Servo ---
 
     @app.route("/api/servo/<int:channel>/<int:angle>", methods=["POST"])
