@@ -314,7 +314,7 @@ class StereoCamera:
 
         with self.lock:
             self._raw_jpeg = raw
-            self._latest_jpeg = raw
+            left = self.show_left
             self._jpeg_seq += 1
             self._frame_count += 1
             now = time.time()
@@ -322,6 +322,20 @@ class StereoCamera:
                 self.fps = self._frame_count / (now - self._last_frame_time)
                 self._frame_count = 0
                 self._last_frame_time = now
+
+        # Стрим/бразузер/VR должны видеть один глаз (левый/правый), а не
+        # склейку stereo-кадра. raw_jpeg хранит полный кадр для декод-путей,
+        # а latest_jpeg — обрезанную до выбранного глаза JPEG (как в opencv).
+        try:
+            img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+            if img is not None:
+                frame = self._process_frame(img, left)
+                jpeg = cv2.imencode(".jpg", frame,
+                                    [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+                with self.lock:
+                    self._latest_jpeg = jpeg
+        except Exception:
+            pass
 
     def _capture_loop_opencv(self) -> None:
         if not self.cap or not self.cap.isOpened():
@@ -385,6 +399,4 @@ class StereoCamera:
 
     def get_latest_jpeg(self) -> Tuple[Optional[bytes], int]:
         with self.lock:
-            if self.backend == "ffmpeg":
-                return self._raw_jpeg, self._jpeg_seq
             return self._latest_jpeg, self._jpeg_seq
