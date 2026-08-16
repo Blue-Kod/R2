@@ -49,7 +49,7 @@ const TILT_MIN = 45, TILT_MAX = 135;
 const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
 const GRIP_CLOSE = 180, GRIP_OPEN = 0;
 const ROBOT_Y_OFFSET = -0.15;  // м: торс ниже шлема на 15 см
-const HAND_SCALE = 0.5;        // масштаб целей рук: рука тянется на половину расстояния до контроллера
+const HAND_SCALE = 0.5;        // масштаб X/Y целей рук (вбок/вверх); дальность Z — полная
 const SEND_HZ = 20;
 const ANGLE_DEADBAND = 0.3;   // градусы
 const TARGET_DEADBAND = 8;    // мм
@@ -276,7 +276,10 @@ function frame(time, xrFrame) {
         const ctrl = ctrlByHand[side];
         if (!ctrl) continue;
         ctrl.getWorldPosition(tmpV2);
-        tmpV2.sub(robotAnchorPos).multiplyScalar(HAND_SCALE).applyQuaternion(robotAnchorQuatInv);
+        tmpV2.sub(robotAnchorPos).applyQuaternion(robotAnchorQuatInv);
+        // X/Y (вбок и вверх) — половина расстояния до контроллера, Z (дальность) — без изменений.
+        tmpV2.x *= HAND_SCALE;
+        tmpV2.y *= HAND_SCALE;
         targets[side] = {
             x: Math.round(tmpV2.x * 1000),
             y: Math.round(tmpV2.y * 1000),
