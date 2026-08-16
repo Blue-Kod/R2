@@ -498,6 +498,9 @@ def servo_toggle(enable: bool) -> None:
     if servo is None or not servo.initialized:
         return
     if enable:
+        # Сначала снимаем блок relax_all(), иначе set_servo() откажется
+        # (сервы не включатся после выключения).
+        servo.enable_all()
         for ch in servo.channel_configs:
             servo.set_servo(ch, servo.current_angles.get(ch, 90), smooth=False)
     else:

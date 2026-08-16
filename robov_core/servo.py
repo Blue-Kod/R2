@@ -91,6 +91,12 @@ class ServoController:
         self.pwm = None
         self.initialized: bool = False
 
+        # Флаг «сервы запитаны». relax_all() снимает его — после этого
+        # set_servo() молча отказывается, чтобы ни один фоновый поток
+        # (webxr-телеоп, web-API) не мог снова запитать сервы после
+        # расслабления на выключении. Возвращается только enable_all().
+        self._enabled: bool = True
+
         self.current_angles: Dict[int, int] = dict(DEFAULT_POSE)
         self.lock: threading.Lock = threading.Lock()
 
@@ -202,6 +208,8 @@ class ServoController:
         """
         if not self.initialized or self.pwm is None:
             print(f"PCA9685 не инициализирована, канал {channel} не установлен")
+            return False
+        if not self._enabled:
             return False
 
         command_min, command_max = self.command_limits[channel]
@@ -366,7 +374,14 @@ class ServoController:
     # Расслабление сервоприводов
     # ------------------------------------------------------------------
     def relax_all(self) -> None:
-        """Отключить PWM всех каналов — сервы перестают держать нагрузку."""
+        """Отключить PWM всех каналов — сервы перестают держать нагрузку.
+
+        После вызова set_servo() блокируется до enable_all(): иначе любой
+        фоновый поток (webxr-телеоп идёт на 8 Гц, web-API) снова запитает
+        сервы через _ensure_mover()/set_pwm, и при выключении робота они
+        останутся жёсткими вместо расслабления.
+        """
+        self._enabled = False
         self._mover_stop.set()
         for cond in list(self._mover_conds.values()):
             with cond:
@@ -378,6 +393,11 @@ class ServoController:
                 self.pwm.set_pwm(ch, 0, 0)
             except Exception as e:
                 print(f"Не удалось расслабить серво {ch}: {e}")
+
+    def enable_all(self) -> None:
+        """Разрешить управление сервами снова (снимает блок relax_all)."""
+        self._enabled = True
+        self._mover_stop.clear()
 
     # ------------------------------------------------------------------
     # Тест и калибровка
