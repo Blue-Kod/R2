@@ -49,9 +49,6 @@ const TILT_MIN = 45, TILT_MAX = 135;
 const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
 const GRIP_CLOSE = 180, GRIP_OPEN = 0;
 const ROBOT_Y_OFFSET = -0.15;  // м: торс ниже шлема на 15 см
-const BASE_DEADZONE_DEG = 45;   // гр: база доворачивается, если взгляд отклонился больше
-const BASE_YAW_SPEED = 60;      // гр/сек: скорость доворота базы за головой
-const DEG2RAD = Math.PI / 180;
 const SEND_HZ = 8;
 const ANGLE_DEADBAND = 1.0;   // градусы
 const TARGET_DEADBAND = 20;   // мм
@@ -81,7 +78,8 @@ const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerH
 // ==== Фон: стерео-камера (левый глаз -> левая камера, правый -> правая) ====
 const camImg = new Image();
 const camTex = new THREE.Texture(camImg);
-camTex.colorSpace = THREE.SRGBColorSpace;
+// Без colorSpace: кадр уже sRGB, а ShaderMaterial не делает
+// линейно->sRGB конверсию на выходе (иначе картинка темнее).
 const bgMat = new THREE.ShaderMaterial({
     uniforms: {
         uTex: { value: camTex },
@@ -114,30 +112,31 @@ bgPlane.position.set(0, 0, -6);
 camera.add(bgPlane);
 scene.add(camera);
 
-// Выбор глаза: в XR для каждого view three.js рендерит отдельной eye-камерой
-// (renderer.xr.getCamera().cameras = [левый, правый]). Вне XR — левый глаз.
-scene.onBeforeRender = (r, s, cam) => {
-    if (renderer.xr.isPresenting && renderer.xr.getCamera().cameras &&
-        renderer.xr.getCamera().cameras.length >= 2) {
-        bgMat.uniforms.uEye.value = (cam === renderer.xr.getCamera().cameras[1]) ? 1.0 : 0.0;
-    } else {
-        bgMat.uniforms.uEye.value = 0.0;
-    }
+// Выбор глаза: three.js рендерит XR по глазам и вызывает onBeforeRender у
+// КАЖДОГО объекта для КАЖДОГО view, передавая eye-камеру. У правого глаза
+// viewport.x > 0 (вне XR viewport отсутствует -> левый глаз).
+bgPlane.onBeforeRender = (r, s, cam) => {
+    const vp = cam && cam.viewport;
+    bgMat.uniforms.uEye.value = (vp && vp.x > 0) ? 1.0 : 0.0;
 };
 
 // Раскладка глаз (результат автокалибровки камеры) — UV-регионы для выборки.
+function applyCameraLayout(L) {
+    if (L && L.calibrated && L.frame_w > 0 && L.w > 0) {
+        bgMat.uniforms.uRange.value.set(
+            L.x0 / L.frame_w, (L.x0 + L.w) / L.frame_w,
+            L.x1 / L.frame_w, (L.x1 + L.w) / L.frame_w
+        );
+    }
+}
+(function () {
+    const L = serverData.camera_params && serverData.camera_params.layout;
+    applyCameraLayout(L);
+})();
 function updateCameraLayout() {
     fetch('/api/camera/params', { cache: 'no-store' })
         .then(r => r.json())
-        .then(d => {
-            const L = d && d.layout;
-            if (L && L.calibrated && L.frame_w > 0) {
-                bgMat.uniforms.uRange.value.set(
-                    L.x0 / L.frame_w, (L.x0 + L.w) / L.frame_w,
-                    L.x1 / L.frame_w, (L.x1 + L.w) / L.frame_w
-                );
-            }
-        })
+        .then(d => { applyCameraLayout(d && d.layout); })
         .catch(() => {});
 }
 setTimeout(updateCameraLayout, 1500);
@@ -303,28 +302,13 @@ function frame(time, xrFrame) {
     // было прямо под ним (а не «ушло» туда, где был вход в сессию — при
     // ходьбе или если первый кадр дал смещённую/нулевую позу). Руки при этом
     // от ходьбы не ездят: цели считаются относительно того же якоря.
-    // База повёрнута по yaw головы: при старте фиксируется, но если взгляд
-    // отклонился от базы более чем на BASE_DEADZONE_DEG, база плавно
-    // доворачивается за головой (с отставанием) — робот всегда «перед нами».
+    // База НЕ поворачивается за головой: yaw фиксируется на входе в сессию,
+    // шлем управляет только головой (шея/наклон).
     if (!robotAnchorCaptured) {
         robotBaseYaw = euler.y;
         robotAnchorCaptured = true;
     }
     robotAnchorPos.set(tmpV1.x, tmpV1.y + ROBOT_Y_OFFSET, tmpV1.z);
-
-    // Плавный доворот базы за yaw головы (только при значительном отклонении)
-    if (lastFrameTime != null) {
-        const dt = Math.min((time - lastFrameTime) / 1000, 0.1);
-        let diff = euler.y - robotBaseYaw;
-        diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // нормализуем в [-PI, PI]
-        const dead = BASE_DEADZONE_DEG * DEG2RAD;
-        if (Math.abs(diff) > dead) {
-            const excess = Math.abs(diff) - dead;          // насколько вышли из мёртвой зоны
-            const maxStep = BASE_YAW_SPEED * DEG2RAD * dt; // скорость доворота (гр/сек)
-            robotBaseYaw += Math.sign(diff) * Math.min(excess, maxStep);
-        }
-    }
-    lastFrameTime = time;
 
     robotAnchorQuat.setFromEuler(robotBaseEuler.set(0, robotBaseYaw, 0));
     robotAnchorQuatInv.copy(robotAnchorQuat).invert();
@@ -461,8 +445,7 @@ const robotAnchorPos = new THREE.Vector3();
 const robotAnchorQuat = new THREE.Quaternion();
 const robotAnchorQuatInv = new THREE.Quaternion();
 let robotAnchorCaptured = false;
-let robotBaseYaw = 0;       // текущий yaw базы (радианы), поворот вокруг вертикали
-let lastFrameTime = null;   // для dt плавного доворота базы
+let robotBaseYaw = 0;       // yaw базы (радианы), фиксируется на входе в сессию
 
 const enterBtn = document.getElementById('enterBtn');
 const xrStatus = document.getElementById('xr-status');

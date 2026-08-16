@@ -57,6 +57,7 @@ class StereoCamera:
         self._recal_pass: int = 0
         self._RECAL_MAX: int = 3
         self._best_layout: Optional[Tuple[float, int, int, int]] = None
+        self._eye_layout_override: bool = False
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
         self._jpeg_seq: int = 0
@@ -85,6 +86,22 @@ class StereoCamera:
             if isinstance(im_size, (list, tuple)) and len(im_size) >= 2:
                 self.eye_w = int(im_size[0])
                 self.eye_h = int(im_size[1])
+            el = params.get("eye_layout")
+            if isinstance(el, dict):
+                try:
+                    ox0 = int(el.get("x0", -1))
+                    ox1 = int(el.get("x1", -1))
+                    ow = int(el.get("w", -1))
+                    if ox0 >= 0 and ox1 > ox0 and ow > 0:
+                        self._eye_x0 = ox0
+                        self._eye_x1 = ox1
+                        self._eye_crop_w = ow
+                        self._layout_checked = True
+                        self._eye_layout_override = True
+                        print(f"[Camera] eye_layout override: left x={ox0}, "
+                              f"right x={ox1}, eye w={ow}", flush=True)
+                except (TypeError, ValueError):
+                    pass
         except Exception:
             pass
 
@@ -232,7 +249,7 @@ class StereoCamera:
         """
         col_mean = gray.mean(axis=0)
         col_std = gray.std(axis=0)
-        return (col_std > 5.0) | (col_mean > 30.0)
+        return (col_std > 4.0) | (col_mean > 20.0)
 
     def _content_runs(self, content: np.ndarray) -> list:
         """Связанные интервалы «содержательных» колонок (микрозазоры слить)."""
@@ -265,13 +282,13 @@ class StereoCamera:
             return 0.0
         return float(content.mean())
 
-    def _apply_layout(self, x0: int, W: int, x1: int, ncc: float) -> None:
+    def _apply_layout(self, x0: int, W: int, x1: int, ncc: float, method: str = "variance") -> None:
         self._best_layout = (float(ncc), float(ncc), x0, W, x1)
         self._eye_x0 = x0
         self._eye_x1 = x1
         self._eye_crop_w = W
         self._layout_checked = True
-        print(f"[Camera] layout: left x={x0}, right x={x1}, "
+        print(f"[Camera] layout ({method}): left x={x0}, right x={x1}, "
               f"eye w={W}, ncc={ncc:.3f} (frame {self.actual_width}x{self.actual_height})",
               flush=True)
 
@@ -306,7 +323,7 @@ class StereoCamera:
                 if (self._crop_content_fraction(gray, x0, W) >= 0.5
                         and self._crop_content_fraction(gray, x1, W) >= 0.5
                         and x1 + W <= w):
-                    self._apply_layout(x0, W, x1, 1.0)
+                    self._apply_layout(x0, W, x1, 1.0, "variance")
                     return True
         elif len(runs) == 1:
             a, b = runs[0]
@@ -315,7 +332,7 @@ class StereoCamera:
                 x0, x1, W = a, a + rw // 2, rw // 2
                 if (self._crop_content_fraction(gray, x0, W) >= 0.5
                         and self._crop_content_fraction(gray, x1, W) >= 0.5):
-                    self._apply_layout(x0, W, x1, 1.0)
+                    self._apply_layout(x0, W, x1, 1.0, "variance-single")
                     return True
 
         return self._calibrate_layout_ncc(gray, w)
@@ -364,11 +381,13 @@ class StereoCamera:
             return False
         score, ncc, x0, W, x1 = best
         if ncc >= 0.6 or self._layout_attempts >= 5:
-            self._apply_layout(x0, W, x1, ncc)
+            self._apply_layout(x0, W, x1, ncc, "ncc")
             return ncc >= 0.6
         return False
 
     def _maybe_calibrate(self, raw: np.ndarray) -> None:
+        if self._eye_layout_override:
+            return
         self._layout_attempts += 1
         if not self._layout_checked:
             self._calibrate_layout(raw)
