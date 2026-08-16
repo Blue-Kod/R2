@@ -5,9 +5,10 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Sequence, Tuple
 
 import psutil
 
@@ -648,20 +649,65 @@ def set_servo_command(channel: int, angle: int) -> bool:
     return servo.set_servo(channel, angle, smooth=True)
 
 
-def ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
+# Последний командованный theta на сторону: старт для непрерывности ветки IK
+# (а не физические углы, которые отстают от команд на ходу).
+_last_ik_start: Dict[bool, Optional[Tuple[float, float, float]]] = {
+    False: None, True: None}
+# Rate-limit команд рук: предельная скорость изменения угла на ось, град/с.
+# Ограничивает прирост команды за вызов, чтобы смена ветки IK происходила
+# плавным поворотом, а не мгновенным «перелётом».
+MOVE_RATE_DEG_S = 150.0
+_last_cmd_angle: Dict[int, float] = {}
+_last_cmd_time: Dict[int, float] = {}
+
+
+def ik_detail(x: float, y: float, z: float, left: bool = False,
+              start: Optional[Sequence[float]] = None) -> dict:
     """Полный результат IK для web/API в системе координат камеры.
 
-    В качестве стартовой позы для выбора решения берутся текущие углы руки,
-    чтобы при равной ошибке предпочитать позу, ближайшую к текущей.
+    Стартовая поза для выбора ветки — последняя командованная поза руки
+    (непрерывность при движении), пока она есть; иначе — текущие углы.
     """
-    start = None
-    servo = _servo
-    if servo is not None:
-        channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
-        start = arm_kinematics.theta_from_commands(
-            {ch: servo.current_angles.get(ch, 90) for ch in channels.values()},
-            left=left)
+    if start is None:
+        start = _last_ik_start[left]
+    if start is None:
+        servo = _servo
+        if servo is not None:
+            channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
+            start = arm_kinematics.theta_from_commands(
+                {ch: servo.current_angles.get(ch, 90) for ch in channels.values()},
+                left=left)
     return arm_kinematics.ik_solve(x, y, z, left=left, start=start)
+
+
+def _rate_limit_commands(commands: Dict[int, float]) -> Dict[int, float]:
+    """Ограничить прирост каждого канала скоростью MOVE_RATE_DEG_S.
+
+    После паузы (>0.5 с) или расхождения с фактическим положением серво
+    (ручное движение / внешняя команда) стартуем от фактического угла,
+    чтобы рука не «рванула» с устаревшей точки.
+    """
+    now = time.monotonic()
+    servo = _servo
+    limited: Dict[int, float] = {}
+    for ch, angle in commands.items():
+        prev = _last_cmd_angle.get(ch)
+        phys = None
+        if servo is not None:
+            phys = float(servo.current_angles.get(ch, 90.0))
+        if prev is None:
+            prev = phys if phys is not None else float(angle)
+        else:
+            age = now - _last_cmd_time.get(ch, now)
+            if phys is not None and age > 0.5 and abs(prev - phys) > 1.0:
+                prev = phys
+        dt = max(0.0, now - _last_cmd_time.get(ch, now))
+        cap = MOVE_RATE_DEG_S * dt
+        value = prev + max(-cap, min(cap, float(angle) - prev))
+        limited[ch] = value
+        _last_cmd_angle[ch] = value
+        _last_cmd_time[ch] = now
+    return limited
 
 
 def _ik_tuple(result: dict, left: bool) -> Tuple[bool, float, float, float]:
@@ -691,16 +737,20 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
 
     Если цель недостижима, рука едет в ближайшую достижимую точку
     (решение есть в result["servo"]); не двигаемся только когда решения
-    нет вообще (цель внутри туловища/головы).
+    нет вообще (цель внутри туловища/головы). Команды дополнительно
+    ограничиваются скоростью MOVE_RATE_DEG_S: смена ветки IK идёт плавным
+    поворотом, а не мгновенным скачком.
     """
     result = ik_detail(x, y, z, left)
     result["moved"] = False
     if not result["servo"]:
         return result
-    for channel, angle_value in result["servo"].items():
-        if not set_servo_command(channel, angle_value):
+    limited = _rate_limit_commands(result["servo"])
+    for channel, angle_value in limited.items():
+        if not set_servo_command(channel, int(round(angle_value))):
             result["message"] += "; не удалось запустить движение серво"
             return result
+    _last_ik_start[left] = arm_kinematics.theta_from_commands(limited, left)
     result["moved"] = True
     return result
 

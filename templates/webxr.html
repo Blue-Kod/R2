@@ -53,6 +53,7 @@ const HAND_SCALE = 0.5;        // масштаб X/Y целей рук (вбок
 const SEND_HZ = 20;
 const ANGLE_DEADBAND = 0.3;   // градусы
 const TARGET_DEADBAND = 8;    // мм
+const TARGET_JUMP_MM = 200;   // мм: скачок цели за один кадр — глюк/телепорт, держим последнее
 const RECENTER_HOLD_MS = 400; // мс: удержание A/X дольше этого — ресет центра/направления
 // ================================================
 
@@ -179,18 +180,13 @@ const controllerR = renderer.xr.getController(0);
 const controllerL = renderer.xr.getController(1);
 scene.add(controllerR, controllerL);
 
-let ctrlByHand = { right: null, left: null };
 let grip = { right: null, left: null };
 let lastGrip = { right: null, left: null };
 let frozen = false;
 
 const allControllers = [controllerR, controllerL];
 allControllers.forEach((ctrl) => {
-    ctrl.addEventListener('connected', (e) => {
-        ctrlByHand[e.data.handedness] = ctrl;
-    });
     ctrl.addEventListener('disconnected', (e) => {
-        if (ctrlByHand[e.data.handedness] === ctrl) ctrlByHand[e.data.handedness] = null;
         grip[e.data.handedness] = GRIP_OPEN;
     });
     ctrl.addEventListener('selectstart', (e) => {
@@ -272,21 +268,38 @@ function frame(time, xrFrame) {
     robotAnchorQuatInv.copy(robotAnchorQuat).invert();
 
     const targets = { right: null, left: null };
-    for (const side of ['right', 'left']) {
-        const ctrl = ctrlByHand[side];
-        if (!ctrl) continue;
-        ctrl.getWorldPosition(tmpV2);
-        tmpV2.sub(robotAnchorPos);
-        // X/Y относительно шлема — половина (вбок/вверх), Z (дальность) — полная.
-        // Поворот в базу ниже — с фиксированным yaw: рука НЕ поворачивается с головой.
-        tmpV2.x *= HAND_SCALE;
-        tmpV2.y *= HAND_SCALE;
-        tmpV2.applyQuaternion(robotAnchorQuatInv);
-        targets[side] = {
-            x: Math.round(tmpV2.x * 1000),
-            y: Math.round(tmpV2.y * 1000),
-            z: Math.round(-tmpV2.z * 1000)
-        };
+    // Поза берётся напрямую из XR-кадра (getPose) по каждому inputSource:
+    // при потере трекинга pose = null -> цель null (рука держится), а не
+    // устаревшая матрица three.js, от которой рука «улетала».
+    const session = renderer.xr.getSession();
+    if (presenting && xrFrame && refSpace && session) {
+        for (const src of session.inputSources) {
+            const side = src.handedness;
+            if (side !== 'right' && side !== 'left') continue;
+            const space = src.gripSpace || src.targetRaySpace;
+            const pose = space ? xrFrame.getPose(space, refSpace) : null;
+            if (!pose) { targets[side] = null; continue; }
+            const p = pose.transform.position;
+            tmpV2.set(p.x, p.y, p.z);
+            tmpV2.sub(robotAnchorPos);
+            // X/Y относительно шлема — половина (вбок/вверх), Z (дальность) — полная.
+            // Поворот в базу ниже — с фиксированным yaw: рука НЕ поворачивается с головой.
+            tmpV2.x *= HAND_SCALE;
+            tmpV2.y *= HAND_SCALE;
+            tmpV2.applyQuaternion(robotAnchorQuatInv);
+            const tx = Math.round(tmpV2.x * 1000);
+            const ty = Math.round(tmpV2.y * 1000);
+            const tz = Math.round(-tmpV2.z * 1000);
+            const last = lastTargets[side];
+            if (last && (Math.abs(tx - last.x) > TARGET_JUMP_MM ||
+                         Math.abs(ty - last.y) > TARGET_JUMP_MM ||
+                         Math.abs(tz - last.z) > TARGET_JUMP_MM)) {
+                // скачок (глюк трекинга/телепорт) — держим последнюю отправленную цель
+                targets[side] = { x: last.x, y: last.y, z: last.z };
+            } else {
+                targets[side] = { x: Math.round(tx), y: Math.round(ty), z: Math.round(tz) };
+            }
+        }
     }
 
     const pose = { neck, tilt };
