@@ -35,6 +35,8 @@ class StereoCamera:
         self.lock: threading.Lock = threading.Lock()
 
         self.img_size: Tuple[int, int] = (640, 360)
+        self.eye_w: int = 1280
+        self.eye_h: int = 720
         self.show_left: bool = True
         self.fps: float = 30.0
         self._tick: int = 0
@@ -69,6 +71,10 @@ class StereoCamera:
             isize = params.get("img_size")
             if isinstance(isize, (list, tuple)) and len(isize) >= 2:
                 self.img_size = (int(isize[0]), int(isize[1]))
+            im_size = params.get("imSize")
+            if isinstance(im_size, (list, tuple)) and len(im_size) >= 2:
+                self.eye_w = int(im_size[0])
+                self.eye_h = int(im_size[1])
         except Exception:
             pass
 
@@ -209,8 +215,14 @@ class StereoCamera:
             self.cap = None
 
     def _process_frame(self, raw: np.ndarray, left: bool) -> np.ndarray:
-        half_w = raw.shape[1] // 2
-        side = raw[:, :half_w] if left else raw[:, half_w:]
+        h, w = raw.shape[:2]
+        eye_w = self.eye_w
+        if w >= 2 * eye_w:
+            x0 = 0 if left else eye_w
+            side = raw[:, x0:x0 + eye_w]
+        else:
+            half_w = w // 2
+            side = raw[:, :half_w] if left else raw[:, half_w:]
         h, w = side.shape[:2]
         if (w, h) != self.img_size:
             side = cv2.resize(side, self.img_size)
@@ -329,6 +341,12 @@ class StereoCamera:
         try:
             img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
             if img is not None:
+                if img.shape[1] != self.actual_width or img.shape[0] != self.actual_height:
+                    self.actual_width = img.shape[1]
+                    self.actual_height = img.shape[0]
+                    print(f"[Camera] delivered frame {self.actual_width}x{self.actual_height} "
+                          f"(requested {self.capture_width}x{self.capture_height}), eye {self.eye_w}x{self.eye_h}",
+                          flush=True)
                 frame = self._process_frame(img, left)
                 jpeg = cv2.imencode(".jpg", frame,
                                     [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
