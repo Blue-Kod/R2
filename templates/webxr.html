@@ -276,10 +276,12 @@ function frame(time, xrFrame) {
         const ctrl = ctrlByHand[side];
         if (!ctrl) continue;
         ctrl.getWorldPosition(tmpV2);
-        tmpV2.sub(robotAnchorPos).applyQuaternion(robotAnchorQuatInv);
-        // X/Y (вбок и вверх) — половина расстояния до контроллера, Z (дальность) — без изменений.
+        tmpV2.sub(robotAnchorPos);
+        // X/Y относительно шлема — половина (вбок/вверх), Z (дальность) — полная.
+        // Поворот в базу ниже — с фиксированным yaw: рука НЕ поворачивается с головой.
         tmpV2.x *= HAND_SCALE;
         tmpV2.y *= HAND_SCALE;
+        tmpV2.applyQuaternion(robotAnchorQuatInv);
         targets[side] = {
             x: Math.round(tmpV2.x * 1000),
             y: Math.round(tmpV2.y * 1000),
