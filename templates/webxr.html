@@ -245,17 +245,18 @@ function frame(time, xrFrame) {
     const neck = Math.round(clamp(90 + yaw, NECK_MIN, NECK_MAX));
     const tilt = Math.round(clamp(90 - pitch, TILT_MIN, TILT_MAX));
 
-    // Якорь робота: ставится один раз при входе (X/Z шлема), чтобы руки НЕ
-    // ездили за головой при ходьбе. По Y тело следует за шлемом.
+    // Якорь робота: X/Y/Z каждый кадр следуют за шлемом, чтобы тело всегда
+    // было прямо под ним (а не «ушло» туда, где был вход в сессию — при
+    // ходьбе или если первый кадр дал смещённую/нулевую позу). Руки при этом
+    // от ходьбы не ездят: цели считаются относительно того же якоря.
     // База повёрнута по yaw головы: при старте фиксируется, но если взгляд
     // отклонился от базы более чем на BASE_DEADZONE_DEG, база плавно
     // доворачивается за головой (с отставанием) — робот всегда «перед нами».
     if (!robotAnchorCaptured) {
-        robotAnchorPos.copy(tmpV1);
         robotBaseYaw = euler.y;
         robotAnchorCaptured = true;
     }
-    robotAnchorPos.y = tmpV1.y + ROBOT_Y_OFFSET;
+    robotAnchorPos.set(tmpV1.x, tmpV1.y + ROBOT_Y_OFFSET, tmpV1.z);
 
     // Плавный доворот базы за yaw головы (только при значительном отклонении)
     if (lastFrameTime != null) {
@@ -362,8 +363,7 @@ function gripText() { return `П:${grip.right ?? '—'} Л:${grip.left ?? '—'}
 
 // ==== Отрисовка рук ====
 function drawArms(pose) {
-    // руки закреплены на фиксированном якоре робота в комнате,
-    // а не ездят за головой пользователя
+    // руки следуют за телом, которое всегда под шлемом (см. frame)
     armsGroup.position.copy(robotAnchorPos);
     armsGroup.quaternion.copy(robotAnchorQuat);
 

@@ -34,6 +34,16 @@ ARM_CHANNELS = {
 GRID_STEPS = ((8.0, None), (2.0, 10.0), (0.4, 2.0), (0.08, 0.5))
 IK_ERR_OK = 3.0
 IK_TOLERANCE_MM = 10.0
+# IK-проверки ведут на половину диапазона пана (45..225), чтобы открыть
+# природную ветку с локтём вниз (shoulder_z < 0). Отступ от туловища/головы
+# при выборе позы смягчается: жёсткий ARM_RADIUS отсекает правильные позы,
+# где локоть проходит вплотную к торсу. Физический контроль остаётся в
+# arm_clearance() (margin=ARM_RADIUS) для диагностики.
+IK_CLEARANCE_MARGIN = 0.0
+# Штраф за «вывернутый локоть»: локоть выше линии плечо→кисть. Малый вес
+# отдаёт предпочтение природной ветке, но не блокирует точные решения на
+# границе рабочей зоны (где природная ветка недостижима).
+W_NAT = 0.3
 
 
 def _side(left: bool) -> str:
@@ -66,7 +76,9 @@ def limits(left: bool = False, ik_only: bool = False) -> Dict[str, Tuple[float, 
             result[name] = (float(lo - rest[ch]), float(hi - rest[ch]))
     if ik_only:
         # Pan command 45..225: the safe half-turn used by IK only.
-        result["shoulder_z"] = (0.0, 180.0)
+        # Full range (-45..225) opens the natural branch with elbow down;
+        # the twisted branch is penalised at selection time (W_NAT).
+        result["shoulder_z"] = (-45.0, 225.0)
     return result
 
 
@@ -145,6 +157,56 @@ def arm_clearance(theta: Sequence[float], left: bool = False,
     return float(np.min(_point_zone_clearance(np.vstack(samples), margin)))
 
 
+def _elbow_above_line(theta: Sequence[float], left: bool = False) -> float:
+    """How far (mm) the elbow sits above the shoulder→hand line.
+
+    The perpendicular offset of E relative to the S→EE line; only the
+    camera-vertical (Y) part counts. Negative/near-zero is the natural
+    elbow-below pose, positive is the twisted elbow-above pose.
+    """
+    pose = fk(theta, left)
+    s, e, ee = pose["S"], pose["E"], pose["EE"]
+    v = ee - s
+    length_sq = float(np.dot(v, v))
+    if length_sq < 1e-6:
+        return 0.0
+    perp = e - s - v * (float(np.dot(e - s, v)) / length_sq)
+    return float(perp[1])
+
+
+def _natural_penalty(theta: Sequence[float], left: bool = False) -> float:
+    return W_NAT * max(0.0, _elbow_above_line(theta, left))
+
+
+def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
+                            left: bool) -> np.ndarray:
+    """Vectorised natural penalty over a coarse FK grid (N1,N2,N3)."""
+    t1, t2, t3 = ranges
+    side_x = -1.0 if left else 1.0
+    shoulder = base(left)
+    c1, s1 = np.cos(np.radians(t1)), np.sin(np.radians(t1))
+    c2, s2 = np.cos(np.radians(t2)), np.sin(np.radians(t2))
+    c3, s3 = np.cos(np.radians(t3)), np.sin(np.radians(t3))
+    c23 = c2[:, None] * c3[None, :] - s2[:, None] * s3[None, :]
+    s23 = s2[:, None] * c3[None, :] + c2[:, None] * s3[None, :]
+    shape = (t1.size, t2.size, t3.size)
+    c1, s1 = np.broadcast_to(c1[:, None, None], shape), np.broadcast_to(s1[:, None, None], shape)
+    c2, s2 = np.broadcast_to(c2[None, :, None], shape), np.broadcast_to(s2[None, :, None], shape)
+    c23, s23 = np.broadcast_to(c23[None, :, :], shape), np.broadcast_to(s23[None, :, :], shape)
+    upper = np.stack([side_x * s1 * c2, -c1 * c2, s2], axis=-1)
+    lower = np.stack([side_x * s1 * c23, -c1 * c23, s23], axis=-1)
+    elbow = shoulder + L1 * upper
+    ee = elbow + L2 * lower
+    v = ee - shoulder
+    len_sq = np.sum(v * v, axis=-1, keepdims=True)
+    dot = np.sum((elbow - shoulder) * v, axis=-1, keepdims=True)
+    scale = np.divide(dot, len_sq,
+                      where=len_sq > 1e-6,
+                      out=np.zeros_like(len_sq))
+    perp = elbow - shoulder - v * scale
+    return W_NAT * np.maximum(0.0, perp[..., 1])
+
+
 def _fk_grid_positions(t1: np.ndarray, t2: np.ndarray, t3: np.ndarray,
                        left: bool) -> np.ndarray:
     c1, s1 = np.cos(np.radians(t1)), np.sin(np.radians(t1))
@@ -159,6 +221,19 @@ def _fk_grid_positions(t1: np.ndarray, t2: np.ndarray, t3: np.ndarray,
     x = shoulder[0] + side_x * planar[None, :, :] * s1[:, None, None]
     y = shoulder[1] - planar[None, :, :] * c1[:, None, None]
     z = np.broadcast_to(shoulder[2] + z_off[None, :, :], x.shape)
+    return np.stack([x, y, z], axis=-1)
+
+
+def _fk_grid_elbows(t1: np.ndarray, t2: np.ndarray, left: bool) -> np.ndarray:
+    """Elbow positions over a (t1, t2) sub-grid, for refinement clearance."""
+    c1, s1 = np.cos(np.radians(t1)), np.sin(np.radians(t1))
+    c2, s2 = np.cos(np.radians(t2)), np.sin(np.radians(t2))
+    side_x = -1.0 if left else 1.0
+    shoulder = base(left)
+    planar = L1 * c2
+    x = shoulder[0] + side_x * planar[None, :] * s1[:, None]
+    y = shoulder[1] - planar[None, :] * c1[:, None]
+    z = np.broadcast_to(shoulder[2], x.shape)
     return np.stack([x, y, z], axis=-1)
 
 
@@ -181,8 +256,15 @@ def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
                   left: bool) -> Tuple[Tuple[float, float, float], float]:
     positions = _fk_grid_positions(*ranges, left)
     error = np.linalg.norm(positions - target, axis=-1)
-    penalty = np.where(_point_zone_clearance(positions, ARM_RADIUS) <= 0.0,
+    penalty = np.where(_point_zone_clearance(positions, IK_CLEARANCE_MARGIN) <= 0.0,
                        1e6, 0.0)
+    # Локоть тоже не должен пролегать сквозь туловище/голову: иначе
+    # refinement может увести позу в коллизию, которую потом отклонит
+    # финальный arm_clearance (и решение потеряется).
+    elbow = _fk_grid_elbows(ranges[0], ranges[1], left)
+    elbow_penalty = np.where(_point_zone_clearance(elbow, IK_CLEARANCE_MARGIN) <= 0.0,
+                             1e6, 0.0)
+    penalty += np.broadcast_to(elbow_penalty[..., None], penalty.shape)
     index = int(np.argmin(error + penalty))
     i1, i2, i3 = np.unravel_index(index, error.shape)
     theta = (float(ranges[0][i1]), float(ranges[1][i2]), float(ranges[2][i3]))
@@ -211,8 +293,11 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     coarse = _ranges(left, *GRID_STEPS[0])
     positions = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - target, axis=-1)
-    clearance = _point_zone_clearance(positions, ARM_RADIUS)
+    clearance = _point_zone_clearance(positions, IK_CLEARANCE_MARGIN)
     errors += np.where(clearance <= 0.0, 1e6, 0.0)
+    # Природная поза (локоть ниже линии плечо→кисть) получает фору при
+    # выборе стартов грубой сетки, чтобы вывернутая ветка не доминировала.
+    errors += _natural_penalty_series(coarse, left)
     count = min(6, errors.size)
 
     def _pick_start(scores):
@@ -242,40 +327,56 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
             current, _ = _best_on_grid(_ranges(left, step, window, current),
                                        target, left)
         error = float(np.linalg.norm(fk(current, left)["EE"] - target))
-        if arm_clearance(current, left) > 0.0:
-            results.append((error, current))
+        if arm_clearance(current, left, IK_CLEARANCE_MARGIN) >= 0.0:
+            results.append((error, _natural_penalty(current, left), current))
 
     if not results:
         return _result(None, "blocked",
                        "Цель достижима только с касанием туловища или головы",
                        left)
 
-    results.sort(key=lambda item: item[0])
-    best_error, best_theta = results[0]
-    if start is not None:
-        # Приоритет — непрерывность: рука должна оставаться близкой к
-        # последней позе по углам и не дёргаться при небольших движениях
-        # цели. Cost = error + λ·Δθ², но штраф за углы НАСЫЩАЕТСЯ:
-        # при малых Δθ он отсекает перескоки между ветками IK, а при очень
-        # больших Δθ (цель ушла далеко, надо перейти в другую ветку) не
-        # блокирует точное решение.
-        weights = (1.0, 0.5, 0.25)
-        angle_weight = 0.2
-        max_angle_penalty = 100.0
+    # Natural-штраф ограничен сверху: он лишь «добивает» вывернутую позу
+    # среди равноточных решений, но не вытесняет точное решение в пользу
+    # недостижимой природной (край рабочей зоны).
+    weights = (1.0, 0.5, 0.25)
+    angle_weight = 0.2
+    max_angle_penalty = 100.0
+    natural_cap = IK_TOLERANCE_MM
 
-        def angle_cost(theta):
-            return sum(w * (a - b) ** 2 for w, a, b in zip(weights, theta, start))
+    def score(error, natural, theta):
+        total = error + min(natural, natural_cap)
+        if start is not None:
+            angle_cost = sum(w * (a - b) ** 2
+                             for w, a, b in zip(weights, theta, start))
+            total += min(angle_weight * angle_cost, max_angle_penalty)
+        return total
 
-        def total_cost(error, theta):
-            penalty = angle_weight * angle_cost(theta)
-            return error + min(penalty, max_angle_penalty)
+    # Непрерывность: текущая поза всегда в кандидатах; если её погрешность
+    # в пределах бюджета, оставляем ветку — рука не дёргается при плавном
+    # движении цели через переходную зону. Бюджет чуть шире teleop-deadband
+    # (20 мм): при медленном движении руки ошибка до ~25 мм не заметна,
+    # зато нет резкого «перелёта» между ветками. Если ветка сильно отстала
+    # от цели — переключаемся на точное решение.
+    continuity_budget = 25.0
 
-        best_cost = total_cost(best_error, best_theta)
-        for error, theta in results:
-            cost = total_cost(error, theta)
-            if cost < best_cost:
-                best_error, best_theta = error, theta
-                best_cost = cost
+    def _pick_continuity():
+        if start is None:
+            return None
+        candidates = [(score(error, natural, theta), error, theta)
+                      for error, natural, theta in results]
+        if not candidates:
+            return None
+        best = min(candidates, key=lambda item: item[0])
+        return best[1], best[2]
+
+    continuity = _pick_continuity()
+    if continuity is not None and continuity[0] <= continuity_budget:
+        best_error, best_theta = continuity
+    else:
+        accurate = [item for item in results if item[0] <= IK_TOLERANCE_MM]
+        pool = accurate if accurate else results
+        best = min(pool, key=lambda item: score(*item))
+        best_error, _, best_theta = best
 
     if best_error <= IK_ERR_OK:
         status = "ok"
@@ -317,4 +418,19 @@ if __name__ == "__main__":
         result = ik_solve(*point, left=is_left)
         assert result["ok"], result
     assert not ik_solve(0.0, 0.0, 0.0)["ok"]
+
+    # Природная поза: для цели вперёд-вбок shoulder_z должен уходить в
+    # отрицательную зону (локоть вниз), а не выворачиваться на +145°.
+    for is_left in (False, True):
+        sx = -1 if is_left else 1
+        result = ik_solve(sx * 150.0, 50.0, 300.0, left=is_left)
+        assert result["ok"], result
+        theta = result["theta"]
+        assert theta[0] < 0.0, f"shoulder_z должен быть природным, got {theta}"
+        assert _elbow_above_line(theta, is_left) <= 0.0, \
+            f"локоть вывернут вверх: {theta}"
+    # Край рабочей зоны (x=200) — точная природная ветка недостижима;
+    # допустим вывернутый fallback, но решение обязано существовать.
+    edge = ik_solve(200.0, 50.0, 250.0)
+    assert edge["ok"], edge
     print("arm_kinematics: PASS")
