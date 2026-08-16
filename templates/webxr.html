@@ -52,7 +52,6 @@ const ROBOT_Y_OFFSET = -0.15;  // м: торс ниже шлема на 15 см
 const SEND_HZ = 8;
 const ANGLE_DEADBAND = 1.0;   // градусы
 const TARGET_DEADBAND = 20;   // мм
-const FREEZE_BUTTON_INDEX = 3; // A (правая) / X (левая)
 // ================================================
 
 const ik = serverData.ik_config;
@@ -419,14 +418,31 @@ function drawArms(pose) {
 }
 
 // ==== Freeze: кнопка A (правая) / X (левая) ====
+function freezeButtonIndex(src) {
+    // 0=стик, 1=триггер, 2=squeeze. Дальше профили расходятся:
+    // Oculus/Meta Touch: 3 = A/X, 4 = B/Y, 5 = нажатие стика.
+    // generic-trigger-squeeze-thumbstick: 3 = нажатие стика, 4 = A/X, 5 = B/Y.
+    const prof = (src.profiles || []).join(' ');
+    return /generic/.test(prof) ? 4 : 3;
+}
 function pollFreeze() {
     if (!renderer.xr.isPresenting) return;
     const session = renderer.xr.getSession();
     if (!session) return;
-    const frames = session.inputSources;
-    for (const src of frames) {
-        if (!src.gamepad) continue;
-        const b = src.gamepad.buttons[FREEZE_BUTTON_INDEX];
+    // XRInputSource.gamepad по спеке часто null: заполняется только в момент
+    // активного нажатия. Надёжный источник — navigator.getGamepads(), где
+    // XR-геймпады лежат на тех же индексах, что inputSources.
+    const gps = (navigator.getGamepads && navigator.getGamepads()) || [];
+    const sources = session.inputSources;
+    for (let i = 0; i < sources.length; i++) {
+        const src = sources[i];
+        let gp = src.gamepad;
+        if (!gp && gps[i]) gp = gps[i];
+        if (!gp) {
+            for (const g of gps) if (g && g.hand === src.handedness) { gp = g; break; }
+        }
+        if (!gp) continue;
+        const b = gp.buttons[freezeButtonIndex(src)];
         if (!b) continue;
         const pressed = !!b.pressed;
         if (pressed && !prevFreezeState.has(src)) {
