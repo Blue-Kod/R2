@@ -49,6 +49,12 @@ class StereoCamera:
         self.fps_target: int = fps_target
         self.actual_width: int = 0
         self.actual_height: int = 0
+        self._eye_x0: int = 0
+        self._eye_x1: int = self.eye_w
+        self._eye_crop_w: int = self.eye_w
+        self._layout_checked: bool = False
+        self._layout_attempts: int = 0
+        self._best_layout: Optional[Tuple[float, int, int, int]] = None
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
         self._jpeg_seq: int = 0
@@ -214,10 +220,83 @@ class StereoCamera:
             self.cap.release()
             self.cap = None
 
+    def _calibrate_layout(self, raw: np.ndarray) -> bool:
+        """Автопоиск раскладки стерео-кадра по одному кадру.
+
+        Ищем (x0_левого, ширина, x0_правого), где половинки кадра максимально
+        похожи (NCC колонных профилей яркости — стерео-пара почти идентична).
+        Покрывает кадр шире 2560, зазор между глазами и правый глаз не на
+        [1280:2560]. Возвращает True, если найдена уверенная пара (ncc >= 0.6).
+        """
+        h, w = raw.shape[:2]
+        if w < 2 * 600:
+            return False
+        try:
+            gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        except cv2.error:
+            return False
+        col = gray.mean(axis=0)
+        col -= col.mean()
+        norm_all = float(np.sqrt(float(np.sum(col * col)))) + 1e-9
+        if norm_all <= 1e-6:
+            return False
+        col /= norm_all
+        pref = np.zeros(w + 1, dtype=np.float64)
+        np.cumsum(col * col, out=pref[1:])
+
+        W_lo = max(600, int(self.eye_w * 0.6))
+        W_hi = min(w // 2, int(self.eye_w * 1.4))
+        A_hi = min(256, w // 8)
+        best = None
+        for A in range(0, A_hi + 1, 16):
+            for W in range(W_lo, W_hi + 1, 16):
+                if A + W > w // 2:
+                    continue
+                left = col[A:A + W]
+                n_left = float(np.sqrt(float(np.sum(left * left)))) + 1e-9
+                cc = np.correlate(col, left, mode="valid")
+                sq = pref[W:] - pref[:-W]
+                ncc = cc / (np.sqrt(sq) * n_left + 1e-9)
+                min_x1 = A + int(W * 0.8)
+                if min_x1 < len(ncc):
+                    ncc[:min_x1] = -np.inf
+                i = int(np.argmax(ncc))
+                # Tie-break: при близких ncc предпочитаем полный глаз
+                # (W ~ eye_w) и левый глаз от края кадра (A ~ 0).
+                score = ncc[i] + 0.001 * (W / self.eye_w) \
+                        + 0.0005 * (1.0 - A / max(A_hi, 1))
+                if best is None or score > best[0]:
+                    best = (float(score), float(ncc[i]), A, W, i)
+        if best is None:
+            return False
+        score, ncc, x0, W, x1 = best
+        self._best_layout = best
+        if ncc >= 0.6 or self._layout_attempts >= 5:
+            self._eye_x0 = x0
+            self._eye_x1 = x1
+            self._eye_crop_w = W
+            self._layout_checked = True
+            print(f"[Camera] layout: left x={x0}, right x={x1}, "
+                  f"eye w={W}, ncc={ncc:.3f} (frame {self.actual_width}x{self.actual_height})",
+                  flush=True)
+            return ncc >= 0.6
+        return False
+
+    def _maybe_calibrate(self, raw: np.ndarray) -> None:
+        if self._layout_checked:
+            return
+        self._layout_attempts += 1
+        self._calibrate_layout(raw)
+
     def _process_frame(self, raw: np.ndarray, left: bool) -> np.ndarray:
+        self._maybe_calibrate(raw)
         h, w = raw.shape[:2]
         eye_w = self.eye_w
-        if w >= 2 * eye_w:
+        x0 = self._eye_x0 if left else self._eye_x1
+        W = self._eye_crop_w
+        if x0 + W <= w:
+            side = raw[:, x0:x0 + W]
+        elif w >= 2 * eye_w:
             x0 = 0 if left else eye_w
             side = raw[:, x0:x0 + eye_w]
         else:

@@ -94,6 +94,10 @@ def theta_from_commands(commands: Dict[int, float], left: bool = False) -> Tuple
         cmd = commands.get(ch[name], rest[ch[name]]) - rest[ch[name]]
         if name == "elbow_x":
             cmd = -cmd
+        elif name == "shoulder_z" and not left:
+            # Правая поворотная физически зеркальна модели (команда убывает
+            # с ростом theta) — см. to_servo_commands.
+            cmd = -cmd
         theta.append(float(cmd))
     return tuple(theta)
 
@@ -106,6 +110,12 @@ def to_servo_commands(theta: Sequence[float], left: bool = False) -> Dict[int, i
         ch = _channels(left)[name]
         lo, hi = ranges[ch]
         if name == "elbow_x":
+            command = rest[ch] - float(value)
+        elif name == "shoulder_z" and not left:
+            # Правая поворотная (ch4) физически зеркальна: theta растёт ->
+            # команда убывает. Иначе боковые цели уходили бы во внутреннюю
+            # сторону (инверсия «только в IK»). Rest не меняется: theta=0 ->
+            # cmd=rest. Парится с theta_from_commands и armFk в webxr.html.
             command = rest[ch] - float(value)
         else:
             command = rest[ch] + float(value)

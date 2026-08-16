@@ -128,9 +128,10 @@ armsGroup.add(torso);
 
 function armFk(side, angles) {
     const ch = ik.channels[side];
-    const t1 = ((angles[ch.shoulder_z] ?? rest[ch.shoulder_z]) - rest[ch.shoulder_z]) * Math.PI / 180;
-    const t2 = ((angles[ch.shoulder_x] ?? rest[ch.shoulder_x]) - rest[ch.shoulder_x]) * Math.PI / 180;
+    let t1 = ((angles[ch.shoulder_z] ?? rest[ch.shoulder_z]) - rest[ch.shoulder_z]) * Math.PI / 180;
+    let t2 = ((angles[ch.shoulder_x] ?? rest[ch.shoulder_x]) - rest[ch.shoulder_x]) * Math.PI / 180;
     const t3 = (rest[ch.elbow_x] - (angles[ch.elbow_x] ?? rest[ch.elbow_x])) * Math.PI / 180;
+    if (side === 'right') t1 = -t1; // правая поворотная зеркальна (см. arm_kinematics)
     const c1 = Math.cos(t1), s1 = Math.sin(t1), c2 = Math.cos(t2), s2 = Math.sin(t2);
     const c23 = Math.cos(t2 + t3), s23 = Math.sin(t2 + t3);
     const sign = side === 'left' ? -1 : 1;
