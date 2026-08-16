@@ -28,7 +28,7 @@
 <div class="hud">
     <div class="chip" id="xr-status">WebXR: <b>инициализация…</b></div>
     <div class="chip" id="teleop-status">—</div>
-    <div class="chip" id="hint">Шлем — голова (±45°). Контроллеры — цели рук. Курок — схват (зажат = 180). Кнопка A/X — FREEZE.</div>
+    <div class="chip" id="hint">Шлем — голова (±45°). Контроллеры — цели рук. Курок — схват (зажат = 180). Тап A/X — FREEZE, удержание A/X — ресет центра/направления.</div>
 </div>
 <div class="freeze-badge" id="freezeBadge">⏸ FREEZE</div>
 <button id="enterBtn" class="hidden">Войти в VR</button>
@@ -49,9 +49,10 @@ const TILT_MIN = 45, TILT_MAX = 135;
 const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
 const GRIP_CLOSE = 180, GRIP_OPEN = 0;
 const ROBOT_Y_OFFSET = -0.15;  // м: торс ниже шлема на 15 см
-const SEND_HZ = 8;
-const ANGLE_DEADBAND = 1.0;   // градусы
-const TARGET_DEADBAND = 20;   // мм
+const SEND_HZ = 20;
+const ANGLE_DEADBAND = 0.3;   // градусы
+const TARGET_DEADBAND = 8;    // мм
+const RECENTER_HOLD_MS = 400; // мс: удержание A/X дольше этого — ресет центра/направления
 // ================================================
 
 const ik = serverData.ik_config;
@@ -75,6 +76,11 @@ scene.add(new THREE.DirectionalLight(0xffffff, 0.8));
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 100);
 
 // ==== Фон: стерео-камера (левый глаз -> левая камера, правый -> правая) ====
+// Камера — 120° фишай (экв. проекция r = f*theta). Показываем кадр через ту же
+// проекцию, чтобы угловая карта совпадала с реальностью: объект на краю FOV
+// стоит ровно там, где виден в фиде.
+const BG_DIST = 6;                  // м: плоскость в 6 метрах перед глазом
+const CAM_FOV_H_DEG = 120;          // горизонтальный FOV камеры, ° (cam_params.json)
 const camImg = new Image();
 const camTex = new THREE.Texture(camImg);
 // Без colorSpace: кадр уже sRGB, а ShaderMaterial не делает
@@ -83,7 +89,10 @@ const bgMat = new THREE.ShaderMaterial({
     uniforms: {
         uTex: { value: camTex },
         uEye: { value: 0 }, // 0 = левый view, 1 = правый
-        uRange: { value: new THREE.Vector4(0, 0.5, 0.5, 1.0) }
+        uFrame: { value: new THREE.Vector2(2560, 720) },   // размер кадра, px
+        uRegXY: { value: new THREE.Vector2(0, 1280) },     // левая/правая граница глаза, px
+        uRegWH: { value: new THREE.Vector2(1280, 720) },   // размер региона глаза, px
+        uFovHalf: { value: new THREE.Vector2(Math.tan(60 * Math.PI / 180), Math.tan(33.75 * Math.PI / 180)) }
     },
     side: THREE.DoubleSide,
     vertexShader: `
@@ -95,19 +104,28 @@ const bgMat = new THREE.ShaderMaterial({
     fragmentShader: `
         uniform sampler2D uTex;
         uniform float uEye;
-        uniform vec4 uRange;
+        uniform vec2 uFrame;
+        uniform vec2 uRegXY;
+        uniform vec2 uRegWH;
+        uniform vec2 uFovHalf; // tan(FOV_h/2), tan(верт. полуугол изображения)
         varying vec2 vUv;
         void main() {
-            vec2 sel = uEye > 0.5 ? uRange.zw : uRange.xy;
-            vec2 uv = vec2(mix(sel.x, sel.y, vUv.x), vUv.y);
+            vec2 t = (vUv - 0.5) * 2.0 * uFovHalf;   // тангенсы смещения от оптической оси
+            float theta = atan(length(t));           // угол от оси, рад
+            float phi = atan(t.y, t.x);
+            float thetaMax = atan(uFovHalf.x);       // FOV_h/2, рад
+            // Эквидистантная фишай-проекция: r_px = f_eq * theta,
+            // f_eq = (w/2) / (FOV_h/2).
+            float f_eq = (uRegWH.x * 0.5) / thetaMax;
+            float r_px = f_eq * theta;
+            vec2 off = r_px * vec2(cos(phi), sin(phi));
+            vec2 center = vec2((uEye > 0.5 ? uRegXY.y : uRegXY.x) + uRegWH.x * 0.5, uRegWH.y * 0.5);
+            vec2 uv = clamp((center + off) / uFrame, 0.0, 1.0);
             gl_FragColor = texture2D(uTex, uv);
         }`
 });
-const bgPlane = new THREE.Mesh(
-    new THREE.PlaneGeometry(8, 4.5),
-    bgMat
-);
-bgPlane.position.set(0, 0, -6);
+const bgPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), bgMat);
+bgPlane.position.set(0, 0, -BG_DIST);
 camera.add(bgPlane);
 scene.add(camera);
 
@@ -119,13 +137,24 @@ bgPlane.onBeforeRender = (r, s, cam) => {
     bgMat.uniforms.uEye.value = (vp && vp.x > 0) ? 1.0 : 0.0;
 };
 
-// Раскладка глаз (результат автокалибровки камеры) — UV-регионы для выборки.
+// Размер плоскости по угловым размерам проекции (d = BG_DIST).
+function updatePlaneGeometry() {
+    const t = bgMat.uniforms.uFovHalf.value;
+    bgPlane.scale.set(2 * BG_DIST * t.x, 2 * BG_DIST * t.y, 1);
+}
+updatePlaneGeometry();
+
+// Раскладка глаз и FOV камеры — из layout (UV-регионы для выборки).
 function applyCameraLayout(L) {
     if (L && L.calibrated && L.frame_w > 0 && L.w > 0) {
-        bgMat.uniforms.uRange.value.set(
-            L.x0 / L.frame_w, (L.x0 + L.w) / L.frame_w,
-            L.x1 / L.frame_w, (L.x1 + L.w) / L.frame_w
-        );
+        const fovDeg = L.fov_h || CAM_FOV_H_DEG;
+        const thetaMax = fovDeg * Math.PI / 180 / 2;
+        const thetaV = thetaMax * (L.frame_h / L.w); // экв. вертикальный полуугол
+        bgMat.uniforms.uRegXY.value.set(L.x0, L.x1);
+        bgMat.uniforms.uRegWH.value.set(L.w, L.frame_h);
+        bgMat.uniforms.uFrame.value.set(L.frame_w, L.frame_h);
+        bgMat.uniforms.uFovHalf.value.set(Math.tan(thetaMax), Math.tan(thetaV));
+        updatePlaneGeometry();
     }
 }
 (function () {
@@ -307,6 +336,12 @@ function frame(time, xrFrame) {
         robotBaseYaw = euler.y;
         robotAnchorCaptured = true;
     }
+    // Ресет удержанием A/X: разворачиваем базу туда, куда смотришь
+    // (центр якоря и так следует за головой каждый кадр).
+    if (recenterActive) {
+        robotBaseYaw = euler.y;
+        robotAnchorCaptured = true;
+    }
     robotAnchorPos.set(tmpV1.x, tmpV1.y + ROBOT_Y_OFFSET, tmpV1.z);
 
     robotAnchorQuat.setFromEuler(robotBaseEuler.set(0, robotBaseYaw, 0));
@@ -417,7 +452,9 @@ function drawArms(pose) {
     }
 }
 
-// ==== Freeze: кнопка A (правая) / X (левая) ====
+// ==== Freeze / ресет: кнопка A (правая) / X (левая) ====
+// Тап (< RECENTER_HOLD_MS) — тоггл FREEZE. Удержание дольше порога — ресет
+// центра и направления: робот разворачивается туда, куда смотришь.
 function freezeButtonIndex(src) {
     // 0=стик, 1=триггер, 2=squeeze. Дальше профили расходятся:
     // Oculus/Meta Touch: 3 = A/X, 4 = B/Y, 5 = нажатие стика.
@@ -425,6 +462,10 @@ function freezeButtonIndex(src) {
     const prof = (src.profiles || []).join(' ');
     return /generic/.test(prof) ? 4 : 3;
 }
+const prevFreezeState = new Set();
+const holdState = new Map();   // src -> {start, long}
+let recenterHeld = false;      // A/X зажата
+let recenterActive = false;    // удержание перевалило порог — идёт ресет
 function pollFreeze() {
     if (!renderer.xr.isPresenting) return;
     const session = renderer.xr.getSession();
@@ -434,6 +475,7 @@ function pollFreeze() {
     // XR-геймпады лежат на тех же индексах, что inputSources.
     const gps = (navigator.getGamepads && navigator.getGamepads()) || [];
     const sources = session.inputSources;
+    recenterHeld = false;
     for (let i = 0; i < sources.length; i++) {
         const src = sources[i];
         let gp = src.gamepad;
@@ -445,13 +487,28 @@ function pollFreeze() {
         const b = gp.buttons[freezeButtonIndex(src)];
         if (!b) continue;
         const pressed = !!b.pressed;
-        if (pressed && !prevFreezeState.has(src)) {
-            onFreezeButton(src.handedness, true);
+        const now = performance.now();
+        if (!pressed) {
+            const st = holdState.get(src);
+            if (st) {
+                holdState.delete(src);
+                if (!st.long) onFreezeButton(src.handedness, true); // тап -> тоггл freeze
+            }
+            prevFreezeState.delete(src);
+            continue;
         }
-        if (pressed) prevFreezeState.add(src); else prevFreezeState.delete(src);
+        prevFreezeState.add(src);
+        recenterHeld = true;
+        let st = holdState.get(src);
+        if (!st) {
+            holdState.set(src, { start: now, long: false });
+        } else if (!st.long && now - st.start >= RECENTER_HOLD_MS) {
+            st.long = true;
+            recenterActive = true;
+        }
     }
+    if (!recenterHeld) recenterActive = false;
 }
-const prevFreezeState = new Set();
 
 // ==== Вход в WebXR ====
 const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
@@ -489,6 +546,9 @@ async function enterVR() {
         robotAnchorCaptured = false;
         freezeBadge.classList.remove('show');
         prevFreezeState.clear();
+        holdState.clear();
+        recenterHeld = false;
+        recenterActive = false;
         enterBtn.classList.add('hidden');
         xrStatus.innerHTML = 'WebXR: <b class="ok">активна</b>';
         setStatus('телеоп запущен');

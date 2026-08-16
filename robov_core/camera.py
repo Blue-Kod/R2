@@ -47,6 +47,7 @@ class StereoCamera:
         self.capture_height: int = capture_height
         self.backend: str = backend
         self.fps_target: int = fps_target
+        self.cam_fov_h: float = 120.0  # горизонтальный FOV камеры, ° (фишай)
         self.actual_width: int = 0
         self.actual_height: int = 0
         self._eye_x0: int = 0
@@ -81,6 +82,12 @@ class StereoCamera:
             if isinstance(im_size, (list, tuple)) and len(im_size) >= 2:
                 self.eye_w = int(im_size[0])
                 self.eye_h = int(im_size[1])
+            fov_h = params.get("cam_fov_h")
+            try:
+                if fov_h is not None:
+                    self.cam_fov_h = float(fov_h)
+            except (TypeError, ValueError):
+                pass
             el = params.get("eye_layout")
             if isinstance(el, dict):
                 try:
@@ -465,6 +472,7 @@ class StereoCamera:
                 "w": W,
                 "frame_w": self.actual_width,
                 "frame_h": self.actual_height,
+                "fov_h": self.cam_fov_h,
                 "calibrated": True,
             }
 

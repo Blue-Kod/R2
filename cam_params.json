@@ -81,5 +81,6 @@
         1280,
         720
     ],
-    "is_fisheye": true
+    "is_fisheye": true,
+    "cam_fov_h": 120
 }
