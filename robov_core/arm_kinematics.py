@@ -73,6 +73,19 @@ TABLE_START_POSE: Dict[int, int] = {
     8: 90, 9: 90,
 }
 
+# Зажим целей на реальную поверхность досягаемости (table mode). Граница
+# досягаемости предрассчитывается численно из грубой сетки FK с учётом
+# лимитов суставов (вырез shoulder_z), коллизий (туловище/голова) и стола:
+# таблица «макс. вылет по высоте Y и азимуту φ». Цель вне поверхности
+# зажимается на неё с сохранением высоты Y — рука тянется максимально и
+# встаёт ровно на краю (err≈0).
+CLAMP_MARGIN_MM = 5.0
+REACH_Y_STEP = 25.0
+REACH_Y_LO = -550.0
+REACH_Y_HI = 550.0
+REACH_PHI_STEP = 10.0
+REACH_PHI_N = 360 // 10
+
 
 def _side(left: bool) -> str:
     return "left" if left else "right"
@@ -213,6 +226,99 @@ def _combined_clearance(points: np.ndarray, margin: float = 0.0) -> np.ndarray:
                       _table_clearance(points, margin))
 
 
+_REACH_TABLE: Dict[bool, Optional[np.ndarray]] = {False: None, True: None}
+
+
+def _build_reach_table(left: bool) -> np.ndarray:
+    """Макс. горизонтальный вылет (от плеча) по бинам (высота Y × азимут φ).
+
+    Из грубой сетки FK берутся точки с положительным зазором (коллизии
+    туловища/головы/стола). Каждый бин хранит максимальный радиус; пустые
+    бины (на этой высоте/азимуте точек нет) — -1.0.
+    """
+    ranges = _ranges(left, *GRID_STEPS[0])
+    positions = _fk_grid_positions(*ranges, left)
+    clearance = _combined_clearance(positions, IK_CLEARANCE_MARGIN)
+    pts = positions[clearance > 0.0]
+    shoulder = base(left)
+    d = pts - shoulder
+    radii = np.hypot(d[..., 0], d[..., 2])
+    phi = np.degrees(np.arctan2(d[..., 0], d[..., 2])) % 360.0
+    y = d[..., 1]
+    n_y = int(round((REACH_Y_HI - REACH_Y_LO) / REACH_Y_STEP)) + 1
+    table = np.full((n_y, REACH_PHI_N), -1.0)
+    yi = np.floor((y - REACH_Y_LO) / REACH_Y_STEP).astype(int)
+    pi = np.floor(phi / REACH_PHI_STEP).astype(int) % REACH_PHI_N
+    valid = (yi >= 0) & (yi < n_y)
+    np.maximum.at(table, (yi[valid], pi[valid]), radii[valid])
+    return table
+
+
+def _reach_table(left: bool) -> np.ndarray:
+    table = _REACH_TABLE[left]
+    if table is None:
+        table = _build_reach_table(left)
+        _REACH_TABLE[left] = table
+    return table
+
+
+def _reach_radius(y: float, phi_deg: float, left: bool) -> float:
+    """Макс. вылет (мм) на высоте y и азимуте phi (0=вперёд, 90=вправо).
+
+    Билинейная интерполяция по таблице (азимут с заворотом 360°). Если в
+    окрестности нет ни одной достижимой точки — -1.0 (на такой высоте/азимуте
+    зоны нет, зажим не применяется).
+    """
+    if not (REACH_Y_LO <= y <= REACH_Y_HI):
+        return -1.0
+    table = _reach_table(left)
+    n_y = table.shape[0]
+    yf = (y - REACH_Y_LO) / REACH_Y_STEP
+    i0 = int(math.floor(yf))
+    if i0 >= n_y - 1:
+        i0 = n_y - 2
+    fy = min(1.0, yf - i0)
+    pf = (phi_deg % 360.0) / REACH_PHI_STEP
+    j0 = int(math.floor(pf)) % REACH_PHI_N
+    fj = pf - math.floor(pf)
+    j1 = (j0 + 1) % REACH_PHI_N
+    corners = (table[i0, j0], table[i0, j1],
+               table[i0 + 1, j0], table[i0 + 1, j1])
+    if any(c < 0.0 for c in corners):
+        vals = [c for c in corners if c >= 0.0]
+        return max(vals) if vals else -1.0
+    v0 = corners[0] * (1.0 - fj) + corners[1] * fj
+    v1 = corners[2] * (1.0 - fj) + corners[3] * fj
+    return v0 * (1.0 - fy) + v1 * fy
+
+
+def clamp_target_to_reachable(x: float, y: float, z: float,
+                              left: bool = False
+                              ) -> Tuple[float, float, float, float]:
+    """Зажать цель на поверхность досягаемости, сохранив высоту Y.
+
+    Возвращает (cx, cy, cz, gap_mm): зажатую точку и недолёт. Вне table mode
+    или при недостижимой высоте цель не меняется (gap=0) — поведение прежнее.
+    """
+    if not TABLE_ENABLED:
+        return float(x), float(y), float(z), 0.0
+    shoulder = base(left)
+    dx, dz = x - shoulder[0], z - shoulder[2]
+    d = math.hypot(dx, dz)
+    if d < 1e-6:
+        return float(x), float(y), float(z), 0.0
+    phi = math.degrees(math.atan2(dx, dz)) % 360.0
+    r = _reach_radius(float(y), phi, left)
+    if r < 0.0:
+        return float(x), float(y), float(z), 0.0
+    r -= CLAMP_MARGIN_MM
+    if r <= 0.0 or d <= r:
+        return float(x), float(y), float(z), 0.0
+    scale = r / d
+    return (float(shoulder[0] + dx * scale), float(y),
+            float(shoulder[2] + dz * scale), d - r)
+
+
 def target_in_zones(point: Sequence[float], margin: float = 0.0) -> bool:
     points = np.asarray(point, dtype=float)[None, :]
     return bool(float(np.min(_point_zone_clearance(points, margin))) <= 0.0)
@@ -349,10 +455,16 @@ def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
 
 
 def _result(theta: Optional[Tuple[float, float, float]], status: str,
-            message: str, left: bool, err_mm: Optional[float] = None) -> dict:
+            message: str, left: bool, err_mm: Optional[float] = None,
+            wanted: Optional[Sequence[float]] = None,
+            clamped: Optional[Sequence[float]] = None,
+            reach_gap: float = 0.0) -> dict:
     result = {"theta": theta, "status": status, "message": message,
               "err_mm": err_mm, "left": bool(left), "servo": None,
-              "ee": None, "ok": False}
+              "ee": None, "ok": False,
+              "wanted": [float(v) for v in wanted] if wanted is not None else None,
+              "clamped": [float(v) for v in clamped] if clamped is not None else None,
+              "reach_gap": float(reach_gap)}
     if theta is not None:
         result["servo"] = to_servo_commands(theta, left)
         result["ee"] = [float(v) for v in fk(theta, left)["EE"]]
@@ -363,9 +475,16 @@ def _result(theta: Optional[Tuple[float, float, float]], status: str,
 def ik_solve(x: float, y: float, z: float, left: bool = False,
              start: Optional[Sequence[float]] = None) -> dict:
     """Find a collision-free arm pose nearest to a camera-frame target."""
-    target = np.array([float(x), float(y), float(z)], dtype=float)
-    if target_in_zones(target):
-        return _result(None, "blocked", "Цель внутри туловища или головы", left)
+    wanted = np.array([float(x), float(y), float(z)], dtype=float)
+    if target_in_zones(wanted):
+        return _result(None, "blocked", "Цель внутри туловища или головы", left,
+                       wanted=[float(v) for v in wanted],
+                       clamped=[float(v) for v in wanted])
+    target = wanted
+    reach_gap = 0.0
+    if TABLE_ENABLED:
+        cx, cy, cz, reach_gap = clamp_target_to_reachable(*wanted, left)
+        target = np.array([cx, cy, cz])
 
     coarse = _ranges(left, *GRID_STEPS[0])
     positions = _fk_grid_positions(*coarse, left)
@@ -410,7 +529,8 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     if not results:
         return _result(None, "blocked",
                        "Цель достижима только с касанием туловища или головы",
-                       left)
+                       left, wanted=[float(v) for v in wanted],
+                       clamped=[float(v) for v in target], reach_gap=reach_gap)
 
     # Предпочтение «локоть вверх» ограничено сверху (ELBOW_UP_PENALTY ~ 1 см):
     # оно лишь «добивает» вывернутую позу среди равноточных решений и не
@@ -455,15 +575,31 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         best = min(pool, key=lambda item: score(*item))
         best_error, _, best_theta = best
 
-    if best_error <= IK_ERR_OK:
+    if reach_gap > 0.0:
+        # Цель вне поверхности досягаемости: кисть встаёт на край (ближайшая
+        # достижимая точка к направлению на контроллер). clamped — фактическая
+        # точка кисти, err=0, а честный недолёт — расстояние «хочу»→«факт».
         status = "ok"
-    elif best_error <= IK_TOLERANCE_MM:
-        status = "limits"
+        clamped = [float(v) for v in fk(best_theta, left)["EE"]]
+        err = 0.0
+        gap = float(np.linalg.norm(wanted - np.asarray(clamped)))
     else:
-        status = "unreachable"
-    return _result(best_theta, status,
-                   f"FK-поиск: |ee−цель|={best_error:.1f} мм",
-                   left, best_error)
+        clamped = [float(v) for v in target]
+        err = best_error
+        gap = 0.0
+        if best_error <= IK_ERR_OK:
+            status = "ok"
+        elif best_error <= IK_TOLERANCE_MM:
+            status = "limits"
+        else:
+            status = "unreachable"
+    message = f"FK-поиск: |ee−цель|={err:.1f} мм"
+    if gap > 0.0:
+        message += (f"; цель за пределами досягаемости, рука на краю "
+                    f"поверхности, недолёт {gap:.0f} мм")
+    return _result(best_theta, status, message, left, err,
+                   wanted=[float(v) for v in wanted], clamped=clamped,
+                   reach_gap=gap)
 
 
 def browser_config() -> dict:
@@ -545,4 +681,36 @@ if __name__ == "__main__":
             assert _elbow_above_line(result["theta"], is_left) <= 0.0
         far = ik_solve(320.0, -200.0, 280.0)
         assert far["ok"] and far["theta"][0] <= 35.0, far
+
+    # Форма поверхности досягаемости: вперёд ~550, вырез прямо вбок (азимут
+    # 90°) — малый вылет (shoulder_z правой не крутится за 35°).
+    r_fwd = _reach_radius(-200.0, 0.0, False)
+    assert r_fwd > 500.0, r_fwd
+    r_side = _reach_radius(-200.0, 90.0, False)
+    assert 0.0 < r_side < 250.0, r_side
+
+    # Зажим на поверхность (table mode). Дальняя цель вперёд: рука на краю
+    # поверхности (~550), высота Y контроллера сохраняется, недолёт>0, err≈0.
+    far_forward = ik_solve(0.0, -150.0, 800.0)
+    assert far_forward["ok"], far_forward
+    assert far_forward["reach_gap"] > 100.0, far_forward
+    assert far_forward["err_mm"] <= 1.0, far_forward
+    ee = far_forward["ee"]
+    assert abs(ee[1] + 150.0) < 25.0, ee
+    assert abs(math.hypot(ee[0] - 115.0, ee[2]) - 550.0) < 40.0, ee
+    # Внутри зоны — зажима нет.
+    inside = ik_solve(0.0, -250.0, 300.0)
+    assert inside["reach_gap"] == 0.0, inside
+    # Перекрёстная дальняя: зажим на край, высота сохраняется, err≈0.
+    cross = ik_solve(-250.0, -150.0, 700.0)
+    assert cross["ok"] and cross["reach_gap"] > 0.0, cross
+    assert cross["err_mm"] <= 1.0, cross
+    assert abs(cross["ee"][1] + 150.0) < 25.0, cross
+    # Вырез (азимут 90°): цель прямо вбок — рука тянется вдоль выреза, err≈0.
+    wedge = ik_solve(800.0, -200.0, 0.0)
+    assert wedge["ok"] and wedge["reach_gap"] > 200.0, wedge
+    assert abs(wedge["ee"][1] + 200.0) < 25.0, wedge
+    # Ниже стола (внутри зоны стола): поведение прежнее — зажим не мешает.
+    below = ik_solve(200.0, -600.0, 400.0)
+    assert below["reach_gap"] == 0.0, below
     print("arm_kinematics: PASS")
