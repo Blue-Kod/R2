@@ -315,7 +315,7 @@ for (let i=0; i<=9; i++) {
 
 // ===================== IK 3D VIEW =====================
 const ikConfig = serverData.ik_config;
-const PAN_MIRROR_LO = 90.0, PAN_MIRROR_HI = 200.0;
+const PAN_MIRROR_LO = 90.0;
 let ikAngles = {...(serverData.servo_angles || {})};
 let ikTarget = null;
 const ikView = {az:30, elev:22, dist:1500, center:[0,0,0], drag:null};
@@ -334,8 +334,8 @@ function ikFk(side) {
     // shoulder_z: правая физически зеркальна модели (см. arm_kinematics.py).
     const cz = ikAngles[ch.shoulder_z] ?? rest[ch.shoulder_z];
     const t1 = (right ? (rest[ch.shoulder_z] - cz) : (cz - rest[ch.shoulder_z])) * Math.PI / 180;
-    // Панорама в верхней полусфере (|theta1| 90..200) зеркальна модели.
-    const panMirror = PAN_MIRROR_LO <= Math.abs(t1 * 180 / Math.PI) && Math.abs(t1 * 180 / Math.PI) <= PAN_MIRROR_HI;
+    // Панорама зеркальна во всей верхней полусфере (|theta1| > 90°).
+    const panMirror = Math.abs(t1 * 180 / Math.PI) > PAN_MIRROR_LO;
     const cx = ikAngles[ch.shoulder_x] ?? rest[ch.shoulder_x];
     const t2 = (panMirror ? (rest[ch.shoulder_x] - cx) : (cx - rest[ch.shoulder_x])) * Math.PI / 180;
     const t3 = (rest[ch.elbow_x] - (ikAngles[ch.elbow_x] ?? rest[ch.elbow_x])) * Math.PI / 180;
