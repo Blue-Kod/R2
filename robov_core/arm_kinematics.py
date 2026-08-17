@@ -47,20 +47,21 @@ W_NAT = 0.3
 
 # Режим стола: перед роботом стол (Y от TABLE_TOP_Y вниз, X ±TABLE_X_HALF,
 # Z от TABLE_Z0 до TABLE_Z1). В этом режиме рука работает как манипулятор,
-# стоящий на столе: shoulder_z жёстко ограничен веткой «локоть вверх»
-# (ch4/ch5 ∈ [TABLE_SHOULDER_MIN, 270]), траектории руки проверяются на
-# пересечение со столом, а цель ниже стола не блокируется — рука ложится
-# на стол. По умолчанию включён.
+# стоящий на столе: траектории руки проверяются на пересечение со столом,
+# цель ниже стола не блокируется — рука ложится на стол, а «локоть вверх»
+# поощряется мягким штрафом (ELBOW_UP_PENALTY), а не жёстким клипом.
+# По умолчанию включён.
 TABLE_ENABLED = True
 TABLE_TOP_Y = -300.0
 TABLE_X_HALF = 1000.0
 TABLE_Z0 = 0.0
 TABLE_Z1 = 1500.0
-# Минимальная команда shoulder_z (ch4 прав. / ch5 лев.) в режиме стола.
-TABLE_SHOULDER_MIN = 145.0
-# Штраф за локоть ниже линии плечо→кисть в режиме стола: больше cap
-# углового штрафа (100), поэтому предпочтение позы работает.
-ELBOW_UP_PENALTY = 200.0
+# Мягкое предпочтение «локоть вверх» в режиме стола: штраф (мм) к ошибке
+# за локоть ниже линии плечо→кисть. Это ТАЙБРЕЙКЕР среди близких по
+# точности решений, а не жёсткое ограничение: жёсткий клип shoulder_z в
+# ветку «локоть вверх» схлопывал рабочую зону IK (рука не дотягивалась
+# до дальних/боковых целей и «уезжала не туда»).
+ELBOW_UP_PENALTY = 10.0
 # Стартовая поза в режиме стола: shoulder_z (ch4/ch5) в ветке «локоть
 # вверх» на 235°, локти (ch6/ch7) сложены полностью (theta3=180 —
 # предплечье сложено вдоль плеча). Pan (ch1/ch2) остаётся в середине
@@ -313,36 +314,15 @@ def _fk_grid_elbows(t1: np.ndarray, t2: np.ndarray, left: bool) -> np.ndarray:
     return np.stack([x, y, z], axis=-1)
 
 
-def _table_shoulder_limits(left: bool) -> Optional[Tuple[float, float]]:
-    """IK-диапазон shoulder_z в режиме стола: ветка «локоть вверх».
-
-    Команда shoulder_z (ch4 прав. / ch5 лев.) ∈ [TABLE_SHOULDER_MIN, 270].
-    Правая: cmd = rest - theta1 (rest=45) -> theta1 ∈ [-225, 45-145].
-    Левая:  cmd = rest + theta1 (rest=45) -> theta1 ∈ [145-45, 225].
-    """
-    if not TABLE_ENABLED:
-        return None
-    if left:
-        return (TABLE_SHOULDER_MIN - 45.0, 270.0 - 45.0)
-    return (45.0 - 270.0, 45.0 - TABLE_SHOULDER_MIN)
-
-
 def _ranges(left: bool, step: float, window: Optional[float],
             center: Optional[Sequence[float]] = None) -> Tuple[np.ndarray, ...]:
     out = []
     model_limits = limits(left, ik_only=True)
-    table_lo_hi = _table_shoulder_limits(left)
     for name, current in zip(JOINT_NAMES, center or (None,) * 3):
         lo, hi = model_limits[name]
-        if name == "shoulder_z" and table_lo_hi is not None:
-            lo, hi = max(lo, table_lo_hi[0]), min(hi, table_lo_hi[1])
         if window is not None and current is not None:
             lo, hi = max(lo, current - window), min(hi, current + window)
         grid = np.arange(lo, hi + step * 0.5, step)
-        if table_lo_hi is not None and name == "shoulder_z":
-            # Строгий предел ветки «локоть вверх»: arange с +step/2 мог бы
-            # дать точку за hi (напр. ch4=142 при min 145).
-            grid = grid[(grid >= lo - 1e-9) & (grid <= hi + 1e-9)]
         if grid.size == 0:
             grid = np.array([lo], dtype=float)
         out.append(grid)
@@ -427,28 +407,19 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         if arm_clearance(current, left, IK_CLEARANCE_MARGIN) >= 0.0:
             results.append((error, _natural_penalty(current, left), current))
 
-    if TABLE_ENABLED:
-        # Жёсткое правило режима стола: shoulder_z-команда (ch4 прав./
-        # ch5 лев.) обязана лежать в ветке «локоть вверх». Защитный фильтр
-        # на всякий случай: все результаты и так из клипованных сеток.
-        shoulder_lo, shoulder_hi = _table_shoulder_limits(left)
-        results = [
-            item for item in results
-            if shoulder_lo - 1e-6 <= item[2][0] <= shoulder_hi + 1e-6
-        ]
-
     if not results:
         return _result(None, "blocked",
                        "Цель достижима только с касанием туловища или головы",
                        left)
 
-    # Natural-штраф ограничен сверху: он лишь «добивает» вывернутую позу
-    # среди равноточных решений, но не вытесняет точное решение в пользу
-    # недостижимой природной (край рабочей зоны).
+    # Предпочтение «локоть вверх» ограничено сверху (ELBOW_UP_PENALTY ~ 1 см):
+    # оно лишь «добивает» вывернутую позу среди равноточных решений и не
+    # вытесняет точное природное решение в пользу недостижимой ветки
+    # (иначе рука не дотягивалась до дальних целей).
     weights = (1.0, 0.5, 0.25)
     angle_weight = 0.2
     max_angle_penalty = 100.0
-    natural_cap = ELBOW_UP_PENALTY if TABLE_ENABLED else IK_TOLERANCE_MM
+    natural_cap = ELBOW_UP_PENALTY
 
     def score(error, natural, theta):
         total = error + min(natural, natural_cap)
@@ -490,11 +461,6 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         status = "limits"
     else:
         status = "unreachable"
-    if TABLE_ENABLED:
-        # Финальная страховка правила ch4/ch5 >= TABLE_SHOULDER_MIN.
-        shoulder_lo, shoulder_hi = _table_shoulder_limits(left)
-        best_theta = (max(shoulder_lo, min(shoulder_hi, best_theta[0])),
-                      best_theta[1], best_theta[2])
     return _result(best_theta, status,
                    f"FK-поиск: |ee−цель|={best_error:.1f} мм",
                    left, best_error)
@@ -547,8 +513,9 @@ if __name__ == "__main__":
         theta = theta_from_commands(start, is_left)
         assert theta[2] >= 179.0, theta  # theta3=180 — локти полностью сложены
 
-    # Поза манипулятора на столе: shoulder_z-команда в [145, 270],
-    # локоть выше линии плечо→кисть.
+    # Поза манипулятора на столе (мягкий режим): цель над столом и в
+    # пределах досягаемости ветки «локоть вверх» — решение точное и
+    # shoulder_z-команда в ветке; локоть выше линии плечо→кисть.
     for is_left in (False, True):
         sx = -1 if is_left else 1
         result = ik_solve(sx * 150.0, -250.0, 300.0, left=is_left)
@@ -556,12 +523,16 @@ if __name__ == "__main__":
         ch = result["servo"][5 if is_left else 4]
         assert 145.0 <= ch <= 270.0, (ch, result)
         assert _elbow_above_line(result["theta"], is_left) > 0.0
-    # Край рабочей зоны правой и цель, раньше уводившая за физический
-    # предел поворотной, — решения обязаны существовать в ветке стола.
+    # Край рабочей зоны правой — решение обязано существовать.
     edge = ik_solve(170.0, -250.0, 250.0)
     assert edge["ok"], edge
     far = ik_solve(320.0, -200.0, 280.0)
-    assert far["ok"] and -225.0 <= far["theta"][0] <= -100.0, far
+    assert far["ok"], far
+    # Мягкий режим не должен сломать досягаемость: дальняя боковая цель
+    # (которую жёсткая ветка «локоть вверх» не доставала) решается точно,
+    # даже если для этого нужна природная поза.
+    hard_fail = ik_solve(150.0, -50.0, 500.0)
+    assert hard_fail["ok"] and (hard_fail["err_mm"] or 0) <= 1.0, hard_fail
 
     # Регрессия природной ветки (локоть вниз) при выключенном столе.
     with mock.patch.object(sys.modules[__name__], "TABLE_ENABLED", False):
