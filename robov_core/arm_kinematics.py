@@ -253,9 +253,15 @@ def _build_reach_table(left: bool) -> np.ndarray:
 
     Из грубой сетки FK берутся точки с положительным зазором (коллизии
     туловища/головы/стола). Каждый бин хранит максимальный радиус; пустые
-    бины (на этой высоте/азимуте точек нет) — -1.0.
+    бины (на этой высоте/азимуте точек нет) — -1.0. Сетка ограничена
+    безопасным диапазоном shoulder_z: от проверенного кран-верха (|theta1|≤205,
+    ch4/ch5≤250) через природную зону — сломанная зона (ch4/ch5>250) в
+    поверхность не попадает.
     """
-    ranges = _ranges(left, *GRID_STEPS[0])
+    lo_c, hi_c = _crane_shoulder_z(left)
+    lo_m, hi_m = limits(left, ik_only=True)["shoulder_z"]
+    safe = (lo_c, hi_m) if not left else (lo_m, hi_c)
+    ranges = _ranges(left, *GRID_STEPS[0], shoulder=safe)
     positions = _fk_grid_positions(*ranges, left)
     clearance = _combined_clearance(positions, IK_CLEARANCE_MARGIN)
     pts = positions[clearance > 0.0]
@@ -447,10 +453,13 @@ def _is_over_table(point: Sequence[float]) -> bool:
 
 
 def _crane_shoulder_z(left: bool) -> Tuple[float, float]:
-    """Окно shoulder_z для кран-ветки: рука сверху (ch4/ch5≈195..270),
+    """Окно shoulder_z для кран-ветки: рука сверху (ch4/ch5≈195..250),
     локти в лимитах (theta3 ≥ 0). Правая theta1<0, левая зеркально theta1>0.
+    Верхний предел ограничен физически проверенной зоной: за ch4/ch5≈250
+    (|theta1| > 205) серва срывается (рука уходит «мелко»/вбок), поэтому
+    кран-ветка не заходит за неё. Замерено: ch4=246/250 точно, ch4=264/266 — нет.
     """
-    return (-225.0, -150.0) if not left else (150.0, 225.0)
+    return (-205.0, -150.0) if not left else (150.0, 205.0)
 
 
 def _ranges(left: bool, step: float, window: Optional[float],
@@ -747,24 +756,34 @@ if __name__ == "__main__":
                 (left, c, theta, back)
 
     # Кран-ветка в режиме стола: цели над столом решаются чисто краном —
-    # рука сверху (ch4/ch5≈195..270), локти в лимитах (ch6/ch7 ≤ 180), спуск
+    # рука сверху (ch4/ch5≈195..250), локти в лимитах (ch6/ch7 ≤ 180), спуск
     # крутой (предплечье вниз >40°). Природная ветка над столом не
-    # используется вообще; бывшая регрессия «назад-вверх» отменена — поза
-    # (0,−200,400) теперь кран (ch4≈255/ch1≈229) по явному решению.
+    # используется вообще; кран-окно ограничено физически проверенной зоной
+    # ch4/ch5 ≤ 250 (|theta1| ≤ 205): за ней серва срывается (ch4=264/266
+    # дают руку «мелко»/вбок вместо модели), поэтому за-предельные цели
+    # блокируются, а не решаются «сломанной» позой.
     for is_left in (False, True):
         for target in ((0.0, -300.0, 400.0), (0.0, -260.0, 400.0),
-                       (0.0, -250.0, 300.0), (0.0, -200.0, 400.0),
+                       (0.0, -250.0, 300.0), (0.0, -280.0, 400.0),
                        (0.0, -300.0, 200.0)):
             result = ik_solve(*target, left=is_left)
             assert result["ok"], (is_left, result)
             assert (result["err_mm"] or 0) <= 1.0, (is_left, result)
             ch = result["servo"][5 if is_left else 4]
-            assert 195.0 <= ch <= 270.0, (ch, result)
+            assert 195.0 <= ch <= 250.0, (ch, result)
             assert result["servo"][7 if is_left else 6] <= 180.0, result
             pose = fk(result["theta"], is_left)
             fwd = pose["EE"] - pose["E"]
             ang = math.degrees(math.asin(fwd[1] / np.linalg.norm(fwd)))
             assert ang < -40.0, (ang, result)
+
+    # Правая рука для (0,−200,400) требует ch4≈255 (сломанная зона) и не имеет
+    # альтернативы → блокируется чисто. Левая находит «мелкий» кран (ch5=195,
+    # |theta1|=150, тоже в проверенной зоне) → решается с ch5 ≤ 250.
+    over = ik_solve(0.0, -200.0, 400.0, left=False)
+    assert not over["ok"], over
+    over = ik_solve(0.0, -200.0, 400.0, left=True)
+    assert over["ok"] and over["servo"][5] <= 250.0, over
 
     # Каждая рука краном берёт свою сторону стола; дальняя сторона
     # блокируется (чистый кран, без природной).
