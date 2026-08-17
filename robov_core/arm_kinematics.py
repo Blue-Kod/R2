@@ -85,6 +85,8 @@ TABLE_START_POSE: Dict[int, int] = {
 # зажимается на неё с сохранением высоты Y — рука тянется максимально и
 # встаёт ровно на краю (err≈0).
 CLAMP_MARGIN_MM = 5.0
+CLAMP_MIN_RADIUS = 300.0
+REACH_CLAMP_RETRIES = 6
 REACH_Y_STEP = 25.0
 REACH_Y_LO = -550.0
 REACH_Y_HI = 550.0
@@ -253,15 +255,12 @@ def _build_reach_table(left: bool) -> np.ndarray:
 
     Из грубой сетки FK берутся точки с положительным зазором (коллизии
     туловища/головы/стола). Каждый бин хранит максимальный радиус; пустые
-    бины (на этой высоте/азимуте точек нет) — -1.0. Сетка ограничена
-    безопасным диапазоном shoulder_z: от проверенного кран-верха (|theta1|≤205,
-    ch4/ch5≤250) через природную зону — сломанная зона (ch4/ch5>250) в
-    поверхность не попадает.
+    бины (на этой высоте/азимуте точек нет) — -1.0. Сетка ограничена окном
+    кран-ветки (|theta1| ≤ 205, ch4/ch5 ≤ 250) — сломанная зона (ch4/ch5>250)
+    и «природные» позы в поверхность не попадают: зажим сажает цель только
+    на позы, которые кран реально решит.
     """
-    lo_c, hi_c = _crane_shoulder_z(left)
-    lo_m, hi_m = limits(left, ik_only=True)["shoulder_z"]
-    safe = (lo_c, hi_m) if not left else (lo_m, hi_c)
-    ranges = _ranges(left, *GRID_STEPS[0], shoulder=safe)
+    ranges = _ranges(left, *GRID_STEPS[0], shoulder=_crane_shoulder_z(left))
     positions = _fk_grid_positions(*ranges, left)
     clearance = _combined_clearance(positions, IK_CLEARANCE_MARGIN)
     pts = positions[clearance > 0.0]
@@ -327,6 +326,10 @@ def clamp_target_to_reachable(x: float, y: float, z: float,
     """
     if not TABLE_ENABLED:
         return float(x), float(y), float(z), 0.0
+    # Зажим только для целей своей стороны (правая x≥0, левая x≤0): чужой
+    # борт блокируется, а не утаскивается на свою сторону поверхностью.
+    if (not left and x < 0.0) or (left and x > 0.0):
+        return float(x), float(y), float(z), 0.0
     shoulder = base(left)
     dx, dz = x - shoulder[0], z - shoulder[2]
     d = math.hypot(dx, dz)
@@ -337,7 +340,10 @@ def clamp_target_to_reachable(x: float, y: float, z: float,
     if r < 0.0:
         return float(x), float(y), float(z), 0.0
     r -= CLAMP_MARGIN_MM
-    if r <= 0.0 or d <= r:
+    # Зажим только там, где кран реально достаёт далеко (типичный вылет
+    # ~350..550 мм): высоко над столом/вплотную к роботу поверхность мелкая
+    # (r < 300), тянуть туда руку незачем — такие цели блокируются.
+    if r < CLAMP_MIN_RADIUS or r <= 0.0 or d <= r:
         return float(x), float(y), float(z), 0.0
     scale = r / d
     return (float(shoulder[0] + dx * scale), float(y),
@@ -535,51 +541,75 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     # Цель над столом (table mode) решается чистой кран-веткой: рука сверху,
     # предплечье спускается на стол. Природная ветка в table mode над столом
     # не используется вообще; цель вне вылета крана блокируется.
+    def _solve(target):
+        crane = _is_over_table(target)
+        shoulder = _crane_shoulder_z(left) if crane else None
+
+        coarse = _ranges(left, *GRID_STEPS[0], shoulder=shoulder)
+        positions = _fk_grid_positions(*coarse, left)
+        errors = np.linalg.norm(positions - target, axis=-1)
+        clearance = _combined_clearance(positions, IK_CLEARANCE_MARGIN)
+        errors += np.where(clearance <= 0.0, 1e6, 0.0)
+        if not crane:
+            # Природная поза (локоть ниже линии плечо→кисть) получает фору при
+            # выборе стартов грубой сетки, чтобы вывернутая ветка не доминировала.
+            errors += _natural_penalty_series(coarse, left)
+        count = min(6, errors.size)
+
+        def _pick_start(scores):
+            picked = []
+            for index in np.argpartition(scores.ravel(), count - 1)[:count]:
+                i1, i2, i3 = np.unravel_index(index, scores.shape)
+                theta = (float(coarse[0][i1]), float(coarse[1][i2]),
+                         float(coarse[2][i3]))
+                if all(max(abs(a - b) for a, b in zip(theta, old)) > 10.0
+                       for old in picked):
+                    picked.append(theta)
+            return picked
+
+        # Кандидаты стартов — несколько веток IK по чистой ошибке,
+        # чтобы глобальный минимум не терялся из-за локальных минимумов.
+        starts = _pick_start(errors)
+
+        if start is not None:
+            # Текущая поза — всегда кандидат: удерживаем ветку при непрерывном
+            # движении цели, чтобы рука не «перелётывала» между ветками IK.
+            starts.append(tuple(float(v) for v in start))
+
+        results = []
+        for theta in starts:
+            current = theta
+            for step, window in GRID_STEPS[1:]:
+                current, _ = _best_on_grid(_ranges(left, step, window, current,
+                                                   shoulder=shoulder),
+                                           target, left)
+            error = float(np.linalg.norm(fk(current, left)["EE"] - target))
+            if arm_clearance(current, left, IK_CLEARANCE_MARGIN) >= 0.0:
+                natural = 0.0 if crane else _natural_penalty(current, left)
+                results.append((error, natural, current))
+        return results
+
+    target = wanted
+    reach_gap = 0.0
+    if TABLE_ENABLED:
+        cx, cy, cz, reach_gap = clamp_target_to_reachable(*wanted, left)
+        target = np.array([cx, cy, cz])
+
     crane = _is_over_table(target)
-    shoulder = _crane_shoulder_z(left) if crane else None
-
-    coarse = _ranges(left, *GRID_STEPS[0], shoulder=shoulder)
-    positions = _fk_grid_positions(*coarse, left)
-    errors = np.linalg.norm(positions - target, axis=-1)
-    clearance = _combined_clearance(positions, IK_CLEARANCE_MARGIN)
-    errors += np.where(clearance <= 0.0, 1e6, 0.0)
-    if not crane:
-        # Природная поза (локоть ниже линии плечо→кисть) получает фору при
-        # выборе стартов грубой сетки, чтобы вывернутая ветка не доминировала.
-        errors += _natural_penalty_series(coarse, left)
-    count = min(6, errors.size)
-
-    def _pick_start(scores):
-        picked = []
-        for index in np.argpartition(scores.ravel(), count - 1)[:count]:
-            i1, i2, i3 = np.unravel_index(index, scores.shape)
-            theta = (float(coarse[0][i1]), float(coarse[1][i2]),
-                     float(coarse[2][i3]))
-            if all(max(abs(a - b) for a, b in zip(theta, old)) > 10.0
-                   for old in picked):
-                picked.append(theta)
-        return picked
-
-    # Кандидаты стартов — несколько веток IK по чистой ошибке,
-    # чтобы глобальный минимум не терялся из-за локальных минимумов.
-    starts = _pick_start(errors)
-
-    if start is not None:
-        # Текущая поза — всегда кандидат: удерживаем ветку при непрерывном
-        # движении цели, чтобы рука не «перелётывала» между ветками IK.
-        starts.append(tuple(float(v) for v in start))
-
-    results = []
-    for theta in starts:
-        current = theta
-        for step, window in GRID_STEPS[1:]:
-            current, _ = _best_on_grid(_ranges(left, step, window, current,
-                                               shoulder=shoulder),
-                                       target, left)
-        error = float(np.linalg.norm(fk(current, left)["EE"] - target))
-        if arm_clearance(current, left, IK_CLEARANCE_MARGIN) >= 0.0:
-            natural = 0.0 if crane else _natural_penalty(current, left)
-            results.append((error, natural, current))
+    results = _solve(target)
+    if (crane and reach_gap > 0.0
+            and all(error > IK_TOLERANCE_MM for error, _, _ in results)):
+        # Грубый бин таблицы хранит макс. вылет: точка зажима может оказаться
+        # вне точной поверхности досягаемости (кран не решает). Отступаем
+        # внутрь поверхности к плечу, пока кран не решит точку, — рука встаёт
+        # на реальный край, недолёт честно растёт.
+        sx, sy, sz = base(left)
+        for _ in range(REACH_CLAMP_RETRIES):
+            toward = np.array([target[0] - sx, 0.0, target[2] - sz])
+            target = target - 0.25 * toward
+            results = _solve(target)
+            if any(error <= IK_TOLERANCE_MM for error, _, _ in results):
+                break
 
     if not results:
         return _result(None, "blocked",
@@ -827,12 +857,12 @@ if __name__ == "__main__":
         far = ik_solve(320.0, -200.0, 280.0)
         assert far["ok"] and far["theta"][0] <= 35.0, far
 
-    # Форма поверхности досягаемости: вперёд ~550, вырез прямо вбок (азимут
-    # 90°) — малый вылет (shoulder_z правой не крутится за 35°).
+    # Форма поверхности досягаемости кран-ветки: вперёд ~550, прямо вбок
+    # (азимут 90°) кран не достаёт вовсе (вырез) — зажим туда не применяется.
     r_fwd = _reach_radius(-200.0, 0.0, False)
     assert r_fwd > 500.0, r_fwd
     r_side = _reach_radius(-200.0, 90.0, False)
-    assert 0.0 < r_side < 250.0, r_side
+    assert r_side == -1.0, r_side
 
     # Зажим на поверхность (table mode). Дальняя цель вперёд: рука на краю
     # поверхности (~550), высота Y контроллера сохраняется, недолёт>0, err≈0.
