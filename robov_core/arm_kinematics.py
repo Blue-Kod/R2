@@ -45,6 +45,23 @@ IK_CLEARANCE_MARGIN = 0.0
 # границе рабочей зоны (где природная ветка недостижима).
 W_NAT = 0.3
 
+# Режим стола: перед роботом стол (Y от TABLE_TOP_Y вниз, X ±TABLE_X_HALF,
+# Z от TABLE_Z0 до TABLE_Z1). В этом режиме рука работает как манипулятор,
+# стоящий на столе: shoulder_z жёстко ограничен веткой «локоть вверх»
+# (ch4/ch5 ∈ [TABLE_SHOULDER_MIN, 270]), траектории руки проверяются на
+# пересечение со столом, а цель ниже стола не блокируется — рука ложится
+# на стол. По умолчанию включён.
+TABLE_ENABLED = True
+TABLE_TOP_Y = -300.0
+TABLE_X_HALF = 1000.0
+TABLE_Z0 = 0.0
+TABLE_Z1 = 1500.0
+# Минимальная команда shoulder_z (ch4 прав. / ch5 лев.) в режиме стола.
+TABLE_SHOULDER_MIN = 145.0
+# Штраф за локоть ниже линии плечо→кисть в режиме стола: больше cap
+# углового штрафа (100), поэтому предпочтение позы работает.
+ELBOW_UP_PENALTY = 200.0
+
 
 def _side(left: bool) -> str:
     return "left" if left else "right"
@@ -158,6 +175,24 @@ def _point_zone_clearance(points: np.ndarray, margin: float = 0.0) -> np.ndarray
     return np.minimum(d_box, d_head)
 
 
+def _table_clearance(points: np.ndarray, margin: float = 0.0) -> np.ndarray:
+    """Clearance (mm) of points above the table; inf outside the table area."""
+    pts = np.asarray(points, dtype=float)
+    if not TABLE_ENABLED:
+        return np.full(pts.shape[:-1], np.inf)
+    inside = ((np.abs(pts[..., 0]) <= TABLE_X_HALF + margin)
+              & (pts[..., 2] >= TABLE_Z0 - margin)
+              & (pts[..., 2] <= TABLE_Z1 + margin))
+    return np.where(inside, np.maximum(0.0, pts[..., 1] - (TABLE_TOP_Y - margin)),
+                    np.inf)
+
+
+def _combined_clearance(points: np.ndarray, margin: float = 0.0) -> np.ndarray:
+    """Zone (torso/head) and table clearance combined."""
+    return np.minimum(_point_zone_clearance(points, margin),
+                      _table_clearance(points, margin))
+
+
 def target_in_zones(point: Sequence[float], margin: float = 0.0) -> bool:
     points = np.asarray(point, dtype=float)[None, :]
     return bool(float(np.min(_point_zone_clearance(points, margin))) <= 0.0)
@@ -171,7 +206,7 @@ def arm_clearance(theta: Sequence[float], left: bool = False,
         count = max(2, int(np.linalg.norm(end - start) // 15.0) + 1)
         ratio = np.linspace(0.0, 1.0, count)
         samples.append(start[None, :] + (end - start)[None, :] * ratio[:, None])
-    return float(np.min(_point_zone_clearance(np.vstack(samples), margin)))
+    return float(np.min(_combined_clearance(np.vstack(samples), margin)))
 
 
 def _elbow_above_line(theta: Sequence[float], left: bool = False) -> float:
@@ -192,7 +227,10 @@ def _elbow_above_line(theta: Sequence[float], left: bool = False) -> float:
 
 
 def _natural_penalty(theta: Sequence[float], left: bool = False) -> float:
-    return W_NAT * max(0.0, _elbow_above_line(theta, left))
+    offset = _elbow_above_line(theta, left)
+    if TABLE_ENABLED:
+        return 0.0 if offset >= 0.0 else ELBOW_UP_PENALTY
+    return W_NAT * max(0.0, offset)
 
 
 def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
@@ -221,6 +259,8 @@ def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
                       where=len_sq > 1e-6,
                       out=np.zeros_like(len_sq))
     perp = elbow - shoulder - v * scale
+    if TABLE_ENABLED:
+        return np.where(perp[..., 1] < 0.0, ELBOW_UP_PENALTY, 0.0)
     return W_NAT * np.maximum(0.0, perp[..., 1])
 
 
@@ -254,15 +294,36 @@ def _fk_grid_elbows(t1: np.ndarray, t2: np.ndarray, left: bool) -> np.ndarray:
     return np.stack([x, y, z], axis=-1)
 
 
+def _table_shoulder_limits(left: bool) -> Optional[Tuple[float, float]]:
+    """IK-диапазон shoulder_z в режиме стола: ветка «локоть вверх».
+
+    Команда shoulder_z (ch4 прав. / ch5 лев.) ∈ [TABLE_SHOULDER_MIN, 270].
+    Правая: cmd = rest - theta1 (rest=45) -> theta1 ∈ [-225, 45-145].
+    Левая:  cmd = rest + theta1 (rest=45) -> theta1 ∈ [145-45, 225].
+    """
+    if not TABLE_ENABLED:
+        return None
+    if left:
+        return (TABLE_SHOULDER_MIN - 45.0, 270.0 - 45.0)
+    return (45.0 - 270.0, 45.0 - TABLE_SHOULDER_MIN)
+
+
 def _ranges(left: bool, step: float, window: Optional[float],
             center: Optional[Sequence[float]] = None) -> Tuple[np.ndarray, ...]:
     out = []
     model_limits = limits(left, ik_only=True)
+    table_lo_hi = _table_shoulder_limits(left)
     for name, current in zip(JOINT_NAMES, center or (None,) * 3):
         lo, hi = model_limits[name]
+        if name == "shoulder_z" and table_lo_hi is not None:
+            lo, hi = max(lo, table_lo_hi[0]), min(hi, table_lo_hi[1])
         if window is not None and current is not None:
             lo, hi = max(lo, current - window), min(hi, current + window)
         grid = np.arange(lo, hi + step * 0.5, step)
+        if table_lo_hi is not None and name == "shoulder_z":
+            # Строгий предел ветки «локоть вверх»: arange с +step/2 мог бы
+            # дать точку за hi (напр. ch4=142 при min 145).
+            grid = grid[(grid >= lo - 1e-9) & (grid <= hi + 1e-9)]
         if grid.size == 0:
             grid = np.array([lo], dtype=float)
         out.append(grid)
@@ -273,13 +334,13 @@ def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
                   left: bool) -> Tuple[Tuple[float, float, float], float]:
     positions = _fk_grid_positions(*ranges, left)
     error = np.linalg.norm(positions - target, axis=-1)
-    penalty = np.where(_point_zone_clearance(positions, IK_CLEARANCE_MARGIN) <= 0.0,
+    penalty = np.where(_combined_clearance(positions, IK_CLEARANCE_MARGIN) <= 0.0,
                        1e6, 0.0)
-    # Локоть тоже не должен пролегать сквозь туловище/голову: иначе
+    # Локоть тоже не должен пролегать сквозь туловище/голову/стол: иначе
     # refinement может увести позу в коллизию, которую потом отклонит
     # финальный arm_clearance (и решение потеряется).
     elbow = _fk_grid_elbows(ranges[0], ranges[1], left)
-    elbow_penalty = np.where(_point_zone_clearance(elbow, IK_CLEARANCE_MARGIN) <= 0.0,
+    elbow_penalty = np.where(_combined_clearance(elbow, IK_CLEARANCE_MARGIN) <= 0.0,
                              1e6, 0.0)
     penalty += np.broadcast_to(elbow_penalty[..., None], penalty.shape)
     index = int(np.argmin(error + penalty))
@@ -310,7 +371,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     coarse = _ranges(left, *GRID_STEPS[0])
     positions = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - target, axis=-1)
-    clearance = _point_zone_clearance(positions, IK_CLEARANCE_MARGIN)
+    clearance = _combined_clearance(positions, IK_CLEARANCE_MARGIN)
     errors += np.where(clearance <= 0.0, 1e6, 0.0)
     # Природная поза (локоть ниже линии плечо→кисть) получает фору при
     # выборе стартов грубой сетки, чтобы вывернутая ветка не доминировала.
@@ -358,7 +419,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     weights = (1.0, 0.5, 0.25)
     angle_weight = 0.2
     max_angle_penalty = 100.0
-    natural_cap = IK_TOLERANCE_MM
+    natural_cap = ELBOW_UP_PENALTY if TABLE_ENABLED else IK_TOLERANCE_MM
 
     def score(error, natural, theta):
         total = error + min(natural, natural_cap)
@@ -390,7 +451,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         best_error, best_theta = continuity
     else:
         accurate = [item for item in results if item[0] <= IK_TOLERANCE_MM]
-        pool = accurate if accurate else results
+        pool = results if TABLE_ENABLED else (accurate if accurate else results)
         best = min(pool, key=lambda item: score(*item))
         best_error, _, best_theta = best
 
@@ -424,34 +485,49 @@ def browser_config() -> dict:
 
 
 if __name__ == "__main__":
+    import sys
+    from unittest import mock
+
     right = (42.0, 35.0, -70.0)
     mirrored = fk(right, left=True)["EE"]
     expected = fk(right, left=False)["EE"].copy()
     expected[0] *= -1.0
     assert np.allclose(mirrored, expected), "left arm must mirror right arm"
-    for is_left in (False, True):
-        point = fk((20.0, 30.0, -60.0), is_left)["EE"]
+
+    # Самосогласованность в режиме стола: точка кисти позы ветки
+    # «локоть вверх» достигается решателем.
+    for theta, is_left in (((-200.0, 40.0, -60.0), False),
+                           ((150.0, 50.0, -30.0), True)):
+        point = fk(theta, is_left)["EE"]
         result = ik_solve(*point, left=is_left)
-        assert result["ok"], result
+        assert result["ok"], (is_left, result)
     assert not ik_solve(0.0, 0.0, 0.0)["ok"]
 
-    # Природная поза: для цели вперёд-вбок shoulder_z должен уходить в
-    # отрицательную зону (локоть вниз), а не выворачиваться на +145°.
+    # Поза манипулятора на столе: shoulder_z-команда в [145, 270],
+    # локоть выше линии плечо→кисть.
     for is_left in (False, True):
         sx = -1 if is_left else 1
-        result = ik_solve(sx * 150.0, 50.0, 300.0, left=is_left)
-        assert result["ok"], result
-        theta = result["theta"]
-        assert theta[0] < 0.0, f"shoulder_z должен быть природным, got {theta}"
-        assert _elbow_above_line(theta, is_left) <= 0.0, \
-            f"локоть вывернут вверх: {theta}"
-    # Край рабочей зоны правой (после разворота shoulder_z достижима от
-    # -225° внутрь до +35° наружу) — решение обязано существовать.
-    edge = ik_solve(170.0, 50.0, 250.0)
+        result = ik_solve(sx * 150.0, -250.0, 300.0, left=is_left)
+        assert result["ok"], (is_left, result)
+        ch = result["servo"][5 if is_left else 4]
+        assert 145.0 <= ch <= 270.0, (ch, result)
+        assert _elbow_above_line(result["theta"], is_left) > 0.0
+    # Край рабочей зоны правой и цель, раньше уводившая за физический
+    # предел поворотной, — решения обязаны существовать в ветке стола.
+    edge = ik_solve(170.0, -250.0, 250.0)
     assert edge["ok"], edge
-    # Цель, которая раньше уводила правую поворотную за физический предел
-    # (theta1 > +35 -> упор сервы и «перелёт влево»), теперь обязана
-    # решаться внутри физического диапазона.
     far = ik_solve(320.0, -200.0, 280.0)
-    assert far["ok"] and far["theta"][0] <= 35.0, far
+    assert far["ok"] and -225.0 <= far["theta"][0] <= -100.0, far
+
+    # Регрессия природной ветки (локоть вниз) при выключенном столе.
+    with mock.patch.object(sys.modules[__name__], "TABLE_ENABLED", False):
+        for is_left in (False, True):
+            sx = -1 if is_left else 1
+            result = ik_solve(sx * 150.0, 50.0, 300.0, left=is_left)
+            assert result["ok"], result
+            assert result["theta"][0] < 0.0, \
+                f"shoulder_z должен быть природным, got {result}"
+            assert _elbow_above_line(result["theta"], is_left) <= 0.0
+        far = ik_solve(320.0, -200.0, 280.0)
+        assert far["ok"] and far["theta"][0] <= 35.0, far
     print("arm_kinematics: PASS")

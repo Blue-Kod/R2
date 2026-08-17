@@ -53,7 +53,8 @@ const HAND_SCALE = 0.5;        // масштаб X/Y целей рук (вбок
 const SEND_HZ = 20;
 const ANGLE_DEADBAND = 0.3;   // градусы
 const TARGET_DEADBAND = 8;    // мм
-const TARGET_JUMP_MM = 200;   // мм: скачок цели за один кадр — глюк/телепорт, держим последнее
+const TARGET_SMOOTH = 0.5;    // 0..1: вес свежей позы контроллера в сглаживании цели;
+                              // меньше — сильнее гасит глючные кадры трекинга
 const RECENTER_HOLD_MS = 400; // мс: удержание A/X дольше этого — ресет центра/направления
 // ================================================
 
@@ -209,6 +210,7 @@ function onFreezeButton(handedness, pressed) {
 // ==== Состояние ====
 let lastAngles = { neck: null, tilt: null };
 let lastTargets = { right: null, left: null };
+let smoothedTarget = { right: null, left: null };  // сглаженные цели (гасят глючные кадры трекинга)
 
 function setStatus(text) {
     document.getElementById('teleop-status').innerHTML = text;
@@ -287,17 +289,23 @@ function frame(time, xrFrame) {
             tmpV2.x *= HAND_SCALE;
             tmpV2.y *= HAND_SCALE;
             tmpV2.applyQuaternion(robotAnchorQuatInv);
-            const tx = Math.round(tmpV2.x * 1000);
-            const ty = Math.round(tmpV2.y * 1000);
-            const tz = Math.round(-tmpV2.z * 1000);
-            const last = lastTargets[side];
-            if (last && (Math.abs(tx - last.x) > TARGET_JUMP_MM ||
-                         Math.abs(ty - last.y) > TARGET_JUMP_MM ||
-                         Math.abs(tz - last.z) > TARGET_JUMP_MM)) {
-                // скачок (глюк трекинга/телепорт) — держим последнюю отправленную цель
-                targets[side] = { x: last.x, y: last.y, z: last.z };
+            const raw = {
+                x: Math.round(tmpV2.x * 1000),
+                y: Math.round(tmpV2.y * 1000),
+                z: Math.round(-tmpV2.z * 1000)
+            };
+            // Сглаживание: одиночные глючные кадры трекинга не должны резко
+            // двигать руку («как будто контроллер где-то в стороне»).
+            const prev = smoothedTarget[side];
+            if (!prev) {
+                smoothedTarget[side] = raw;
+                targets[side] = raw;
             } else {
-                targets[side] = { x: Math.round(tx), y: Math.round(ty), z: Math.round(tz) };
+                const nx = prev.x + (raw.x - prev.x) * TARGET_SMOOTH;
+                const ny = prev.y + (raw.y - prev.y) * TARGET_SMOOTH;
+                const nz = prev.z + (raw.z - prev.z) * TARGET_SMOOTH;
+                smoothedTarget[side] = { x: nx, y: ny, z: nz };
+                targets[side] = { x: Math.round(nx), y: Math.round(ny), z: Math.round(nz) };
             }
         }
     }
@@ -457,6 +465,7 @@ async function enterVR() {
         await renderer.xr.setSession(session);
         frozen = false;
         robotAnchorCaptured = false;
+        smoothedTarget = { right: null, left: null };
         freezeBadge.classList.remove('show');
         prevFreezeState.clear();
         holdState.clear();
