@@ -46,29 +46,24 @@ IK_CLEARANCE_MARGIN = 0.0
 W_NAT = 0.3
 
 # Режим стола: перед роботом стол (Y от TABLE_TOP_Y вниз, X ±TABLE_X_HALF,
-# Z от TABLE_Z0 до TABLE_Z1). В этом режиме рука работает как манипулятор,
-# стоящий на столе: траектории руки проверяются на пересечение со столом,
-# цель ниже стола не блокируется — рука ложится на стол, а «локоть вверх»
-# поощряется мягким штрафом (ELBOW_UP_PENALTY), а не жёстким клипом.
-# По умолчанию включён.
+# Z от TABLE_Z0 до TABLE_Z1). В этом режиме траектории руки проверяются на
+# пересечение со столом, цель ниже стола не блокируется — рука ложится на
+# стол, а цели за пределами досягаемости зажимаются на её реальную
+# поверхность. По умолчанию включён.
 TABLE_ENABLED = True
 TABLE_TOP_Y = -300.0
 TABLE_X_HALF = 1000.0
 TABLE_Z0 = 0.0
 TABLE_Z1 = 1500.0
-# Мягкое предпочтение «локоть вверх» в режиме стола: штраф (мм) к ошибке
-# за локоть ниже линии плечо→кисть. Это ТАЙБРЕЙКЕР среди близких по
-# точности решений, а не жёсткое ограничение: жёсткий клип shoulder_z в
-# ветку «локоть вверх» схлопывал рабочую зону IK (рука не дотягивалась
-# до дальних/боковых целей и «уезжала не туда»).
-ELBOW_UP_PENALTY = 10.0
-# Стартовая поза в режиме стола: shoulder_z (ch4/ch5) в ветке «локоть
-# вверх» на 235°, локти (ch6/ch7) сложены полностью (theta3=180 —
-# предплечье сложено вдоль плеча). Pan (ch1/ch2) остаётся в середине
-# (theta2=0 — плечо смотрит вверх).
+# Стартовая поза — «манипулятор на столе»: shoulder_z (ch4/ch5) вверх на
+# 230°, локти (ch6/ch7) сложены полностью (theta3=180 — предплечье вдоль
+# плеча), pan (ch1/ch2) в середине (theta2=0). Рука в этой позе смотрит
+# вверх и не задевает стол при старте. В телеопе цели решаются природной
+# веткой (локоть вниз): ветка «локоть вверх» для целей спереди-снизу
+# требует pan ~90° (ch1≈229), где физически рука уходит «назад-вверх».
 TABLE_START_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90,
-    4: 235, 5: 235,
+    4: 230, 5: 230,
     6: 0, 7: 0,
     8: 90, 9: 90,
 }
@@ -353,10 +348,7 @@ def _elbow_above_line(theta: Sequence[float], left: bool = False) -> float:
 
 
 def _natural_penalty(theta: Sequence[float], left: bool = False) -> float:
-    offset = _elbow_above_line(theta, left)
-    if TABLE_ENABLED:
-        return 0.0 if offset >= 0.0 else ELBOW_UP_PENALTY
-    return W_NAT * max(0.0, offset)
+    return W_NAT * max(0.0, _elbow_above_line(theta, left))
 
 
 def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
@@ -385,8 +377,6 @@ def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
                       where=len_sq > 1e-6,
                       out=np.zeros_like(len_sq))
     perp = elbow - shoulder - v * scale
-    if TABLE_ENABLED:
-        return np.where(perp[..., 1] < 0.0, ELBOW_UP_PENALTY, 0.0)
     return W_NAT * np.maximum(0.0, perp[..., 1])
 
 
@@ -532,14 +522,14 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
                        left, wanted=[float(v) for v in wanted],
                        clamped=[float(v) for v in target], reach_gap=reach_gap)
 
-    # Предпочтение «локоть вверх» ограничено сверху (ELBOW_UP_PENALTY ~ 1 см):
-    # оно лишь «добивает» вывернутую позу среди равноточных решений и не
-    # вытесняет точное природное решение в пользу недостижимой ветки
-    # (иначе рука не дотягивалась до дальних целей).
+    # Предпочтение природной позы (локоть ниже линии плечо→кисть) ограничено
+    # сверху (natural_cap): оно лишь «добивает» вывернутую позу среди
+    # равноточных решений и не вытесняет точное решение в пользу более
+    # близкой по виду, но менее точной ветки.
     weights = (1.0, 0.5, 0.25)
     angle_weight = 0.2
     max_angle_penalty = 100.0
-    natural_cap = ELBOW_UP_PENALTY
+    natural_cap = IK_TOLERANCE_MM
 
     def score(error, natural, theta):
         total = error + min(natural, natural_cap)
@@ -640,33 +630,49 @@ if __name__ == "__main__":
         assert result["ok"], (is_left, result)
     assert not ik_solve(0.0, 0.0, 0.0)["ok"]
 
-    # Стартовая поза режима стола: ch4/ch5=235 в ветке «локоть вверх»,
-    # локти сложены полностью.
+    # Стартовая поза режима стола — «манипулятор»: ch4/ch5=230 (ветка
+    # shoulder_z вверх), локти сложены полностью (ch6/ch7=0, theta3=180).
     start = start_pose()
-    assert start[4] == 235 and start[5] == 235, start
+    assert start[4] == 230 and start[5] == 230, start
     assert start[6] == 0 and start[7] == 0, start
     for is_left in (False, True):
         theta = theta_from_commands(start, is_left)
         assert theta[2] >= 179.0, theta  # theta3=180 — локти полностью сложены
+        assert abs(theta[1]) <= 1.0, theta  # theta2=0 — pan в середине
 
-    # Поза манипулятора на столе (мягкий режим): цель над столом и в
-    # пределах досягаемости ветки «локоть вверх» — решение точное и
-    # shoulder_z-команда в ветке; локоть выше линии плечо→кисть.
+    # Поза манипулятора на столе: цель над столом и в пределах досягаемости
+    # природной ветки (локоть вниз) — решение точное, shoulder_z-команда в
+    # природном диапазоне, локоть ниже линии плечо→кисть.
     for is_left in (False, True):
-        sx = -1 if is_left else 1
-        result = ik_solve(sx * 150.0, -250.0, 300.0, left=is_left)
-        assert result["ok"], (is_left, result)
-        ch = result["servo"][5 if is_left else 4]
-        assert 145.0 <= ch <= 270.0, (ch, result)
-        assert _elbow_above_line(result["theta"], is_left) > 0.0
+        for target in ((0.0, -250.0, 300.0), (0.0, -200.0, 400.0)):
+            result = ik_solve(*target, left=is_left)
+            assert result["ok"], (is_left, result)
+            assert (result["err_mm"] or 0) <= 1.0, (is_left, result)
+            ch = result["servo"][5 if is_left else 4]
+            if is_left:
+                assert 0.0 <= ch <= 115.0, (ch, result)
+            else:
+                assert 10.0 <= ch <= 145.0, (ch, result)
+            assert _elbow_above_line(result["theta"], is_left) <= 0.0
+    # Регрессия «назад-вверх»: цели спереди-снизу решаются природной веткой
+    # с умеренным pan (ch1/ch2 ≤ 205, theta2 ≤ 70°). Ветка «локоть вверх»
+    # для таких целей требовала pan ~90° (ch1≈229) — физически рука уходила
+    # назад-вверх.
+    for is_left in (False, True):
+        for target in ((0.0, -200.0, 400.0), (0.0, -250.0, 300.0),
+                       (0.0, -300.0, 400.0)):
+            result = ik_solve(*target, left=is_left)
+            assert result["ok"], (is_left, result)
+            pan = result["servo"][2 if is_left else 1]
+            assert pan <= 205.0, (pan, is_left, result)
+            assert _elbow_above_line(result["theta"], is_left) <= 0.0
     # Край рабочей зоны правой — решение обязано существовать.
-    edge = ik_solve(170.0, -250.0, 250.0)
+    edge = ik_solve(150.0, -150.0, 350.0)
     assert edge["ok"], edge
     far = ik_solve(320.0, -200.0, 280.0)
     assert far["ok"], far
     # Мягкий режим не должен сломать досягаемость: дальняя боковая цель
-    # (которую жёсткая ветка «локоть вверх» не доставала) решается точно,
-    # даже если для этого нужна природная поза.
+    # решается точно, даже если для этого нужна вывернутая поза.
     hard_fail = ik_solve(150.0, -50.0, 500.0)
     assert hard_fail["ok"] and (hard_fail["err_mm"] or 0) <= 1.0, hard_fail
 
