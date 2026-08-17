@@ -45,6 +45,14 @@ IK_CLEARANCE_MARGIN = 0.0
 # границе рабочей зоны (где природная ветка недостижима).
 W_NAT = 0.3
 
+# Связанная панорама (ch1/ch2): знак theta2↔команда зависит от theta1.
+# Замерено на правой руке: при |theta1| в (90°, 200°] — рука в верхней
+# полусфере (ch4/ch5 136..245) — панорама зеркальна (ч1=135−theta2); ниже
+# горизонтали (ch4/ch5 ≤ 135) и дальше ~20° за вертикаль (≥246) — обычная
+# (ч1=135+theta2). Левая рука — зеркальная конструкция правой, правило то же.
+PAN_MIRROR_LO = 90.0
+PAN_MIRROR_HI = 200.0
+
 # Режим стола: перед роботом стол (Y от TABLE_TOP_Y вниз, X ±TABLE_X_HALF,
 # Z от TABLE_Z0 до TABLE_Z1). В этом режиме траектории руки проверяются на
 # пересечение со столом, цель ниже стола не блокируется — рука ложится на
@@ -140,6 +148,13 @@ def base(left: bool = False) -> np.ndarray:
     return np.array([-BASE_X if left else BASE_X, 0.0, 0.0])
 
 
+def _pan_mirror(theta1: float) -> bool:
+    """Зеркальная панорама: |theta1| в (90°, 200°] — рука в верхней
+    полусфере вплоть до ~20° за вертикаль. Ниже горизонтали и дальше за
+    вертикаль — обычная. Обе руки симметрично."""
+    return PAN_MIRROR_LO <= abs(float(theta1)) <= PAN_MIRROR_HI
+
+
 def theta_from_commands(commands: Dict[int, float], left: bool = False) -> Tuple[float, float, float]:
     rest = rest_angles(left)
     ch = _channels(left)
@@ -152,6 +167,9 @@ def theta_from_commands(commands: Dict[int, float], left: bool = False) -> Tuple
             # Правая поворотная физически зеркальна модели (команда убывает
             # с ростом theta) — см. to_servo_commands.
             cmd = -cmd
+        elif name == "shoulder_x" and _pan_mirror(theta[0]):
+            # Панорама в верхней полусфере зеркальна модели (см. PAN_MIRROR_*).
+            cmd = -cmd
         theta.append(float(cmd))
     return tuple(theta)
 
@@ -160,6 +178,7 @@ def to_servo_commands(theta: Sequence[float], left: bool = False) -> Dict[int, i
     rest = rest_angles(left)
     ranges = servo_ranges(left)
     result = {}
+    mirror_pan = _pan_mirror(float(theta[0]))
     for name, value in zip(JOINT_NAMES, theta):
         ch = _channels(left)[name]
         lo, hi = ranges[ch]
@@ -170,6 +189,9 @@ def to_servo_commands(theta: Sequence[float], left: bool = False) -> Dict[int, i
             # команда убывает. Иначе боковые цели уходили бы во внутреннюю
             # сторону (инверсия «только в IK»). Rest не меняется: theta=0 ->
             # cmd=rest. Парится с theta_from_commands и armFk в webxr.html.
+            command = rest[ch] - float(value)
+        elif name == "shoulder_x" and mirror_pan:
+            # Панорама в верхней полусфере зеркальна модели (см. PAN_MIRROR_*).
             command = rest[ch] - float(value)
         else:
             command = rest[ch] + float(value)
@@ -681,6 +703,47 @@ if __name__ == "__main__":
         theta = theta_from_commands(start, is_left)
         assert theta[2] >= 179.0, theta  # theta3=180 — локти полностью сложены
         assert abs(theta[1]) <= 1.0, theta  # theta2=0 — pan в середине
+
+    # Связанная панорама (ch1/ch2): знак theta2↔команда определяется theta1.
+    # Замеры правой руки (команда ch1/ch4/ch6 -> реальное EE от базы, грубо):
+    # зеркальная зона |theta1| ∈ (90, 200] (ch4 136..245); обычная ниже 136
+    # и за ~20° за вертикаль (ch4 ≥ 246). Round-trip команда↔theta согласован.
+    anchors = [
+        (102, 226, 58, True, (120.0, 30.0, 300.0)),
+        (135, 226, 58, True, (120.0, 200.0, 240.0)),
+        (150, 226, 58, True, (120.0, 280.0, 150.0)),
+        (102, 235, 58, True, (115.0, 30.0, 280.0)),
+        (178, 226, 58, True, (120.0, 290.0, 0.0)),
+        (247, 246, 137, False, (0.0, -300.0, 400.0)),   # кран достаёт стол
+        (169, 66, 137, False, (0.0, -300.0, 400.0)),    # природная до стола
+    ]
+    for c1, c4, c6, mirror, meas in anchors:
+        cmds = {1: float(c1), 4: float(c4), 6: float(c6)}
+        theta = theta_from_commands(cmds, left=False)
+        assert theta[0] == 45.0 - c4, (theta, c4)
+        assert theta[2] == 180.0 - c6, (theta, c6)
+        assert _pan_mirror(theta[0]) is mirror, (theta, c4)
+        assert theta[1] == (135.0 - c1 if mirror else c1 - 135.0), (theta, c1)
+        back = to_servo_commands(theta, left=False)
+        for ch in (1, 4, 6):
+            assert back[ch] == cmds[ch], (cmds, theta, back)
+        ee = fk(theta, left=False)["EE"]
+        err = float(np.linalg.norm(ee - np.array(meas)))
+        assert err < 80.0, (cmds, theta, ee, meas, err)
+    for c4, mirror in ((66, False), (75, False), (195, True), (226, True),
+                       (235, True), (238, True), (242, True), (244, True),
+                       (246, False)):
+        assert _pan_mirror(45.0 - c4) is mirror, (c4,)
+    for left in (False, True):
+        chans = _channels(left)
+        for c in ((102, 226, 58), (247, 246, 137), (135, 45, 180)):
+            cmds = {chans["shoulder_x"]: float(c[0]),
+                    chans["shoulder_z"]: float(c[1]),
+                    chans["elbow_x"]: float(c[2])}
+            theta = theta_from_commands(cmds, left)
+            back = to_servo_commands(theta, left)
+            assert all(back[chans[n]] == cmds[chans[n]] for n in JOINT_NAMES), \
+                (left, c, theta, back)
 
     # Кран-ветка в режиме стола: цели над столом решаются чисто краном —
     # рука сверху (ch4/ch5≈195..270), локти в лимитах (ch6/ch7 ≤ 180), спуск
