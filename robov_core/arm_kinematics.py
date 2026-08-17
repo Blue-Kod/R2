@@ -62,12 +62,12 @@ TABLE_SHOULDER_MIN = 145.0
 # углового штрафа (100), поэтому предпочтение позы работает.
 ELBOW_UP_PENALTY = 200.0
 # Стартовая поза в режиме стола: shoulder_z (ch4/ch5) в ветке «локоть
-# вверх» на 225°, локти (ch6/ch7) сложены полностью (theta3=180 —
+# вверх» на 235°, локти (ch6/ch7) сложены полностью (theta3=180 —
 # предплечье сложено вдоль плеча). Pan (ch1/ch2) остаётся в середине
 # (theta2=0 — плечо смотрит вверх).
 TABLE_START_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90,
-    4: 225, 5: 225,
+    4: 235, 5: 235,
     6: 0, 7: 0,
     8: 90, 9: 90,
 }
@@ -89,7 +89,7 @@ def rest_angles(left: bool = False) -> Dict[int, int]:
 def start_pose() -> Dict[int, int]:
     """Стартовая поза всех каналов.
 
-    В режиме стола — сложенная манипуляторная (ch4/ch5=225, локти согнуты),
+    В режиме стола — сложенная манипуляторная (ch4/ch5=235, локти согнуты),
     иначе DEFAULT_POSE (руки вниз).
     """
     return dict(TABLE_START_POSE if TABLE_ENABLED else DEFAULT_POSE)
@@ -427,6 +427,16 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         if arm_clearance(current, left, IK_CLEARANCE_MARGIN) >= 0.0:
             results.append((error, _natural_penalty(current, left), current))
 
+    if TABLE_ENABLED:
+        # Жёсткое правило режима стола: shoulder_z-команда (ch4 прав./
+        # ch5 лев.) обязана лежать в ветке «локоть вверх». Защитный фильтр
+        # на всякий случай: все результаты и так из клипованных сеток.
+        shoulder_lo, shoulder_hi = _table_shoulder_limits(left)
+        results = [
+            item for item in results
+            if shoulder_lo - 1e-6 <= item[2][0] <= shoulder_hi + 1e-6
+        ]
+
     if not results:
         return _result(None, "blocked",
                        "Цель достижима только с касанием туловища или головы",
@@ -480,6 +490,11 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         status = "limits"
     else:
         status = "unreachable"
+    if TABLE_ENABLED:
+        # Финальная страховка правила ch4/ch5 >= TABLE_SHOULDER_MIN.
+        shoulder_lo, shoulder_hi = _table_shoulder_limits(left)
+        best_theta = (max(shoulder_lo, min(shoulder_hi, best_theta[0])),
+                      best_theta[1], best_theta[2])
     return _result(best_theta, status,
                    f"FK-поиск: |ee−цель|={best_error:.1f} мм",
                    left, best_error)
@@ -522,6 +537,15 @@ if __name__ == "__main__":
         result = ik_solve(*point, left=is_left)
         assert result["ok"], (is_left, result)
     assert not ik_solve(0.0, 0.0, 0.0)["ok"]
+
+    # Стартовая поза режима стола: ch4/ch5=235 в ветке «локоть вверх»,
+    # локти сложены полностью.
+    start = start_pose()
+    assert start[4] == 235 and start[5] == 235, start
+    assert start[6] == 0 and start[7] == 0, start
+    for is_left in (False, True):
+        theta = theta_from_commands(start, is_left)
+        assert theta[2] >= 179.0, theta  # theta3=180 — локти полностью сложены
 
     # Поза манипулятора на столе: shoulder_z-команда в [145, 270],
     # локоть выше линии плечо→кисть.
