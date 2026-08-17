@@ -49,7 +49,9 @@ W_NAT = 0.3
 # Z от TABLE_Z0 до TABLE_Z1). В этом режиме траектории руки проверяются на
 # пересечение со столом, цель ниже стола не блокируется — рука ложится на
 # стол, а цели за пределами досягаемости зажимаются на её реальную
-# поверхность. По умолчанию включён.
+# поверхность. Цели НАД столом решаются чистой кран-веткой (рука сверху,
+# спуск на стол сверху); природная ветка над столом не используется, цель
+# вне вылета крана блокируется. По умолчанию включён.
 TABLE_ENABLED = True
 TABLE_TOP_Y = -300.0
 TABLE_X_HALF = 1000.0
@@ -58,9 +60,9 @@ TABLE_Z1 = 1500.0
 # Стартовая поза — «манипулятор на столе»: shoulder_z (ch4/ch5) вверх на
 # 230°, локти (ch6/ch7) сложены полностью (theta3=180 — предплечье вдоль
 # плеча), pan (ch1/ch2) в середине (theta2=0). Рука в этой позе смотрит
-# вверх и не задевает стол при старте. В телеопе цели решаются природной
-# веткой (локоть вниз): ветка «локоть вверх» для целей спереди-снизу
-# требует pan ~90° (ch1≈229), где физически рука уходит «назад-вверх».
+# вверх и не задевает стол при старте. Поза принадлежит кран-ветке
+# (shoulder_z≈195..270): в телеопе над столом рука остаётся в этой же
+# ветке и опускается на предмет сверху (спуск предплечьем вниз).
 TABLE_START_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90,
     4: 230, 5: 230,
@@ -410,12 +412,35 @@ def _fk_grid_elbows(t1: np.ndarray, t2: np.ndarray, left: bool) -> np.ndarray:
     return np.stack([x, y, z], axis=-1)
 
 
+def _is_over_table(point: Sequence[float]) -> bool:
+    """Цель над зоной стола (по X/Z; высота не проверяется).
+
+    Над столом в table mode работает только кран-ветка: достижимость решает
+    вылет крана, а не высота.
+    """
+    x, _, z = point
+    return (TABLE_ENABLED
+            and abs(float(x)) <= TABLE_X_HALF
+            and TABLE_Z0 <= float(z) <= TABLE_Z1)
+
+
+def _crane_shoulder_z(left: bool) -> Tuple[float, float]:
+    """Окно shoulder_z для кран-ветки: рука сверху (ch4/ch5≈195..270),
+    локти в лимитах (theta3 ≥ 0). Правая theta1<0, левая зеркально theta1>0.
+    """
+    return (-225.0, -150.0) if not left else (150.0, 225.0)
+
+
 def _ranges(left: bool, step: float, window: Optional[float],
-            center: Optional[Sequence[float]] = None) -> Tuple[np.ndarray, ...]:
+            center: Optional[Sequence[float]] = None,
+            shoulder: Optional[Tuple[float, float]] = None
+            ) -> Tuple[np.ndarray, ...]:
     out = []
     model_limits = limits(left, ik_only=True)
     for name, current in zip(JOINT_NAMES, center or (None,) * 3):
         lo, hi = model_limits[name]
+        if name == "shoulder_z" and shoulder is not None:
+            lo, hi = max(lo, shoulder[0]), min(hi, shoulder[1])
         if window is not None and current is not None:
             lo, hi = max(lo, current - window), min(hi, current + window)
         grid = np.arange(lo, hi + step * 0.5, step)
@@ -476,14 +501,21 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         cx, cy, cz, reach_gap = clamp_target_to_reachable(*wanted, left)
         target = np.array([cx, cy, cz])
 
-    coarse = _ranges(left, *GRID_STEPS[0])
+    # Цель над столом (table mode) решается чистой кран-веткой: рука сверху,
+    # предплечье спускается на стол. Природная ветка в table mode над столом
+    # не используется вообще; цель вне вылета крана блокируется.
+    crane = _is_over_table(target)
+    shoulder = _crane_shoulder_z(left) if crane else None
+
+    coarse = _ranges(left, *GRID_STEPS[0], shoulder=shoulder)
     positions = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - target, axis=-1)
     clearance = _combined_clearance(positions, IK_CLEARANCE_MARGIN)
     errors += np.where(clearance <= 0.0, 1e6, 0.0)
-    # Природная поза (локоть ниже линии плечо→кисть) получает фору при
-    # выборе стартов грубой сетки, чтобы вывернутая ветка не доминировала.
-    errors += _natural_penalty_series(coarse, left)
+    if not crane:
+        # Природная поза (локоть ниже линии плечо→кисть) получает фору при
+        # выборе стартов грубой сетки, чтобы вывернутая ветка не доминировала.
+        errors += _natural_penalty_series(coarse, left)
     count = min(6, errors.size)
 
     def _pick_start(scores):
@@ -510,11 +542,13 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     for theta in starts:
         current = theta
         for step, window in GRID_STEPS[1:]:
-            current, _ = _best_on_grid(_ranges(left, step, window, current),
+            current, _ = _best_on_grid(_ranges(left, step, window, current,
+                                               shoulder=shoulder),
                                        target, left)
         error = float(np.linalg.norm(fk(current, left)["EE"] - target))
         if arm_clearance(current, left, IK_CLEARANCE_MARGIN) >= 0.0:
-            results.append((error, _natural_penalty(current, left), current))
+            natural = 0.0 if crane else _natural_penalty(current, left)
+            results.append((error, natural, current))
 
     if not results:
         return _result(None, "blocked",
@@ -564,6 +598,14 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         pool = accurate if accurate else results
         best = min(pool, key=lambda item: score(*item))
         best_error, _, best_theta = best
+
+    if crane and best_error > IK_TOLERANCE_MM:
+        # Чистый кран: цель над столом вне вылета кран-ветки блокируется,
+        # без переключения на природную (боковой) ветку.
+        return _result(None, "blocked",
+                       "Цель над столом вне вылета кран-ветки", left,
+                       wanted=[float(v) for v in wanted],
+                       clamped=[float(v) for v in target], reach_gap=reach_gap)
 
     if reach_gap > 0.0:
         # Цель вне поверхности досягаемости: кисть встаёт на край (ближайшая
@@ -640,41 +682,55 @@ if __name__ == "__main__":
         assert theta[2] >= 179.0, theta  # theta3=180 — локти полностью сложены
         assert abs(theta[1]) <= 1.0, theta  # theta2=0 — pan в середине
 
-    # Поза манипулятора на столе: цель над столом и в пределах досягаемости
-    # природной ветки (локоть вниз) — решение точное, shoulder_z-команда в
-    # природном диапазоне, локоть ниже линии плечо→кисть.
+    # Кран-ветка в режиме стола: цели над столом решаются чисто краном —
+    # рука сверху (ch4/ch5≈195..270), локти в лимитах (ch6/ch7 ≤ 180), спуск
+    # крутой (предплечье вниз >40°). Природная ветка над столом не
+    # используется вообще; бывшая регрессия «назад-вверх» отменена — поза
+    # (0,−200,400) теперь кран (ch4≈255/ch1≈229) по явному решению.
     for is_left in (False, True):
-        for target in ((0.0, -250.0, 300.0), (0.0, -200.0, 400.0)):
+        for target in ((0.0, -300.0, 400.0), (0.0, -260.0, 400.0),
+                       (0.0, -250.0, 300.0), (0.0, -200.0, 400.0),
+                       (0.0, -300.0, 200.0)):
             result = ik_solve(*target, left=is_left)
             assert result["ok"], (is_left, result)
             assert (result["err_mm"] or 0) <= 1.0, (is_left, result)
             ch = result["servo"][5 if is_left else 4]
-            if is_left:
-                assert 0.0 <= ch <= 115.0, (ch, result)
-            else:
-                assert 10.0 <= ch <= 145.0, (ch, result)
-            assert _elbow_above_line(result["theta"], is_left) <= 0.0
-    # Регрессия «назад-вверх»: цели спереди-снизу решаются природной веткой
-    # с умеренным pan (ch1/ch2 ≤ 205, theta2 ≤ 70°). Ветка «локоть вверх»
-    # для таких целей требовала pan ~90° (ch1≈229) — физически рука уходила
-    # назад-вверх.
-    for is_left in (False, True):
-        for target in ((0.0, -200.0, 400.0), (0.0, -250.0, 300.0),
-                       (0.0, -300.0, 400.0)):
+            assert 195.0 <= ch <= 270.0, (ch, result)
+            assert result["servo"][7 if is_left else 6] <= 180.0, result
+            pose = fk(result["theta"], is_left)
+            fwd = pose["EE"] - pose["E"]
+            ang = math.degrees(math.asin(fwd[1] / np.linalg.norm(fwd)))
+            assert ang < -40.0, (ang, result)
+
+    # Каждая рука краном берёт свою сторону стола; дальняя сторона
+    # блокируется (чистый кран, без природной).
+    own = ik_solve(150.0, -300.0, 400.0)
+    assert own["ok"] and own["servo"][4] >= 195.0, own
+    far_side = ik_solve(150.0, -300.0, 400.0, left=True)
+    assert far_side["status"] == "blocked", far_side
+
+    # Чистый кран блокирует цели над столом вне вылета кран-ветки:
+    # высоко над столом, вплотную к роботу и далеко вбок — без
+    # переключения на природную ветку.
+    for target in ((0.0, -50.0, 400.0), (0.0, -300.0, 0.0),
+                   (320.0, -200.0, 280.0)):
+        for is_left in (False, True):
             result = ik_solve(*target, left=is_left)
-            assert result["ok"], (is_left, result)
-            pan = result["servo"][2 if is_left else 1]
-            assert pan <= 205.0, (pan, is_left, result)
-            assert _elbow_above_line(result["theta"], is_left) <= 0.0
-    # Край рабочей зоны правой — решение обязано существовать.
+            assert result["status"] == "blocked", (target, is_left, result)
+
+    # Вне зоны стола (сзади) природная ветка сохранена: theta1 в природном
+    # диапазоне (< 0 у обеих рук), а не кран-окно.
+    for is_left in (False, True):
+        result = ik_solve(0.0, -200.0, -300.0, left=is_left)
+        assert result["ok"], (is_left, result)
+        assert result["theta"][0] < 0.0, result
+
+    # Край рабочей зоны: близкая боковая цель над столом — кран; высокий
+    # край достигается в пределах допуска.
     edge = ik_solve(150.0, -150.0, 350.0)
-    assert edge["ok"], edge
-    far = ik_solve(320.0, -200.0, 280.0)
-    assert far["ok"], far
-    # Мягкий режим не должен сломать досягаемость: дальняя боковая цель
-    # решается точно, даже если для этого нужна вывернутая поза.
+    assert edge["ok"] and edge["servo"][4] >= 195.0, edge
     hard_fail = ik_solve(150.0, -50.0, 500.0)
-    assert hard_fail["ok"] and (hard_fail["err_mm"] or 0) <= 1.0, hard_fail
+    assert hard_fail["ok"], hard_fail
 
     # Регрессия природной ветки (локоть вниз) при выключенном столе.
     with mock.patch.object(sys.modules[__name__], "TABLE_ENABLED", False):
@@ -707,16 +763,18 @@ if __name__ == "__main__":
     # Внутри зоны — зажима нет.
     inside = ik_solve(0.0, -250.0, 300.0)
     assert inside["reach_gap"] == 0.0, inside
-    # Перекрёстная дальняя: зажим на край, высота сохраняется, err≈0.
+    # Перекрёстная дальняя (далеко влево): правая кран-ветка блокирует
+    # (чужой борт), левая достаёт краном на краю, высота сохраняется.
     cross = ik_solve(-250.0, -150.0, 700.0)
-    assert cross["ok"] and cross["reach_gap"] > 0.0, cross
-    assert cross["err_mm"] <= 1.0, cross
-    assert abs(cross["ee"][1] + 150.0) < 25.0, cross
-    # Вырез (азимут 90°): цель прямо вбок — рука тянется вдоль выреза, err≈0.
+    assert cross["status"] == "blocked", cross
+    cross_l = ik_solve(-250.0, -150.0, 700.0, left=True)
+    assert cross_l["ok"] and cross_l["reach_gap"] > 0.0, cross_l
+    assert cross_l["err_mm"] <= 1.0, cross_l
+    assert abs(cross_l["ee"][1] + 150.0) < 25.0, cross_l
+    # Вырез (азимут 90°): прямо вбок кран-ветка не достаёт — блок.
     wedge = ik_solve(800.0, -200.0, 0.0)
-    assert wedge["ok"] and wedge["reach_gap"] > 200.0, wedge
-    assert abs(wedge["ee"][1] + 200.0) < 25.0, wedge
-    # Ниже стола (внутри зоны стола): поведение прежнее — зажим не мешает.
+    assert wedge["status"] == "blocked", wedge
+    # Ниже стола (внутри зоны стола): кран-ветка не достаёт — блок.
     below = ik_solve(200.0, -600.0, 400.0)
-    assert below["reach_gap"] == 0.0, below
+    assert below["status"] == "blocked", below
     print("arm_kinematics: PASS")
