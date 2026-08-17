@@ -61,6 +61,16 @@ TABLE_SHOULDER_MIN = 145.0
 # Штраф за локоть ниже линии плечо→кисть в режиме стола: больше cap
 # углового штрафа (100), поэтому предпочтение позы работает.
 ELBOW_UP_PENALTY = 200.0
+# Стартовая поза в режиме стола: shoulder_z (ch4/ch5) в ветке «локоть
+# вверх» на 225°, локти (ch6/ch7) сложены полностью (theta3=180 —
+# предплечье сложено вдоль плеча). Pan (ch1/ch2) остаётся в середине
+# (theta2=0 — плечо смотрит вверх).
+TABLE_START_POSE: Dict[int, int] = {
+    0: 90, 1: 135, 2: 135, 3: 90,
+    4: 225, 5: 225,
+    6: 0, 7: 0,
+    8: 90, 9: 90,
+}
 
 
 def _side(left: bool) -> str:
@@ -74,6 +84,15 @@ def _channels(left: bool) -> Dict[str, int]:
 def rest_angles(left: bool = False) -> Dict[int, int]:
     """Logical servo commands for the arm-down pose."""
     return {ch: int(DEFAULT_POSE[ch]) for ch in _channels(left).values()}
+
+
+def start_pose() -> Dict[int, int]:
+    """Стартовая поза всех каналов.
+
+    В режиме стола — сложенная манипуляторная (ch4/ch5=225, локти согнуты),
+    иначе DEFAULT_POSE (руки вниз).
+    """
+    return dict(TABLE_START_POSE if TABLE_ENABLED else DEFAULT_POSE)
 
 
 def servo_ranges(left: bool = False) -> Dict[int, Tuple[int, int]]:
@@ -451,7 +470,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         best_error, best_theta = continuity
     else:
         accurate = [item for item in results if item[0] <= IK_TOLERANCE_MM]
-        pool = results if TABLE_ENABLED else (accurate if accurate else results)
+        pool = accurate if accurate else results
         best = min(pool, key=lambda item: score(*item))
         best_error, _, best_theta = best
 
@@ -481,6 +500,7 @@ def browser_config() -> dict:
         "torso": {"half_width": TORSO_HW, "half_height": TORSO_HH,
                   "half_depth": TORSO_HD},
         "head": {"y": float(HEAD[1]), "radius": HEAD_R},
+        "start": {str(ch): value for ch, value in start_pose().items()},
     }
 
 

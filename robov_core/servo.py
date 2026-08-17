@@ -45,6 +45,18 @@ DEFAULT_POSE: Dict[int, int] = {
 }
 # ----------------------------------------------------------------------
 
+
+def _initial_pose() -> Dict[int, int]:
+    """Стартовая поза: в режиме стола — сложенная манипуляторная (ch4/5=225,
+    локти согнуты), иначе DEFAULT_POSE. Ленивый импорт arm_kinematics, чтобы
+    не создавать цикл (arm_kinematics сам импортирует servo)."""
+    try:
+        from robov_core.arm_kinematics import start_pose
+        return start_pose()
+    except Exception:
+        return dict(DEFAULT_POSE)
+# ----------------------------------------------------------------------
+
 ChannelConfig = Tuple[int, int, int, int]
 
 # ----------------------------------------------------------------------
@@ -106,7 +118,7 @@ class ServoController:
         # расслабления на выключении. Возвращается только enable_all().
         self._enabled: bool = True
 
-        self.current_angles: Dict[int, int] = dict(DEFAULT_POSE)
+        self.current_angles: Dict[int, int] = _initial_pose()
         self.lock: threading.Lock = threading.Lock()
 
         # Плавное движение: per-channel mover.
