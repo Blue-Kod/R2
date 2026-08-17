@@ -51,6 +51,34 @@ INTERNET_CHECK_HOST = "8.8.8.8"
 LAST_COMMIT_FILE = ".last_commit"
 SETUP_COMPLETE_FLAG = ".setup_complete"  # Flag for first-run installation
 
+def gh_request(url, *, stream=False, timeout=30, attempts=4):
+    """GET с ретраями на 429/403/5xx — GitHub rate-limit (unauthenticated).
+
+    Экспоненциальная пауза 2, 8, 18, ... секунд между попытками, чтобы
+    обновление переживало временный rate-limit codeload/api.github.com.
+    """
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            response = requests.get(url, stream=stream, timeout=timeout)
+            if response.status_code in (429, 403, 500, 502, 503, 504):
+                log_message(f"[!] GitHub {response.status_code} on {url}, "
+                            f"retry {attempt + 1}/{attempts}...")
+                last_exc = RuntimeError(f"HTTP {response.status_code}")
+                time.sleep(2 * (attempt + 1) ** 2)
+                continue
+            response.raise_for_status()
+            return response
+        except requests.RequestException as e:
+            last_exc = e
+            log_message(f"[!] GitHub request error on {url}: {e}, "
+                        f"retry {attempt + 1}/{attempts}...")
+            time.sleep(2 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"GitHub request failed after {attempts} attempts: {url}")
+
+
 def log_message(*args):
     msg = " ".join(str(arg) for arg in args)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -353,7 +381,7 @@ def apply_self_update(new_launcher_path):
 def get_remote_head_commit_info(owner, repo, branch='main'):
     api_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}"
     try:
-        response = requests.get(api_url, timeout=10)
+        response = gh_request(api_url, timeout=10)
         if response.status_code != 200:
             log_message(f"[!] GitHub API returned {response.status_code}")
             return None, None
@@ -400,7 +428,7 @@ def get_changed_files(old_sha, new_sha):
     """
     compare_url = f"https://api.github.com/repos/Blue-Kod/R2/compare/{old_sha}...{new_sha}"
     try:
-        response = requests.get(compare_url, timeout=15)
+        response = gh_request(compare_url, timeout=15)
         if response.status_code == 404:
             log_message("[L] Compare API: commits too far apart or not found.")
             return None, None
@@ -470,8 +498,7 @@ def download_changed_files(target_dir, to_download, to_delete, script_name):
             target = dest_file
 
         try:
-            resp = requests.get(raw_url, timeout=30)
-            resp.raise_for_status()
+            resp = gh_request(raw_url, timeout=30)
             with open(target, 'wb') as f:
                 f.write(resp.content)
             downloaded += 1
@@ -534,7 +561,7 @@ def download_and_extract_repo(target_dir, script_name, target_user):
     # --- Attempt 2: Full ZIP download (first run or Compare fallback) ---
     log_message("[L] Full repository download...")
     try:
-        response = requests.get(ARCHIVE_URL, stream=True)
+        response = gh_request(ARCHIVE_URL, stream=True)
         response.raise_for_status()
 
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
