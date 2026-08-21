@@ -696,14 +696,18 @@ def _rate_limit_commands(commands: Dict[int, float]) -> Dict[int, float]:
         if servo is not None:
             phys = float(servo.current_angles.get(ch, 90.0))
         if prev is None:
+            # Первая команда канала после старта: едем к цели сразу (плавность
+            # физического движения обеспечивает mover серво), иначе dt=0
+            # заморозил бы руку на первом движении.
             prev = phys if phys is not None else float(angle)
+            value = float(angle)
         else:
             age = now - _last_cmd_time.get(ch, now)
             if phys is not None and age > 0.5 and abs(prev - phys) > 1.0:
                 prev = phys
-        dt = max(0.0, now - _last_cmd_time.get(ch, now))
-        cap = MOVE_RATE_DEG_S * dt
-        value = prev + max(-cap, min(cap, float(angle) - prev))
+            dt = max(0.0, now - _last_cmd_time.get(ch, now))
+            cap = MOVE_RATE_DEG_S * dt
+            value = prev + max(-cap, min(cap, float(angle) - prev))
         limited[ch] = value
         _last_cmd_angle[ch] = value
         _last_cmd_time[ch] = now
