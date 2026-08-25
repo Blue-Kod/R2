@@ -484,8 +484,7 @@ async function moveToIk() {
         const cmds=data.servo ? Object.entries(data.servo).map(([ch,value])=>`ch${ch}=${value}`).join('  ') : 'углы не определены';
         const dist=data.err_mm ? ` (ближайшая точка ~${Math.round(data.err_mm)} мм)` : '';
         ikStatus.textContent=`${data.ok ? '✓ достижима' : '✗ недостижима'}: ${data.message}. ${cmds}${dist}${data.moved ? ' — рука поехала в ближайшую достижимую точку.' : ''}`;
-        if (data.servo) { for (const [ch, val] of Object.entries(data.servo)) ikAngles[ch] = val; }
-        await pollIkAngles();
+        if (data.servo) { for (const [ch, val] of Object.entries(data.servo)) ikAngles[ch] = val; drawIkView(); }
     } catch(e) { ikStatus.textContent='Ошибка: '+e.message; }
     finally { btn.disabled=false; }
 }

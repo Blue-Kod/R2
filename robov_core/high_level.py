@@ -741,10 +741,12 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
 
     Если цель недостижима, рука едет в ближайшую достижимую точку
     (решение есть в result["servo"]); не двигаемся только когда решения
-    нет вообще (цель внутри туловища/головы). Команды дополнительно
-    ограничиваются скоростью MOVE_RATE_DEG_S: смена ветки IK идёт плавным
-    поворотом, а не мгновенным скачком.
+    нет вообще (цель внутри туловища/головы).  Каждый вызов стартует
+    от текущего положения (сброс rate-limiter), чтобы рука всегда
+    ехала к полной цели, а не к промежуточной из предыдущего вызова.
     """
+    _last_cmd_angle.clear()
+    _last_cmd_time.clear()
     result = ik_detail(x, y, z, left)
     result["moved"] = False
     if not result["servo"]:
@@ -755,6 +757,7 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
             result["message"] += "; не удалось запустить движение серво"
             return result
     _last_ik_start[left] = arm_kinematics.theta_from_commands(limited, left)
+    result["servo"] = {ch: int(round(v)) for ch, v in limited.items()}
     result["moved"] = True
     return result
 
