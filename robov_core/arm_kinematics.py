@@ -180,9 +180,21 @@ def theta_from_commands(commands: Dict[int, float], left: bool = False) -> Tuple
             # Правая поворотная физически зеркальна модели (команда убывает
             # с ростом theta) — см. to_servo_commands.
             cmd = -cmd
-        elif name == "shoulder_x" and _pan_mirror(theta[0]):
+        elif name == "shoulder_x":
             # Панорама в верхней полусфере зеркальна модели (см. PAN_MIRROR_*).
-            cmd = -cmd
+            # Проверяем по серво-команде ch4 (не по восстановленному theta0),
+            # т.к. из-за округления servo theta0 может оказаться ровно на
+            # границе (-90.0), хотя to_servo_commands видел |theta0|>90 и
+            # применил зеркальную формулу.
+            ch4_val = commands.get(ch["shoulder_z"], rest[ch["shoulder_z"]])
+            if not left:
+                # Правая рука: theta0 = -(ch4 - rest[4]), mirror если
+                # theta0 <= -90, т.е. ch4 >= rest[4] + 90
+                mirror = ch4_val >= rest[ch["shoulder_z"]] + PAN_MIRROR_LO
+            else:
+                mirror = _pan_mirror(theta[0])
+            if mirror:
+                cmd = -cmd
         theta.append(float(cmd))
     return tuple(theta)
 
@@ -521,6 +533,11 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
 
     def score(error, natural, theta):
         total = error + min(natural, natural_cap)
+        # Штраф за решения на границе crane/natural зон (|theta0|≈90):
+        # FK-модель переключается между Rz и Ry,精度 падает.
+        boundary_dist = abs(abs(theta[0]) - PAN_MIRROR_LO)
+        if boundary_dist < 10.0:
+            total += (10.0 - boundary_dist) * 0.5
         if start is not None:
             angle_cost = sum(w * (a - b) ** 2
                              for w, a, b in zip(weights, theta, start))
@@ -545,7 +562,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     else:
         accurate = [item for item in results if item[0] <= IK_TOLERANCE_MM]
         pool = accurate if accurate else results
-        best = min(pool, key=lambda item: score(*item))
+        best = min(pool, key=lambda item: item[0] + min(item[1], natural_cap))
         best_error, _, best_theta = best
 
     clamped = [float(v) for v in wanted]
