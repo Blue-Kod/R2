@@ -357,16 +357,16 @@ function ikFk(side) {
         const s4  = Math.sin(t4 * deg2rad),  c4  = Math.cos(t4 * deg2rad);
         const s2p = Math.sin(t2p * deg2rad), c2p = Math.cos(t2p * deg2rad);
         const s23 = Math.sin((t2p + t3p) * deg2rad), c23p = Math.cos((t2p + t3p) * deg2rad);
-        const elbow = vAdd(shoulder, [ikConfig.l1 * s4 * s2p, -ikConfig.l1 * c2p, -ikConfig.l1 * c4 * s2p]);
-        const ee    = vAdd(elbow,    [ikConfig.l2 * s4 * s23, -ikConfig.l2 * c23p, -ikConfig.l2 * c4 * s23]);
+        const elbow = vAdd(shoulder, [ikConfig.l1 * s4 * s2p, -ikConfig.l1 * c2p, ikConfig.l1 * c4 * s2p]);
+        const ee    = vAdd(elbow,    [ikConfig.l2 * s4 * s23, -ikConfig.l2 * c23p, ikConfig.l2 * c4 * s23]);
         return {S: shoulder, E: elbow, EE: ee};
     }
     // Rz-модель (кран-зона или fallback).
     const t1rad = t0 * Math.PI / 180, t2rad = t1 * Math.PI / 180, t3rad = t2 * Math.PI / 180;
     const c1 = Math.cos(t1rad), s1 = Math.sin(t1rad), c2 = Math.cos(t2rad), s2 = Math.sin(t2rad);
     const c23 = Math.cos(t2rad + t3rad), s23 = Math.sin(t2rad + t3rad);
-    const elbow = vAdd(shoulder, [sign * ikConfig.l1 * s1 * c2, -ikConfig.l1 * c1 * c2, -ikConfig.l1 * s2]);
-    const ee    = vAdd(elbow,    [sign * ikConfig.l2 * s1 * c23, -ikConfig.l2 * c1 * c23, -ikConfig.l2 * s23]);
+    const elbow = vAdd(shoulder, [sign * ikConfig.l1 * s1 * c2, -ikConfig.l1 * c1 * c2, ikConfig.l1 * s2]);
+    const ee    = vAdd(elbow,    [sign * ikConfig.l2 * s1 * c23, -ikConfig.l2 * c1 * c23, ikConfig.l2 * s23]);
     return {S: shoulder, E: elbow, EE: ee};
 }
 
@@ -409,7 +409,7 @@ function drawIkView() {
     for (let i=-5;i<=5;i++) {
         const v=i*100; line([v,0,-500],[v,0,500],'#222'); line([-500,0,v],[500,0,v],'#222');
     }
-    for (const [name,dir,color] of [['X',[1,0,0],'#cc4444'],['Y',[0,1,0],'#44aa55'],['Z',[0,0,-1],'#4a7cff']]) {
+    for (const [name,dir,color] of [['X',[1,0,0],'#cc4444'],['Y',[0,1,0],'#44aa55'],['Z',[0,0,1],'#4a7cff']]) {
         const end=vMul(dir,300); line([0,0,0],end,color,2); label(end,name,color);
     }
 
@@ -476,7 +476,7 @@ async function moveToIk() {
     const side=document.querySelector('input[name="ikArm"]:checked')?.value || 'right';
     const x=Number(document.getElementById('ik-x').value), y=Number(document.getElementById('ik-y').value), z=Number(document.getElementById('ik-z').value);
     if (![x,y,z].every(Number.isFinite)) { ikStatus.textContent='Введите числовые X, Y и Z.'; return; }
-    const btn=document.getElementById('ik-move-btn'); btn.disabled=true; ikTarget=[x,y,-z]; drawIkView();
+    const btn=document.getElementById('ik-move-btn'); btn.disabled=true; ikTarget=[x,y,z]; drawIkView();
     try {
         const r=await fetch('/api/ik/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x,y,z,left:side==='left'})});
         const data=await r.json();
