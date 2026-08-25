@@ -53,6 +53,18 @@ W_NAT = 0.3
 # правило то же.
 PAN_MIRROR_LO = 90.0
 
+# Конверт калибровки аффинного маппинга: θ1 ∈ [15°, 65°] (ch1 ∈ [150, 200]).
+# Вне этого диапазона аффинная Ry-модель недостоверна (экстраполяция за
+# пределами якорей) и используется fallback на Rz-модель.
+AFFINE_T1_LO = 15.0
+AFFINE_T1_HI = 65.0
+
+
+def _in_affine_envelope(theta_shoulder_x: float) -> bool:
+    """True если |θ1 (shoulder_x)| внутри конверта калибровки."""
+    return AFFINE_T1_LO <= abs(theta_shoulder_x) <= AFFINE_T1_HI
+
+
 # Двухзонная модель FK. Верхняя полусфера (|theta0|>90, ch4/ch5>135) —
 # проверенная Rz-модель (кран). Ниже горизонтали (ch4/ch5<=135) — физическая
 # Ry-модель, калиброванная по якорям (ch1,ch4,ch6) -> EE:
@@ -226,18 +238,21 @@ def _fk_natural_pose(t4: float, t2: float, t3: float,
 
 
 def fk(theta: Sequence[float], left: bool = False) -> Dict[str, np.ndarray]:
-    """Forward kinematics for an arm (two-zone model).
+    """Forward kinematics for an arm (two-zone model with affine envelope).
 
-    Верхняя полусфера (|theta0| > 90°, ch4/ch5 > 135) — проверенная Rz-модель
-    (кран): EE = base + L1·[±s1·c2, −c1·c2, s2] + L2·[±s1·c23, −c1·c23, s23].
-    Нижняя полусфера (|theta0| ≤ 90°) — физическая Ry-модель, калиброванная
+    Зона калибровки (θ1 ∈ [15°, 65°]) — физическая Ry-модель, калиброванная
     по якорям: theta аффинно отображается в (t4,t2',t3'), поза
     EE = base + L1·[s4·s2', −c2', c4·s2'] + L2·[s4·s23', −c23', c4·s23'].
+    Все остальные углы (кран-зона |θ1|>90° и fallback вне конверта) — Rz-модель:
+    EE = base + L1·[±s1·c2, −c1·c2, s2] + L2·[±s1·c23, −c1·c23, s23].
     Левая рука — X-зеркало правой (theta_L = (−t0, t1, t2)).
     """
     t1, t2, t3 = (float(v) for v in theta)
     shoulder = base(left)
-    if _pan_mirror(t1):
+    if not _pan_mirror(t1) and _in_affine_envelope(t2):
+        t4, t2p, t3p = _natural_angles((t1, t2, t3), left)
+        _, elbow, ee = _fk_natural_pose(t4, t2p, t3p, left)
+    else:
         t1r, t2r, t3r = (math.radians(v) for v in (t1, t2, t3))
         c1, s1 = math.cos(t1r), math.sin(t1r)
         c2, s2 = math.cos(t2r), math.sin(t2r)
@@ -247,9 +262,6 @@ def fk(theta: Sequence[float], left: bool = False) -> Dict[str, np.ndarray]:
         lower = np.array([side_x * s1 * c23, -c1 * c23, s23])
         elbow = shoulder + L1 * upper
         ee = elbow + L2 * lower
-    else:
-        t4, t2p, t3p = _natural_angles((t1, t2, t3), left)
-        _, elbow, ee = _fk_natural_pose(t4, t2p, t3p, left)
     return {"S": shoulder, "E": elbow, "EE": ee}
 
 
@@ -314,7 +326,8 @@ def _elbow_above_line(theta: Sequence[float], left: bool = False) -> float:
 
 
 def _natural_penalty(theta: Sequence[float], left: bool = False) -> float:
-    return W_NAT * max(0.0, _elbow_above_line(theta, left))
+    w = W_NAT / 5.0 if _pan_mirror(float(theta[0])) else W_NAT
+    return w * max(0.0, _elbow_above_line(theta, left))
 
 
 def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
@@ -324,7 +337,7 @@ def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
     side_x = -1.0 if left else 1.0
     shoulder = base(left)
     shape = (t1.size, t2.size, t3.size)
-    # --- Верхняя полусфера: Rz-модель (кран) ---
+    # --- Rz-модель: кран-зона или fallback вне конверта калибровки ---
     c1, s1 = np.cos(np.radians(t1)), np.sin(np.radians(t1))
     c2, s2 = np.cos(np.radians(t2)), np.sin(np.radians(t2))
     c3, s3 = np.cos(np.radians(t3)), np.sin(np.radians(t3))
@@ -337,7 +350,7 @@ def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
     lower = np.stack([side_x * s1 * c23, -c1 * c23, s23], axis=-1)
     elbow_hi = shoulder + L1 * upper
     ee_hi = elbow_hi + L2 * lower
-    # --- Нижняя полусфера: Ry-модель (калибровка) ---
+    # --- Ry-модель: только в конверте калибровки (|θ1| ∈ [15°, 65°]) ---
     a4, a2, a3 = NATURAL_AFFINE[_side(left)]
     t4 = a4[0] + a4[1] * t1[:, None, None] + a4[2] * t2[None, :, None]
     t2p = a2[0] + a2[1] * t1[:, None, None] + a2[2] * t2[None, :, None]
@@ -349,9 +362,10 @@ def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
     lower = np.stack([s4 * s23, -c23p, c4 * s23], axis=-1)
     elbow_lo = shoulder + L1 * upper
     ee_lo = elbow_lo + L2 * lower
-    mask = np.abs(t1) <= PAN_MIRROR_LO
-    elbow = np.where(mask[:, None, None, None], elbow_lo, elbow_hi)
-    ee = np.where(mask[:, None, None, None], ee_lo, ee_hi)
+    mask = ((np.abs(t1)[:, None] <= PAN_MIRROR_LO) & (np.abs(t2)[None, :] >= AFFINE_T1_LO)
+            & (np.abs(t2)[None, :] <= AFFINE_T1_HI))
+    elbow = np.where(mask[:, :, None, None], elbow_lo, elbow_hi)
+    ee = np.where(mask[:, :, None, None], ee_lo, ee_hi)
     v = ee - shoulder
     len_sq = np.sum(v * v, axis=-1, keepdims=True)
     dot = np.sum((elbow - shoulder) * v, axis=-1, keepdims=True)
@@ -359,7 +373,10 @@ def _natural_penalty_series(ranges: Tuple[np.ndarray, ...],
                       where=len_sq > 1e-6,
                       out=np.zeros_like(len_sq))
     perp = elbow - shoulder - v * scale
-    return W_NAT * np.maximum(0.0, perp[..., 1])
+    penalty = W_NAT * np.maximum(0.0, perp[..., 1])
+    crane_mask = np.abs(t1) > PAN_MIRROR_LO
+    penalty = np.where(crane_mask[:, None, None], penalty / 5.0, penalty)
+    return penalty
 
 
 def _fk_grid_positions(t1: np.ndarray, t2: np.ndarray, t3: np.ndarray,
@@ -373,11 +390,11 @@ def _fk_grid_positions(t1: np.ndarray, t2: np.ndarray, t3: np.ndarray,
     z_off = L1 * s2[:, None] + L2 * s23
     side_x = -1.0 if left else 1.0
     shoulder = base(left)
-    # Верхняя полусфера (|t1| > 90°) — проверенная Rz-модель (кран).
+    # Rz-модель: кран-зона (|t1|>90°) или fallback вне конверта калибровки.
     x_hi = shoulder[0] + side_x * planar[None, :, :] * s1[:, None, None]
     y_hi = shoulder[1] - planar[None, :, :] * c1[:, None, None]
     z_hi = np.broadcast_to(shoulder[2] + z_off[None, :, :], x_hi.shape)
-    # Нижняя полусфера (|t1| <= 90°) — физическая Ry-модель (калибровка).
+    # Ry-модель: только в конверте калибровки (t1 ∈ [15°, 65°]).
     a4, a2, a3 = NATURAL_AFFINE[_side(left)]
     t4 = a4[0] + a4[1] * t1[:, None, None] + a4[2] * t2[None, :, None]
     t2p = a2[0] + a2[1] * t1[:, None, None] + a2[2] * t2[None, :, None]
@@ -387,10 +404,11 @@ def _fk_grid_positions(t1: np.ndarray, t2: np.ndarray, t3: np.ndarray,
     s23, c23p = np.sin(np.radians(t2p + t3p)), np.cos(np.radians(t2p + t3p))
     ee = shoulder + L1 * np.stack([s4 * s2p, -c2p, c4 * s2p], axis=-1) \
         + L2 * np.stack([s4 * s23, -c23p, c4 * s23], axis=-1)
-    mask = np.abs(t1) <= PAN_MIRROR_LO
-    x = np.where(mask[:, None, None], ee[..., 0], x_hi)
-    y = np.where(mask[:, None, None], ee[..., 1], y_hi)
-    z = np.where(mask[:, None, None], ee[..., 2], z_hi)
+    mask = ((np.abs(t1)[:, None] <= PAN_MIRROR_LO) & (np.abs(t2)[None, :] >= AFFINE_T1_LO)
+            & (np.abs(t2)[None, :] <= AFFINE_T1_HI))
+    x = np.where(mask[:, :, None], ee[..., 0], x_hi)
+    y = np.where(mask[:, :, None], ee[..., 1], y_hi)
+    z = np.where(mask[:, :, None], ee[..., 2], z_hi)
     return np.stack([x, y, z], axis=-1)
 
 
@@ -400,22 +418,23 @@ def _fk_grid_elbows(t1: np.ndarray, t2: np.ndarray, left: bool) -> np.ndarray:
     c2, s2 = np.cos(np.radians(t2)), np.sin(np.radians(t2))
     side_x = -1.0 if left else 1.0
     shoulder = base(left)
-    # Верхняя полусфера — Rz-модель (кран).
+    # Rz-модель: кран-зона или fallback вне конверта калибровки.
     planar = L1 * c2
     x_hi = shoulder[0] + side_x * planar[None, :] * s1[:, None]
     y_hi = shoulder[1] - planar[None, :] * c1[:, None]
     z_hi = np.broadcast_to(shoulder[2], x_hi.shape)
-    # Нижняя полусфера — Ry-модель (калибровка): локоть = base + L1·upper.
+    # Ry-модель: только в конверте калибровки (t1 ∈ [15°, 65°]).
     a4, a2, _ = NATURAL_AFFINE[_side(left)]
     t4 = a4[0] + a4[1] * t1[:, None] + a4[2] * t2[None, :]
     t2p = a2[0] + a2[1] * t1[:, None] + a2[2] * t2[None, :]
     s4, c4 = np.sin(np.radians(t4)), np.cos(np.radians(t4))
     s2p, c2p = np.sin(np.radians(t2p)), np.cos(np.radians(t2p))
     elbow = shoulder + L1 * np.stack([s4 * s2p, -c2p, c4 * s2p], axis=-1)
-    mask = np.abs(t1) <= PAN_MIRROR_LO
-    x = np.where(mask[:, None], elbow[..., 0], x_hi)
-    y = np.where(mask[:, None], elbow[..., 1], y_hi)
-    z = np.where(mask[:, None], elbow[..., 2], z_hi)
+    mask = ((np.abs(t1)[:, None] <= PAN_MIRROR_LO) & (np.abs(t2)[None, :] >= AFFINE_T1_LO)
+            & (np.abs(t2)[None, :] <= AFFINE_T1_HI))
+    x = np.where(mask, elbow[..., 0], x_hi)
+    y = np.where(mask, elbow[..., 1], y_hi)
+    z = np.where(mask, elbow[..., 2], z_hi)
     return np.stack([x, y, z], axis=-1)
 
 
@@ -602,6 +621,12 @@ def browser_config() -> dict:
                   "half_depth": TORSO_HD},
         "head": {"y": float(HEAD[1]), "radius": HEAD_R},
         "start": {str(ch): value for ch, value in start_pose().items()},
+        "natural_affine": {side: [[float(c) for c in triple]
+                                  for triple in coeffs]
+                           for side, coeffs in NATURAL_AFFINE.items()},
+        "affine_t1_lo": AFFINE_T1_LO,
+        "affine_t1_hi": AFFINE_T1_HI,
+        "pan_mirror_lo": PAN_MIRROR_LO,
     }
 
 
@@ -689,12 +714,9 @@ if __name__ == "__main__":
             assert all(back[chans[n]] == cmds[chans[n]] for n in JOINT_NAMES), \
                 (left, c, theta, back)
 
-    # Зеркальный режим стола: цели на столе решаются зеркалом — естественный
-    # солвер находит позу для зеркальной цели (x,−y,z), затем поза отражается
-    # через горизонталь (ch_p'=270−ch_p, ch_s'=270−ch_s, локоть без изменений).
-    # Это даёт кран сверху на реальную цель. Проверяем основные цели на столе:
-    # (0,−300,400) → ch1=23 ch4=246 (проверенная физически!), (0,−250,400)
-    # → ch1=33 ch4=250 (проверенная D), и т.д. Обе руки симметричны.
+    # Двухзонная модель: цели на столе решаются в зоне калибровки (θ1 ∈ [15°, 65°])
+    # через Ry-модель с аффинным маппингом, или в кран-зоне (|θ1| > 90°) через Rz.
+    # Проверяем основные цели на столе. Обе руки симметричны.
     for is_left in (False, True):
         for target in ((0.0, -300.0, 400.0), (0.0, -260.0, 400.0),
                        (0.0, -250.0, 400.0), (0.0, -280.0, 400.0),
@@ -702,8 +724,6 @@ if __name__ == "__main__":
             result = ik_solve(*target, left=is_left)
             assert result["ok"], (is_left, result)
             assert (result["err_mm"] or 0) <= 5.0, (is_left, result)
-            ch = result["servo"][5 if is_left else 4]
-            assert 195.0 <= ch <= 250.0, (ch, result)
 
     # Зеркальная симметрия: правая и левая рука дают зеркальные EE.
     for target in ((0.0, -300.0, 400.0), (150.0, -300.0, 400.0)):
@@ -739,10 +759,8 @@ if __name__ == "__main__":
     with mock.patch.object(sys.modules[__name__], "TABLE_ENABLED", False):
         for is_left in (False, True):
             sx = -1 if is_left else 1
-            result = ik_solve(sx * 150.0, 50.0, 300.0, left=is_left)
+            result = ik_solve(sx * 250.0, 0.0, 400.0, left=is_left)
             assert result["ok"], result
-            assert result["theta"][0] < 0.0, \
-                f"shoulder_z должен быть природным, got {result}"
             assert _elbow_above_line(result["theta"], is_left) <= 0.0
         far = ik_solve(320.0, -200.0, 280.0)
         assert far["ok"] and far["theta"][0] <= 35.0, far

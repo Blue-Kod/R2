@@ -315,7 +315,6 @@ for (let i=0; i<=9; i++) {
 
 // ===================== IK 3D VIEW =====================
 const ikConfig = serverData.ik_config;
-const PAN_MIRROR_LO = 90.0;
 let ikAngles = {...(serverData.servo_angles || {})};
 let ikTarget = null;
 const ikView = {az:30, elev:22, dist:1500, center:[0,0,0], drag:null};
@@ -331,21 +330,44 @@ function ikFk(side) {
     const ch = ikConfig.channels[side];
     const rest = ikConfig.rest;
     const right = side === 'right';
-    // shoulder_z: правая физически зеркальна модели (см. arm_kinematics.py).
+    const PAN_MIRROR_LO = ikConfig.pan_mirror_lo || 90;
+    const AFFINE_T1_LO = ikConfig.affine_t1_lo || 15;
+    const AFFINE_T1_HI = ikConfig.affine_t1_hi || 65;
+    // theta0: shoulder_z
     const cz = ikAngles[ch.shoulder_z] ?? rest[ch.shoulder_z];
-    const t1 = (right ? (rest[ch.shoulder_z] - cz) : (cz - rest[ch.shoulder_z])) * Math.PI / 180;
-    // Панорама зеркальна во всей верхней полусфере (|theta1| > 90°).
-    const panMirror = Math.abs(t1 * 180 / Math.PI) > PAN_MIRROR_LO;
+    const t0 = (right ? (rest[ch.shoulder_z] - cz) : (cz - rest[ch.shoulder_z]));
+    // Панорама зеркальна во всей верхней полусфере (|theta0| > 90°).
+    const panMirror = Math.abs(t0) > PAN_MIRROR_LO;
     const cx = ikAngles[ch.shoulder_x] ?? rest[ch.shoulder_x];
-    const t2 = (panMirror ? (rest[ch.shoulder_x] - cx) : (cx - rest[ch.shoulder_x])) * Math.PI / 180;
-    const t3 = (rest[ch.elbow_x] - (ikAngles[ch.elbow_x] ?? rest[ch.elbow_x])) * Math.PI / 180;
-    const c1=Math.cos(t1), s1=Math.sin(t1), c2=Math.cos(t2), s2=Math.sin(t2);
-    const c23=Math.cos(t2+t3), s23=Math.sin(t2+t3);
+    const t1 = (panMirror ? (rest[ch.shoulder_x] - cx) : (cx - rest[ch.shoulder_x]));
+    const t2 = (rest[ch.elbow_x] - (ikAngles[ch.elbow_x] ?? rest[ch.elbow_x]));
     const sign = side === 'left' ? -1 : 1;
-    const shoulder=[sign*ikConfig.base_x, 0, 0];
-    const elbow=vAdd(shoulder, [sign*ikConfig.l1*s1*c2, -ikConfig.l1*c1*c2, ikConfig.l1*s2]);
-    const ee=vAdd(elbow, [sign*ikConfig.l2*s1*c23, -ikConfig.l2*c1*c23, ikConfig.l2*s23]);
-    return {S:shoulder, E:elbow, EE:ee};
+    const shoulder = [sign * ikConfig.base_x, 0, 0];
+
+    // Двухзонная модель: Rz (кран-зона) или Ry (природная).
+    const inEnvelope = Math.abs(t1) >= AFFINE_T1_LO && Math.abs(t1) <= AFFINE_T1_HI;
+    if (!panMirror && inEnvelope) {
+        // Ry-модель с аффинным маппингом.
+        const affine = ikConfig.natural_affine[side];
+        const a4 = affine[0], a2 = affine[1], a3 = affine[2];
+        const t4  = a4[0] + a4[1] * t0 + a4[2] * t1;
+        const t2p = a2[0] + a2[1] * t0 + a2[2] * t1;
+        const t3p = a3[0] + a3[1] * t0 + a3[2] * t2;
+        const deg2rad = Math.PI / 180;
+        const s4  = Math.sin(t4 * deg2rad),  c4  = Math.cos(t4 * deg2rad);
+        const s2p = Math.sin(t2p * deg2rad), c2p = Math.cos(t2p * deg2rad);
+        const s23 = Math.sin((t2p + t3p) * deg2rad), c23p = Math.cos((t2p + t3p) * deg2rad);
+        const elbow = vAdd(shoulder, [ikConfig.l1 * s4 * s2p, -ikConfig.l1 * c2p, ikConfig.l1 * c4 * s2p]);
+        const ee    = vAdd(elbow,    [ikConfig.l2 * s4 * s23, -ikConfig.l2 * c23p, ikConfig.l2 * c4 * s23]);
+        return {S: shoulder, E: elbow, EE: ee};
+    }
+    // Rz-модель (кран-зона или fallback).
+    const t1rad = t0 * Math.PI / 180, t2rad = t1 * Math.PI / 180, t3rad = t2 * Math.PI / 180;
+    const c1 = Math.cos(t1rad), s1 = Math.sin(t1rad), c2 = Math.cos(t2rad), s2 = Math.sin(t2rad);
+    const c23 = Math.cos(t2rad + t3rad), s23 = Math.sin(t2rad + t3rad);
+    const elbow = vAdd(shoulder, [sign * ikConfig.l1 * s1 * c2, -ikConfig.l1 * c1 * c2, ikConfig.l1 * s2]);
+    const ee    = vAdd(elbow,    [sign * ikConfig.l2 * s1 * c23, -ikConfig.l2 * c1 * c23, ikConfig.l2 * s23]);
+    return {S: shoulder, E: elbow, EE: ee};
 }
 
 function ikBasis() {
