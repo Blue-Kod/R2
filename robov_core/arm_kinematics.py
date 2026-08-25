@@ -534,7 +534,6 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     def score(error, natural, theta):
         total = error + min(natural, natural_cap)
         # Штраф за решения на границе crane/natural зон (|theta0|≈90):
-        # FK-модель переключается между Rz и Ry,精度 падает.
         boundary_dist = abs(abs(theta[0]) - PAN_MIRROR_LO)
         if boundary_dist < 10.0:
             total += (10.0 - boundary_dist) * 0.5
@@ -556,14 +555,34 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         best = min(candidates, key=lambda item: item[0])
         return best[1], best[2]
 
-    continuity = _pick_continuity()
-    if continuity is not None and continuity[0] <= continuity_budget:
-        best_error, best_theta = continuity
-    else:
-        accurate = [item for item in results if item[0] <= IK_TOLERANCE_MM]
-        pool = accurate if accurate else results
-        best = min(pool, key=lambda item: item[0] + min(item[1], natural_cap))
+    # Разделяем результаты на natural и crane ветки
+    natural_results = [r for r in results if not _pan_mirror(r[2][0])]
+    crane_results = [r for r in results if _pan_mirror(r[2][0])]
+
+    # Если есть natural-решение в пределах толерантности — предпочитаем его
+    natural_ok = [r for r in natural_results if r[0] <= IK_TOLERANCE_MM]
+
+    if natural_ok:
+        # Natural доступен: continuityBudget берём из natural-ветки
+        continuity = _pick_continuity()
+        if (continuity is not None and continuity[0] <= continuity_budget
+                and not _pan_mirror(continuity[1][0])):
+            best_error, best_theta = continuity
+        else:
+            best = min(natural_ok, key=lambda item: item[0] + min(item[1], natural_cap))
+            best_error, _, best_theta = best
+    elif crane_results:
+        # Только crane доступен — берём лучший crane
+        best = min(crane_results, key=lambda item: item[0])
         best_error, _, best_theta = best
+    else:
+        # Нет решений — берём лучшее из всех
+        continuity = _pick_continuity()
+        if continuity is not None and continuity[0] <= continuity_budget:
+            best_error, best_theta = continuity
+        else:
+            best = min(results, key=lambda item: item[0] + min(item[1], natural_cap))
+            best_error, _, best_theta = best
 
     clamped = [float(v) for v in wanted]
     err = best_error
@@ -602,6 +621,16 @@ def _solve_natural(target, left, start=None):
             if all(max(abs(a - b) for a, b in zip(theta, old)) > 10.0
                    for old in picked):
                 picked.append(theta)
+        # Гарантируем хотя бы один natural-кандидат для предпочтения natural-ветки
+        natural_mask = np.abs(coarse[0])[:, None, None] < PAN_MIRROR_LO
+        natural_scores = np.where(natural_mask, scores, 1e6)
+        best_nat_idx = np.argmin(natural_scores.ravel())
+        i1, i2, i3 = np.unravel_index(best_nat_idx, scores.shape)
+        best_nat = (float(coarse[0][i1]), float(coarse[1][i2]),
+                    float(coarse[2][i3]))
+        if all(max(abs(a - b) for a, b in zip(best_nat, old)) > 10.0
+               for old in picked):
+            picked.append(best_nat)
         return picked
 
     starts = _pick_start(errors)
@@ -658,7 +687,7 @@ if __name__ == "__main__":
     assert np.allclose(mirrored, expected), "left arm must mirror right arm"
 
     # Самосогласованность: точка кисти позы достигается решателем.
-    for theta, is_left in (((-200.0, 40.0, -60.0), False),
+    for theta, is_left in (((-30.0, 40.0, 130.0), False),
                            ((150.0, 50.0, -30.0), True)):
         point = fk(theta, is_left)["EE"]
         result = ik_solve(*point, left=is_left)

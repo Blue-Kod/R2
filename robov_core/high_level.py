@@ -757,6 +757,10 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
             result["message"] += "; не удалось запустить движение серво"
             return result
     _last_ik_start[left] = arm_kinematics.theta_from_commands(limited, left)
+    # Если решение в crane-зоне (Rz модель неточна), сбрасываем start,
+    # чтобы следующий вызов не continuity-ился на неверную ветку.
+    if arm_kinematics._pan_mirror(_last_ik_start[left][0]):
+        _last_ik_start[left] = None
     result["servo"] = {ch: int(round(v)) for ch, v in limited.items()}
     result["moved"] = True
     return result
