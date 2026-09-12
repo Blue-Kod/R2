@@ -17,7 +17,7 @@ from flask import (
 )
 
 from robov_core.high_level import (
-    APP_PASSWORD, ROOT_DIR,
+    ROOT_DIR, check_root_password,
     get_stereo_camera, health_snapshot, ip_address,
     shell_output, shell_start, shell_write,
     set_emote, get_emote, supported_emotes,
@@ -70,7 +70,7 @@ def create_app() -> Flask:
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
             password = str(data.get("password", ""))
-            if password == APP_PASSWORD:
+            if check_root_password(password):
                 session["authenticated"] = True
                 return jsonify({"status": "ok"})
             return jsonify({"error": "Wrong password"}), 403
@@ -80,7 +80,7 @@ def create_app() -> Flask:
     def api_login():
         data = request.get_json(silent=True) or {}
         password = str(data.get("password", ""))
-        if password == APP_PASSWORD:
+        if check_root_password(password):
             session["authenticated"] = True
             return jsonify({"status": "ok"})
         return jsonify({"error": "Wrong password"}), 403

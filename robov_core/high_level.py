@@ -29,9 +29,54 @@ CAMERA_SOURCE = 0
 CAMERA_PARAMS_FILE = "cam_params.json"
 LAUNCHER_SCRIPT = "launcher.py"
 EYES_SCALE_FACTOR = 1.3
-APP_PASSWORD = "admin."
+APP_PASSWORD = "orangepi"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# --- Проверка пароля входа: пароль root ОС (Orange Pi — "orangepi") ---
+
+def _root_shadow_hash() -> Optional[str]:
+    """Хеш пароля root из /etc/shadow (None, если недоступен)."""
+    try:
+        with open("/etc/shadow", "r", encoding="utf-8", errors="replace") as file:
+            for line in file:
+                name, rest = line.split(":", 1)
+                if name == "root":
+                    return rest.split(":", 1)[0]
+    except Exception:
+        return None
+    return None
+
+
+def check_root_password(password: str) -> bool:
+    """Проверить пароль по хешу root из /etc/shadow.
+
+    Пароль веб-панели совпадает с паролем пользователя root системы
+    (по умолчанию на Orange Pi — "orangepi"). Если /etc/shadow недоступен
+    (не-root процесс, Windows/mock), используется "orangepi" как запасной.
+    """
+    entry = _root_shadow_hash()
+    locked = entry in ("!", "*", "!!") or (entry and entry.startswith(("!", "*")))
+    if entry and not locked:
+        try:
+            import crypt  # Python <= 3.12 (удалён в 3.13+)
+            if crypt.crypt(password, entry) == entry:
+                return True
+        except Exception:
+            pass
+        try:
+            scheme = entry.split("$")[1] if entry.count("$") >= 3 else ""
+            flag = {"1": "-1", "5": "-5", "6": "-6"}.get(scheme)
+            if flag:
+                salt = entry.split("$")[2]
+                out = subprocess.run(
+                    ["openssl", "passwd", flag, "-salt", salt, password],
+                    capture_output=True, text=True, timeout=5)
+                if out.returncode == 0 and out.stdout.strip() == entry:
+                    return True
+        except Exception:
+            pass
+    return password == APP_PASSWORD
 
 # --- Global state ---
 _camera: Optional[StereoCamera] = None

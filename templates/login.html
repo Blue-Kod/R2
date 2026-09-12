@@ -25,28 +25,62 @@
 <body>
     <div class="login-box">
         <h1>R2</h1>
-        <p>Введите пароль для доступа к панели управления</p>
-        <input type="password" id="passwordInput" placeholder="Пароль" autofocus>
-        <button id="loginBtn" onclick="doLogin()">Войти</button>
-        <div class="error" id="errorMsg">Неверный пароль</div>
+        <p id="subtitle">Введите пароль для доступа к панели управления</p>
+        <div id="authForm">
+            <input type="password" id="passwordInput" placeholder="Пароль" autocomplete="current-password">
+            <button id="loginBtn" onclick="doLogin()">Войти</button>
+            <div class="error" id="errorMsg">Неверный пароль</div>
+        </div>
         <div class="loading" id="loadingMsg">Вход...</div>
     </div>
     <script>
-        document.getElementById('passwordInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
-        async function doLogin() {
-            const btn = document.getElementById('loginBtn');
-            const err = document.getElementById('errorMsg');
-            const loading = document.getElementById('loadingMsg');
-            const pwd = document.getElementById('passwordInput').value;
-            if (!pwd.trim()) return;
-            btn.disabled = true; loading.classList.add('show'); err.classList.remove('show');
+        const STORE_KEY = 'r2_pwd';
+        const input = document.getElementById('passwordInput');
+        const btn = document.getElementById('loginBtn');
+        const err = document.getElementById('errorMsg');
+        const loading = document.getElementById('loadingMsg');
+        const form = document.getElementById('authForm');
+
+        function showLoading(text) { form.style.display = 'none'; loading.textContent = text || 'Вход...'; loading.classList.add('show'); }
+        function showForm() { form.style.display = ''; loading.classList.remove('show'); if (input) input.focus(); }
+
+        async function tryLogin(pwd) {
+            if (!pwd) return false;
             try {
-                const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pwd}) });
-                if (r.ok) { window.location.href = '/'; return; }
-                const d = await r.json();
+                const r = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pwd })
+                });
+                if (r.ok) return true;
+                const d = await r.json().catch(() => ({}));
                 err.textContent = d.error || 'Неверный пароль';
-            } catch(e) { err.textContent = 'Ошибка соединения'; }
-            err.classList.add('show'); loading.classList.remove('show'); btn.disabled = false;
+            } catch (e) { err.textContent = 'Ошибка соединения'; }
+            return false;
+        }
+
+        window.addEventListener('DOMContentLoaded', async () => {
+            const saved = localStorage.getItem(STORE_KEY);
+            if (!saved) { showForm(); return; }
+            showLoading('Вход...');
+            if (await tryLogin(saved)) { window.location.href = '/'; return; }
+            localStorage.removeItem(STORE_KEY);
+            err.classList.add('show');
+            showForm();
+        });
+
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+        async function doLogin() {
+            const pwd = input.value.trim();
+            if (!pwd) return;
+            btn.disabled = true; showLoading('Вход...'); err.classList.remove('show');
+            if (await tryLogin(pwd)) {
+                localStorage.setItem(STORE_KEY, pwd);
+                window.location.href = '/';
+                return;
+            }
+            err.classList.add('show'); showForm(); btn.disabled = false;
         }
     </script>
 </body>
