@@ -242,13 +242,14 @@ class StereoCamera:
             self.cap.release()
             self.cap = None
 
-    def _process_frame(self, raw: np.ndarray, left: bool) -> np.ndarray:
+    def _process_frame(self, raw: np.ndarray, left: bool, size=None) -> np.ndarray:
         h, w = raw.shape[:2]
         half = w // 2
         side = raw[:, :half] if left else raw[:, half:]
         h, w = side.shape[:2]
-        if (w, h) != self.img_size:
-            side = cv2.resize(side, self.img_size)
+        target = size if size is not None else self.img_size
+        if (w, h) != target:
+            side = cv2.resize(side, target)
         return side
 
     def _no_camera_frame(self) -> np.ndarray:
@@ -268,19 +269,19 @@ class StereoCamera:
             img = None
         return img
 
-    def get_rectified_frame(self, left: bool = True) -> Optional[np.ndarray]:
+    def get_rectified_frame(self, left: bool = True, size=None) -> Optional[np.ndarray]:
         if self.backend == "ffmpeg":
             raw = self._decode_latest()
             if raw is None:
                 return None
-            return self._process_frame(raw, left)
+            return self._process_frame(raw, left, size)
         if not self.cap or not self.cap.isOpened():
             if not self.initialize_camera():
                 return None
         ret, raw = self.cap.read()
         if not ret:
             return None
-        return self._process_frame(raw, left)
+        return self._process_frame(raw, left, size)
 
     def get_frame(self) -> np.ndarray:
         if self.backend == "ffmpeg":

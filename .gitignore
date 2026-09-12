@@ -11,3 +11,6 @@ __pycache__/
 
 # Self-signed TLS certificates (generated at runtime)
 /certs/
+
+# Collected VLA training data (parquet + meta.json)
+/collected_data/

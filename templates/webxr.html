@@ -19,6 +19,16 @@
         #enterBtn { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 20; background: #44944a; color: #fff; border: none; border-radius: 14px; padding: 14px 28px; font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.4); }
         #enterBtn:hover { background: #54a85a; }
         #enterBtn.hidden { display: none; }
+        .settings-btn { position: fixed; left: 14px; bottom: 14px; z-index: 30; background: rgba(10,10,10,0.72); color: #f0f0f0; border: 1px solid #2a2a2a; border-radius: 12px; width: 44px; height: 44px; font-size: 18px; cursor: pointer; }
+        .settings-btn:hover { border-color: #44944a; }
+        .settings { position: fixed; left: 14px; bottom: 64px; z-index: 30; background: rgba(10,10,10,0.92); border: 1px solid #2a2a2a; border-radius: 12px; padding: 12px 14px; width: 300px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+        .settings.hidden { display: none; }
+        .settings label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .settings input[type=checkbox] { width: 16px; height: 16px; accent-color: #44944a; }
+        .settings .desc { color: #9aa0aa; font-size: 11px; padding-left: 24px; }
+        .settings .dc-status { color: #8ab4ff; font-size: 12px; border-top: 1px solid #2a2a2a; padding-top: 8px; white-space: pre-line; }
+        .settings .dc-status b { color: #44944a; }
+        .settings .dc-status.warn { color: #ffb454; }
     </style>
     <script src="/static/vendor/three.min.js"></script>
 </head>
@@ -32,6 +42,15 @@
 </div>
 <div class="freeze-badge" id="freezeBadge">⏸ FREEZE</div>
 <button id="enterBtn" class="hidden">Войти в VR</button>
+
+<button id="settingsBtn" class="settings-btn" title="Настройки">⚙</button>
+<div class="settings hidden" id="settingsPanel">
+    <label><input type="checkbox" id="optScale"> Сжатие координат 1:0.5</label>
+    <div class="desc">X/Y целей рук из шлема делятся на 2 (вбок/вверх); Z — полная.</div>
+    <label><input type="checkbox" id="optCollect"> Сбор данных (VLA)</label>
+    <div class="desc">Тап A/X = новый эпизод в R2/collected_data (вместо FREEZE).</div>
+    <div class="dc-status" id="dcStatus">—</div>
+</div>
 
 <script>
 const serverData = {
@@ -49,7 +68,11 @@ const TILT_MIN = 45, TILT_MAX = 135;
 const GRIP_RIGHT_CH = 8, GRIP_LEFT_CH = 9;
 const GRIP_CLOSE = 180, GRIP_OPEN = 0;
 const ROBOT_Y_OFFSET = -0.15;  // м: торс ниже шлема на 15 см
-const HAND_SCALE = 0.5;        // масштаб X/Y целей рук (вбок/вверх); дальность Z — полная
+// Масштаб X/Y целей рук (вбок/вверх); дальность Z — полная. «Сжатие 1:0.5»
+// — значение 0.5; можно выключить в настройках (localStorage r2_webxr_scale).
+const LS_SCALE = 'r2_webxr_scale';
+const LS_COLLECT = 'r2_webxr_collect';
+let HAND_SCALE = localStorage.getItem(LS_SCALE) === 'full' ? 1.0 : 0.5;
 const SEND_HZ = 20;
 const ANGLE_DEADBAND = 0.3;   // градусы
 const TARGET_DEADBAND = 8;    // мм
@@ -215,6 +238,112 @@ let smoothedTarget = { right: null, left: null };  // сглаженные це�
 function setStatus(text) {
     document.getElementById('teleop-status').innerHTML = text;
 }
+
+// ==== Настройки сессии (localStorage) + сбор данных ====
+let collectMode = localStorage.getItem(LS_COLLECT) === '1';
+let dcActive = false, dcEpisode = null, dcFrames = 0, dcEpisodesTotal = 0, dcStartText = null;
+const dcStatusEl = document.getElementById('dcStatus');
+
+function fmtDT(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
+}
+
+function updateHint() {
+    const hint = document.getElementById('hint');
+    if (collectMode && dcActive) {
+        hint.innerHTML = `Сбор данных начат: <b class="ok">${fmtDT(dcStartText)}</b><br>Эпизод <b>${dcEpisode}</b> · кадров <b>${dcFrames}</b>`;
+    } else if (collectMode) {
+        hint.innerHTML = 'Режим сбора <b>ВКЛ</b> — тап A/X = новый эпизод (данные в R2/collected_data)';
+    } else {
+        hint.innerHTML = 'Шлем — голова (±45°). Контроллеры — цели рук. Курок — схват (зажат = 180). Тап A/X — FREEZE, удержание A/X — ресет центра/направления.';
+    }
+}
+
+function setDCStatus(text, warn) {
+    dcStatusEl.innerHTML = text;
+    dcStatusEl.classList.toggle('warn', !!warn);
+}
+
+function renderDCStatus(s) {
+    if (!s) return;
+    dcActive = !!s.collecting;
+    dcEpisode = s.episode_index;
+    dcFrames = s.frames;
+    dcStartText = s.episode_start;
+    dcEpisodesTotal = s.episodes_total;
+    const t = [];
+    t.push(`Эпизодов собрано: <b>${dcEpisodesTotal}</b>`);
+    if (dcActive) {
+        t.push(`Сбор идёт: эпизод <b>${dcEpisode}</b>, кадров <b>${dcFrames}</b>, с <b>${fmtDT(dcStartText)}</b>`);
+    }
+    setDCStatus(t.join('<br>'));
+    updateHint();
+}
+
+async function refreshDC() {
+    try {
+        const r = await fetch('/api/datacollect/status', { cache: 'no-store' });
+        const d = await r.json();
+        if (d && typeof d === 'object' && 'collecting' in d) renderDCStatus(d);
+    } catch (e) {}
+}
+
+async function collectButton() {
+    if (!collectMode) return;
+    try {
+        if (dcActive) {
+            const r = await fetch('/api/datacollect/stop', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+            });
+            const d = await r.json();
+            if (d && d.episode) {
+                dcActive = false;
+                setDCStatus(`Эпизод <b>${d.episode.episode_index}</b> сохранён — <b>${d.episode.rows}</b> кадров, ${d.episode.duration_s} с`);
+                setStatus(`сбор остановлен: эпизод ${d.episode.episode_index}`);
+            }
+        } else {
+            const r = await fetch('/api/datacollect/start', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+            });
+            const d = await r.json();
+            if (d && d.status === 'ok') {
+                dcActive = true; dcEpisode = d.episode_index; dcStartText = d.episode_start;
+                setDCStatus(`Сбор начат: <b>${fmtDT(dcStartText)}</b> — эпизод <b>${dcEpisode}</b>`);
+            }
+        }
+        updateHint();
+        refreshDC();
+    } catch (e) {
+        setDCStatus('ошибка сборки: ' + e, true);
+    }
+}
+
+(function initSettings() {
+    const scaleToggle = document.getElementById('optScale');
+    const collectToggle = document.getElementById('optCollect');
+    scaleToggle.checked = HAND_SCALE === 0.5;
+    collectToggle.checked = collectMode;
+    scaleToggle.addEventListener('change', () => {
+        HAND_SCALE = scaleToggle.checked ? 0.5 : 1.0;
+        localStorage.setItem(LS_SCALE, scaleToggle.checked ? 'compressed' : 'full');
+        smoothedTarget = { right: null, left: null };  // пересчёт целей по новому масштабу
+    });
+    collectToggle.addEventListener('change', () => {
+        collectMode = collectToggle.checked;
+        localStorage.setItem(LS_COLLECT, collectMode ? '1' : '0');
+        if (!collectMode && dcActive) collectButton();
+        updateHint();
+        refreshDC();
+    });
+    document.getElementById('settingsBtn').addEventListener('click', () => {
+        document.getElementById('settingsPanel').classList.toggle('hidden');
+    });
+    refreshDC();
+    setInterval(() => { if (dcActive) refreshDC(); }, 1000);
+})();
 
 // ==== Главный цикл ====
 const euler = new THREE.Euler();
@@ -415,6 +544,8 @@ function pollFreeze() {
                 holdState.delete(src);
                 if (st.long) {
                     recenterRequested = true;  // удержание -> ресет при отпускании
+                } else if (collectMode) {
+                    collectButton();           // тап в режиме сбора -> новый/конец эпизода
                 } else {
                     onFreezeButton(src.handedness, true); // тап -> тоггл freeze
                 }

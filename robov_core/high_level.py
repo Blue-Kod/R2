@@ -563,6 +563,12 @@ def cleanup() -> None:
     _shutdown_requested = True
     _shell_running = False
 
+    try:
+        from robov_core.web import _collector
+        _collector.close()
+    except Exception:
+        pass
+
     stop_display()
 
     if _servo is not None:

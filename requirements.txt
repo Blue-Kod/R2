@@ -28,3 +28,6 @@ python-dotenv>=1.0.0
 
 # WebSocket support
 websockets>=11.0.0
+
+# Parquet data collection (LeRobot format) for VLA training
+pyarrow>=15.0.0

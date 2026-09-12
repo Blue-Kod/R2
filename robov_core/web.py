@@ -18,14 +18,21 @@ from flask import (
 
 from robov_core.high_level import (
     ROOT_DIR, check_root_password,
+    get_servo_angles, get_servo_limits,
     get_stereo_camera, health_snapshot, ip_address,
     shell_output, shell_start, shell_write,
     set_emote, get_emote, supported_emotes,
     set_eyes_position, get_eyes_position, get_logs,
-    get_servo_angles, get_servo_offsets, get_servo_limits,
-    set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
+    get_servo_offsets, set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
 )
 from robov_core.arm_kinematics import browser_config
+from robov_core.data_collector import DataCollector
+
+_collector = DataCollector(
+    state_getter=get_servo_angles,
+    camera_getter=get_stereo_camera,
+    limits_getter=get_servo_limits,
+)
 
 
 _mjpeg_counter: int = 0
@@ -190,6 +197,78 @@ def create_app() -> Flask:
             if value is not None:
                 set_servo_command(channel, int(round(value)))
         return jsonify(result)
+
+    # --- Data collection (R2/collected_data) ---
+
+    @app.route("/api/datacollect/status")
+    @require_auth
+    def api_dc_status():
+        return jsonify(_collector.status())
+
+    @app.route("/api/datacollect/start", methods=["POST"])
+    @require_auth
+    def api_dc_start():
+        data = request.get_json(silent=True) or {}
+        task = str(data.get("task", "")).strip()
+        try:
+            _collector.start(task=task)
+        except RuntimeError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 409
+        return jsonify({"status": "ok", **{k: v for k, v in _collector.status().items()
+                                           if k != "collecting"}})
+
+    @app.route("/api/datacollect/stop", methods=["POST"])
+    @require_auth
+    def api_dc_stop():
+        try:
+            result = _collector.stop()
+        except RuntimeError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 409
+        return jsonify({"status": "ok", "episode": result["episode"]})
+
+    @app.route("/api/datacollect/datasets")
+    @require_auth
+    def api_dc_datasets():
+        return jsonify({"datasets": _collector.list_datasets()})
+
+    @app.route("/api/datacollect/download")
+    @require_auth
+    def api_dc_download():
+        try:
+            episode = int(request.args.get("episode", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "episode must be an integer"}), 400
+        path = _collector.dataset_file(episode)
+        if path is None:
+            return jsonify({"error": f"Episode {episode} not found"}), 404
+        return send_file(str(path), as_attachment=True,
+                         download_name=f"episode_{episode:06d}.parquet")
+
+    @app.route("/api/datacollect/view")
+    @require_auth
+    def api_dc_view():
+        try:
+            episode = int(request.args.get("episode", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "episode must be an integer"}), 400
+        table = _collector.dataset_parquet(episode)
+        if table is None:
+            return jsonify({"error": f"Episode {episode} not found"}), 404
+        meta = {}
+        for record in _collector.list_datasets():
+            if record.get("episode_index") == episode:
+                meta = record
+                break
+        preview = {
+            "episode_index": episode,
+            "rows": table.num_rows,
+            "schema": [str(field.type) for field in table.schema],
+            "first_state": table.column("observation.state").to_pylist()[0]
+            if table.num_rows else [],
+            "last_state": table.column("observation.state").to_pylist()[-1]
+            if table.num_rows else [],
+        }
+        return jsonify({"episode": {**meta, "preview": preview}})
 
     # --- API ---
 
