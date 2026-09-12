@@ -140,6 +140,18 @@ TABLE_Z1 = 1500.0
 TABLE_MARGIN = 0.0
 TABLE_MIN_Y = TABLE_TOP_Y + TABLE_MARGIN
 TABLE_COLLISION_PENALTY = 1e6
+# Кран-предпочтение (работает, пока TABLE_ENABLED): в рабочей зоне стола —
+# цель не выше TABLE_MIN_Y + TABLE_CRANE_ZONE — среди поз, достающих одну и
+# ту же цель, выбирается ветка с высоким локтем (elbow_y заметно выше кисти),
+# «кран-ветка», а не провисшая натуральная. Байас мягкий: TABLE_CRANE_LIFT —
+# целевой «лифт» elbow_y − ee_y (мм); за каждый мм недобора добавляется
+# TABLE_CRANE_WEIGHT мм-ошибки, но не более TABLE_CRANE_BIAS_MAX — чтобы кран
+# не ломал единственно достижимые позы. Выше зоны стола (например, работа
+# у головы) кран-предпочтение выключено — поведение прежнее.
+TABLE_CRANE_LIFT = 150.0
+TABLE_CRANE_WEIGHT = 5.0
+TABLE_CRANE_BIAS_MAX = 60.0
+TABLE_CRANE_ZONE = 200.0
 TABLE_START_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90,
     4: 230, 5: 230,
@@ -290,6 +302,19 @@ def _collides(theta: Sequence[float], left: bool) -> bool:
     return bool(f["E"][1] < TABLE_MIN_Y or f["EE"][1] < TABLE_MIN_Y)
 
 
+def _crane_lift_bias(elbow_y, ee_y):
+    """Добавочная стоимость за «низкий» локоть (кран-предпочтение).
+
+    Работает с массивами (сетки) и скалярами; 0, когда TABLE_ENABLED=False
+    или лифт elbow_y − ee_y уже достиг целевого TABLE_CRANE_LIFT.
+    """
+    if not TABLE_ENABLED:
+        return np.zeros_like(np.asarray(elbow_y, dtype=float))
+    return np.minimum(TABLE_CRANE_BIAS_MAX, TABLE_CRANE_WEIGHT * np.maximum(
+        0.0, TABLE_CRANE_LIFT - (np.asarray(elbow_y, dtype=float)
+                                 - np.asarray(ee_y, dtype=float))))
+
+
 def _ranges(left: bool, step: float, window: Optional[float],
             center: Optional[Sequence[float]] = None
             ) -> Tuple[np.ndarray, ...]:
@@ -307,12 +332,15 @@ def _ranges(left: bool, step: float, window: Optional[float],
 
 
 def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
-                  left: bool) -> Tuple[Tuple[float, float, float], float]:
+                  left: bool, prefer_crane: bool = False
+                  ) -> Tuple[Tuple[float, float, float], float]:
     positions, elbow = _fk_grid_positions(*ranges, left)
     error = np.linalg.norm(positions - target, axis=-1)
     if TABLE_ENABLED:
         below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
         error = error + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
+        if prefer_crane:
+            error = error + _crane_lift_bias(elbow[..., 1], positions[..., 1])
     index = int(np.argmin(error))
     i1, i2, i3 = np.unravel_index(index, error.shape)
     theta = (float(ranges[0][i1]), float(ranges[1][i2]), float(ranges[2][i3]))
@@ -355,21 +383,32 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     """
     z = -z
     wanted = np.array([float(x), float(y), float(z)], dtype=float)
+    prefer_crane = TABLE_ENABLED and wanted[1] < TABLE_MIN_Y + TABLE_CRANE_ZONE
     coarse = _ranges(left, *GRID_STEPS[0])
     positions, elbow = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - wanted, axis=-1)
     if TABLE_ENABLED:
         below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
         errors = errors + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
+    # Стартовые бассейны сеются по ДВУМ ценам: чистой (коллайдер, без крана)
+    # и кран-предпочтительной. Это гарантирует, что в старты попадут и
+    # узкие натуральные бассейны, и кран-бассейны; ветку выбирает финальный
+    # score ниже (кран-байас работает в каскаде и при выборе).
+    if prefer_crane:
+        errors_crane = errors + _crane_lift_bias(elbow[..., 1], positions[..., 1])
+    else:
+        errors_crane = errors
 
-    count = min(6, errors.size)
+    count = min(8, errors.size)
     starts = []
-    for index in np.argpartition(errors.ravel(), count - 1)[:count]:
-        i1, i2, i3 = np.unravel_index(index, errors.shape)
-        theta = (float(coarse[0][i1]), float(coarse[1][i2]), float(coarse[2][i3]))
-        if all(max(abs(a - b) for a, b in zip(theta, picked)) > 10.0
-               for picked in starts):
-            starts.append(theta)
+    for scored in (errors_crane, errors):
+        for index in np.argpartition(scored.ravel(), count - 1)[:count]:
+            i1, i2, i3 = np.unravel_index(index, scored.shape)
+            theta = (float(coarse[0][i1]), float(coarse[1][i2]),
+                     float(coarse[2][i3]))
+            if all(max(abs(a - b) for a, b in zip(theta, picked)) > 10.0
+                   for picked in starts):
+                starts.append(theta)
 
     if start is not None:
         model = limits(left, ik_only=True)
@@ -382,13 +421,16 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         current = theta
         for step, window in GRID_STEPS[1:]:
             current, _ = _best_on_grid(_ranges(left, step, window, current),
-                                       wanted, left)
+                                       wanted, left, prefer_crane=prefer_crane)
         ee = fk(current, left)["EE"]
         error = float(np.linalg.norm(ee - wanted))
         results.append((error, current))
 
     def score(error, theta):
         total = error
+        if prefer_crane:
+            f = fk(theta, left)
+            total += float(_crane_lift_bias(f["E"][1], f["EE"][1]))
         if start is not None:
             weights = (1.0, 0.5, 0.25)
             angle_cost = sum(w * (a - b) ** 2
@@ -467,6 +509,10 @@ if __name__ == "__main__":
         res = ik_solve(x, y, z, left=left)
         f = fk(res["theta"], left)
         ee_y, el_y = f["EE"][1], f["E"][1]
+        lift = el_y - ee_y
         clean = ee_y >= TABLE_MIN_Y - 1e-9 and el_y >= TABLE_MIN_Y - 1e-9
-        print(f"  ({x},{y},{z}) l={int(left)} -> ee_y={ee_y:6.1f} el_y={el_y:6.1f} "
-              f"min={TABLE_MIN_Y:6.1f} clean={clean} st={res['status']:9} {res['message']}")
+        ch4 = res["servo"][_channels(left)["shoulder_z"]]
+        print(f"  ({x},{y},{z}) l={int(left)} -> ch4={ch4:3} lift={lift:6.1f} "
+              f"ee_y={ee_y:6.1f} el_y={el_y:6.1f} min={TABLE_MIN_Y:6.1f} "
+              f"clean={clean} craned={lift >= TABLE_CRANE_LIFT} "
+              f"st={res['status']:9} {res['message']}")
