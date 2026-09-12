@@ -37,8 +37,6 @@
         .hidden { display: none !important; }
         .servo-controls { overflow-y: auto; flex: 1; padding-right: 6px; }
         .ik-pane { display:flex; flex-direction:column; flex:1; min-height:0; gap:10px; }
-        #ik-canvas { width:100%; aspect-ratio:1 / 1; min-height:230px; background:#090909; border:1px solid var(--line); border-radius:14px; touch-action:none; cursor:grab; }
-        #ik-canvas.dragging { cursor:grabbing; }
         .ik-arm-switch { display:flex; gap:8px; }
         .ik-arm-switch label { flex:1; display:flex; justify-content:center; align-items:center; gap:4px; border:1px solid var(--line); border-radius:9px; padding:7px; color:var(--muted); cursor:pointer; }
         .ik-coordinates { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
@@ -132,7 +130,6 @@
             </div>
             <div id="servo-pane" class="servo-controls"></div>
             <div id="ik-pane" class="ik-pane hidden">
-                <canvas id="ik-canvas" aria-label="3D модель рук"></canvas>
                 <div class="ik-arm-switch">
                     <label><input type="radio" name="ikArm" value="left"> ЛЕВАЯ</label>
                     <label><input type="radio" name="ikArm" value="right" checked> ПРАВАЯ</label>
@@ -209,7 +206,6 @@ const serverData = {
     servo_angles: {{ servo_angles | tojson }},
     servo_limits: {{ servo_limits | tojson }},
     servo_offsets: {{ servo_offsets | tojson }},
-    ik_config: {{ ik_config | tojson }},
     current_emote: "{{ current_emote }}",
     eyes_position: {{ eyes_position | tojson }},
     supported_emotes: {{ supported_emotes | tojson }},
@@ -242,7 +238,6 @@ const exitBtn = document.getElementById('exitBtn');
     const tabIk = document.getElementById('tabIk');
     const servoPane = document.getElementById('servo-pane');
     const ikPane = document.getElementById('ik-pane');
-    const ikCanvas = document.getElementById('ik-canvas');
     const ikStatus = document.getElementById('ik-status');
 
 // ===================== STATE RESTORE =====================
@@ -299,8 +294,6 @@ function updateServoVal(ch, val) {
 }
 
 async function setServo(ch, angle) {
-    ikAngles[ch] = angle;
-    drawIkView();
     try { await fetch(`/api/servo/${ch}/${angle}`, {method:'POST'}); } catch(e) {}
 }
 
@@ -313,170 +306,12 @@ for (let i=0; i<=9; i++) {
     }
 }
 
-// ===================== IK 3D VIEW =====================
-const ikConfig = serverData.ik_config;
-let ikAngles = {...(serverData.servo_angles || {})};
-let ikTarget = null;
-const ikView = {az:30, elev:22, dist:1500, center:[0,0,0], drag:null};
-
-function vAdd(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
-function vSub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
-function vMul(a, n) { return [a[0]*n, a[1]*n, a[2]*n]; }
-function vDot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
-function vCross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
-function vNorm(a) { const n=Math.hypot(...a); return n ? vMul(a, 1/n) : [0,0,0]; }
-
-function ikFk(side) {
-    const ch = ikConfig.channels[side];
-    const rest = ikConfig.rest;
-    const right = side === 'right';
-    const PAN_MIRROR_LO = ikConfig.pan_mirror_lo || 90;
-    const AFFINE_T1_LO = ikConfig.affine_t1_lo || 15;
-    const AFFINE_T1_HI = ikConfig.affine_t1_hi || 65;
-    // theta0: shoulder_z
-    const cz = ikAngles[ch.shoulder_z] ?? rest[ch.shoulder_z];
-    const t0 = (right ? (rest[ch.shoulder_z] - cz) : (cz - rest[ch.shoulder_z]));
-    // Панорама зеркальна во всей верхней полусфере (|theta0| > 90°).
-    const panMirror = Math.abs(t0) > PAN_MIRROR_LO;
-    const cx = ikAngles[ch.shoulder_x] ?? rest[ch.shoulder_x];
-    const t1 = (panMirror ? (rest[ch.shoulder_x] - cx) : (cx - rest[ch.shoulder_x]));
-    const t2 = (rest[ch.elbow_x] - (ikAngles[ch.elbow_x] ?? rest[ch.elbow_x]));
-    const sign = side === 'left' ? -1 : 1;
-    const shoulder = [sign * ikConfig.base_x, 0, 0];
-
-    // Двухзонная модель: Rz (кран-зона) или Ry (природная).
-    const inEnvelope = Math.abs(t1) >= AFFINE_T1_LO && Math.abs(t1) <= AFFINE_T1_HI;
-    if (!panMirror && inEnvelope) {
-        // Ry-модель с аффинным маппингом.
-        const affine = ikConfig.natural_affine[side];
-        const a4 = affine[0], a2 = affine[1], a3 = affine[2];
-        const t4  = a4[0] + a4[1] * t0 + a4[2] * t1;
-        const t2p = a2[0] + a2[1] * t0 + a2[2] * t1;
-        const t3p = a3[0] + a3[1] * t0 + a3[2] * t2;
-        const deg2rad = Math.PI / 180;
-        const s4  = Math.sin(t4 * deg2rad),  c4  = Math.cos(t4 * deg2rad);
-        const s2p = Math.sin(t2p * deg2rad), c2p = Math.cos(t2p * deg2rad);
-        const s23 = Math.sin((t2p + t3p) * deg2rad), c23p = Math.cos((t2p + t3p) * deg2rad);
-        const elbow = vAdd(shoulder, [ikConfig.l1 * s4 * s2p, -ikConfig.l1 * c2p, ikConfig.l1 * c4 * s2p]);
-        const ee    = vAdd(elbow,    [ikConfig.l2 * s4 * s23, -ikConfig.l2 * c23p, ikConfig.l2 * c4 * s23]);
-        return {S: shoulder, E: elbow, EE: ee};
-    }
-    // Rz-модель (кран-зона или fallback).
-    const t1rad = t0 * Math.PI / 180, t2rad = t1 * Math.PI / 180, t3rad = t2 * Math.PI / 180;
-    const c1 = Math.cos(t1rad), s1 = Math.sin(t1rad), c2 = Math.cos(t2rad), s2 = Math.sin(t2rad);
-    const c23 = Math.cos(t2rad + t3rad), s23 = Math.sin(t2rad + t3rad);
-    const elbow = vAdd(shoulder, [sign * ikConfig.l1 * s1 * c2, -ikConfig.l1 * c1 * c2, ikConfig.l1 * s2]);
-    const ee    = vAdd(elbow,    [sign * ikConfig.l2 * s1 * c23, -ikConfig.l2 * c1 * c23, ikConfig.l2 * s23]);
-    return {S: shoulder, E: elbow, EE: ee};
-}
-
-function ikBasis() {
-    const az=ikView.az*Math.PI/180, el=ikView.elev*Math.PI/180;
-    const ce=Math.cos(el), se=Math.sin(el);
-    const eye=vAdd(ikView.center, vMul([ce*Math.sin(az), se, ce*Math.cos(az)], ikView.dist));
-    const f=vNorm(vSub(ikView.center, eye));
-    let r=vNorm(vCross(f, [0,1,0]));
-    if (Math.hypot(...r) < 1e-6) r=[1,0,0];
-    return {eye, r, u:vCross(r,f), f};
-}
-
-function ikProject(point, basis, width, height) {
-    const d=vSub(point, basis.eye), depth=vDot(d, basis.f);
-    if (depth < 80) return null;
-    const scale=(0.55*Math.min(width,height))/depth;
-    return [width/2+vDot(d,basis.r)*scale, height/2-vDot(d,basis.u)*scale, depth];
-}
-
-function drawIkView() {
-    if (!ikCanvas || !ikConfig) return;
-    const rect=ikCanvas.getBoundingClientRect();
-    const width=Math.max(1, rect.width), height=Math.max(1, rect.height);
-    const dpr=window.devicePixelRatio || 1;
-    if (ikCanvas.width !== Math.round(width*dpr) || ikCanvas.height !== Math.round(height*dpr)) {
-        ikCanvas.width=Math.round(width*dpr); ikCanvas.height=Math.round(height*dpr);
-    }
-    const ctx=ikCanvas.getContext('2d');
-    ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,width,height);
-    const basis=ikBasis();
-    const P=p => ikProject(p,basis,width,height);
-    const line=(a,b,color='#555',lineWidth=1,dash=[]) => {
-        const pa=P(a), pb=P(b); if (!pa || !pb) return;
-        ctx.save(); ctx.strokeStyle=color; ctx.lineWidth=lineWidth; ctx.setLineDash(dash);
-        ctx.beginPath(); ctx.moveTo(pa[0],pa[1]); ctx.lineTo(pb[0],pb[1]); ctx.stroke(); ctx.restore();
-    };
-    const label=(point,text,color) => { const p=P(point); if (!p) return; ctx.fillStyle=color; ctx.font='11px system-ui'; ctx.fillText(text,p[0]+5,p[1]-5); };
-
-    for (let i=-5;i<=5;i++) {
-        const v=i*100; line([v,0,-500],[v,0,500],'#222'); line([-500,0,v],[500,0,v],'#222');
-    }
-    for (const [name,dir,color] of [['X',[1,0,0],'#cc4444'],['Y',[0,1,0],'#44aa55'],['Z',[0,0,1],'#4a7cff']]) {
-        const end=vMul(dir,300); line([0,0,0],end,color,2); label(end,name,color);
-    }
-
-    const t=ikConfig.torso, corners=[];
-    for (const sx of [-1,1]) for (const sz of [-1,1]) for (const sy of [-1,1]) corners.push([sx*t.half_width,sy*t.half_height,sz*t.half_depth]);
-    for (const [a,b] of [[0,1],[1,3],[3,2],[2,0],[4,5],[5,7],[7,6],[6,4],[0,4],[1,5],[2,6],[3,7]]) line(corners[a],corners[b],'#777',2);
-    const head=[0,ikConfig.head.y,0], hp=P(head);
-    if (hp) { const radius=Math.max(2,ikConfig.head.radius*0.55*Math.min(width,height)/hp[2]); ctx.fillStyle='#e6ddd0'; ctx.strokeStyle='#999'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(hp[0],hp[1],radius,0,Math.PI*2); ctx.fill(); ctx.stroke(); }
-    line([0,t.half_height,0],[0,ikConfig.head.y-ikConfig.head.radius,0],'#777',4);
-
-    const activeSide=document.querySelector('input[name="ikArm"]:checked')?.value || 'right';
-    for (const side of ['left','right']) {
-        const arm=ikFk(side), color=side===activeSide ? '#f1f1f1' : '#7c8793';
-        for (const radius of [ikConfig.l1+ikConfig.l2, Math.abs(ikConfig.l1-ikConfig.l2)]) {
-            const points=[];
-            for (let i=0;i<=72;i++) { const a=i*Math.PI*2/72; points.push([arm.S[0]+radius*Math.cos(a),0,radius*Math.sin(a)]); }
-            for (let i=1;i<points.length;i++) line(points[i-1],points[i],'#303030',1,[4,3]);
-        }
-        line(arm.S,arm.E,color,5); line(arm.E,arm.EE,color,5);
-        for (const [point,name] of [[arm.S,'S'],[arm.E,'E'],[arm.EE,side==='left'?'L':'R']]) {
-            const p=P(point); if (!p) continue; ctx.fillStyle=color; ctx.beginPath(); ctx.arc(p[0],p[1],side===activeSide?5:4,0,Math.PI*2); ctx.fill(); label(point,name,color);
-        }
-    }
-    if (ikTarget) {
-        const p=P(ikTarget), arm=ikFk(activeSide); line(arm.S,ikTarget,'#ff6a4d',1,[5,3]);
-        if (p) { ctx.strokeStyle='#ff6a4d'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(p[0],p[1],7,0,Math.PI*2); ctx.stroke(); label(ikTarget,'цель','#ff6a4d'); }
-    }
-    ctx.fillStyle='#8c8c8c'; ctx.font='10px system-ui'; ctx.fillText('drag: вращение | Shift+drag: панорама | колесо: зум | 2-клик: сброс',8,15);
-}
-
-async function pollIkAngles() {
-    try {
-        const r=await fetch('/api/servo/angles');
-        if (!r.ok) return;
-        const data=await r.json(); ikAngles=data.angles || ikAngles;
-        drawIkView();
-    } catch(e) {}
-}
-
-function resetIkView() { ikView.az=30; ikView.elev=22; ikView.dist=1500; ikView.center=[0,0,0]; drawIkView(); }
-
-function initIkViewer() {
-    if (!ikCanvas) return;
-    ikCanvas.addEventListener('mousedown', e => { ikView.drag={x:e.clientX,y:e.clientY,shift:e.shiftKey}; ikCanvas.classList.add('dragging'); });
-    window.addEventListener('mouseup', () => { ikView.drag=null; ikCanvas.classList.remove('dragging'); });
-    window.addEventListener('mousemove', e => {
-        if (!ikView.drag) return;
-        const dx=e.clientX-ikView.drag.x, dy=e.clientY-ikView.drag.y; ikView.drag.x=e.clientX; ikView.drag.y=e.clientY;
-        if (ikView.drag.shift) {
-            const b=ikBasis(), rect=ikCanvas.getBoundingClientRect(), k=ikView.dist/(0.55*Math.min(rect.width,rect.height));
-            ikView.center=vAdd(vSub(ikView.center,vMul(b.r,dx*k)),vMul(b.u,dy*k));
-        } else { ikView.az=(ikView.az+dx*.5)%360; ikView.elev=Math.max(-89,Math.min(89,ikView.elev+dy*.5)); }
-        drawIkView();
-    });
-    ikCanvas.addEventListener('wheel', e => { e.preventDefault(); ikView.dist=Math.max(500,Math.min(6000,ikView.dist*(e.deltaY<0?.88:1.14))); drawIkView(); }, {passive:false});
-    ikCanvas.addEventListener('dblclick', resetIkView);
-    new ResizeObserver(drawIkView).observe(ikCanvas);
-    document.querySelectorAll('input[name="ikArm"]').forEach(el => el.addEventListener('change', drawIkView));
-    document.getElementById('ik-move-btn').onclick=moveToIk;
-    drawIkView();
-}
-
+// ===================== IK (расчёт на сервере: arm_kinematics) =====================
 async function moveToIk() {
     const side=document.querySelector('input[name="ikArm"]:checked')?.value || 'right';
     const x=Number(document.getElementById('ik-x').value), y=Number(document.getElementById('ik-y').value), z=Number(document.getElementById('ik-z').value);
     if (![x,y,z].every(Number.isFinite)) { ikStatus.textContent='Введите числовые X, Y и Z.'; return; }
-    const btn=document.getElementById('ik-move-btn'); btn.disabled=true; ikTarget=[x,y,z]; drawIkView();
+    const btn=document.getElementById('ik-move-btn'); btn.disabled=true;
     try {
         const r=await fetch('/api/ik/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x,y,z,left:side==='left'})});
         const data=await r.json();
@@ -484,10 +319,11 @@ async function moveToIk() {
         const cmds=data.servo ? Object.entries(data.servo).map(([ch,value])=>`ch${ch}=${value}`).join('  ') : 'углы не определены';
         const dist=data.err_mm ? ` (ближайшая точка ~${Math.round(data.err_mm)} мм)` : '';
         ikStatus.textContent=`${data.ok ? '✓ достижима' : '✗ недостижима'}: ${data.message}. ${cmds}${dist}${data.moved ? ' — рука поехала в ближайшую достижимую точку.' : ''}`;
-        if (data.servo) { for (const [ch, val] of Object.entries(data.servo)) ikAngles[ch] = val; drawIkView(); }
     } catch(e) { ikStatus.textContent='Ошибка: '+e.message; }
     finally { btn.disabled=false; }
 }
+
+document.getElementById('ik-move-btn').onclick = moveToIk;
 
 // ===================== CAMERA =====================
 function applyEye() {
@@ -600,7 +436,6 @@ function attachEvents() {
         document.querySelectorAll('#leftTabs button').forEach(b => b.classList.remove('active'));
         tabIk.classList.add('active');
         ikPane.classList.remove('hidden'); servoPane.classList.add('hidden');
-        drawIkView(); pollIkAngles();
     };
     tabTerminal.onclick = () => {
         document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
@@ -797,14 +632,12 @@ async function init() {
     attachEvents();
     restoreState();
     await updateRenderParams();
-    initIkViewer();
     sshHostDisplay.textContent = location.hostname;
 
     fetchSystemStats();
     fetchTerminalOutput();
     setInterval(fetchSystemStats, 2200);
     setInterval(fetchTerminalOutput, 400);
-    setInterval(pollIkAngles, 1000);
 }
 init();
 </script>
