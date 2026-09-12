@@ -132,6 +132,14 @@ TABLE_TOP_Y = -300.0
 TABLE_X_HALF = 1000.0
 TABLE_Z0 = 0.0
 TABLE_Z1 = 1500.0
+# Коллайдер «стол»: рука (локоть и кисть) никогда не опускается ниже
+# плоскости TABLE_MIN_Y (*Y* — вертикаль модели, +Y вверх; база на y=0,
+# стол на 300 мм ниже плеча). TABLE_MARGIN = 0 — касание поверхности
+# разрешено; TABLE_COLLISION_PENALTY добавляется к ошибке коллизийных
+# клеток сетки, чтобы они проигрывали любой валидной позе.
+TABLE_MARGIN = 0.0
+TABLE_MIN_Y = TABLE_TOP_Y + TABLE_MARGIN
+TABLE_COLLISION_PENALTY = 1e6
 TABLE_START_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90,
     4: 230, 5: 230,
@@ -246,10 +254,12 @@ def fk(theta: Sequence[float], left: bool = False) -> Dict[str, np.ndarray]:
 
 
 def _fk_grid_positions(t_sz: Sequence[float], t_sx: Sequence[float],
-                       t_eb: Sequence[float], left: bool) -> np.ndarray:
-    """Векторизованная FK по декартовой сетке углов -> позиции EE (…,3).
+                       t_eb: Sequence[float], left: bool
+                       ) -> Tuple[np.ndarray, np.ndarray]:
+    """Векторизованная FK по декартовой сетке углов.
 
     Углы — градусы; сетка полная (каждая комбинация всех трёх осей).
+    Возвращает (EE, локоть) — позиции (…,3) кисти и локтя (для коллайдера).
     """
     T1, T2, T3 = np.meshgrid(np.asarray(t_sz), np.asarray(t_sx),
                              np.asarray(t_eb), indexing="ij")
@@ -267,7 +277,17 @@ def _fk_grid_positions(t_sz: Sequence[float], t_sx: Sequence[float],
     lower = np.stack([s1 * c3, -c2 * c1 * c3 + s2 * s3,
                       -s2 * c1 * c3 - c2 * s3], axis=-1)
     shoulder = np.array([bx, 0.0, 0.0])
-    return shoulder + L1 * upper + L2 * lower
+    elbow = shoulder + L1 * upper
+    ee = elbow + L2 * lower
+    return ee, elbow
+
+
+def _collides(theta: Sequence[float], left: bool) -> bool:
+    """Попала ли какая-либо часть руки ниже плоскости стола."""
+    if not TABLE_ENABLED:
+        return False
+    f = fk(theta, left)
+    return bool(f["E"][1] < TABLE_MIN_Y or f["EE"][1] < TABLE_MIN_Y)
 
 
 def _ranges(left: bool, step: float, window: Optional[float],
@@ -288,8 +308,11 @@ def _ranges(left: bool, step: float, window: Optional[float],
 
 def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
                   left: bool) -> Tuple[Tuple[float, float, float], float]:
-    positions = _fk_grid_positions(*ranges, left)
+    positions, elbow = _fk_grid_positions(*ranges, left)
     error = np.linalg.norm(positions - target, axis=-1)
+    if TABLE_ENABLED:
+        below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
+        error = error + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
     index = int(np.argmin(error))
     i1, i2, i3 = np.unravel_index(index, error.shape)
     theta = (float(ranges[0][i1]), float(ranges[1][i2]), float(ranges[2][i3]))
@@ -333,8 +356,11 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     z = -z
     wanted = np.array([float(x), float(y), float(z)], dtype=float)
     coarse = _ranges(left, *GRID_STEPS[0])
-    positions = _fk_grid_positions(*coarse, left)
+    positions, elbow = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - wanted, axis=-1)
+    if TABLE_ENABLED:
+        below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
+        errors = errors + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
 
     count = min(6, errors.size)
     starts = []
@@ -379,6 +405,12 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     else:
         status = "unreachable"
     message = f"FK-поиск: |ee−цель|={best_error:.1f} мм"
+    if TABLE_ENABLED:
+        if wanted[1] < TABLE_MIN_Y:
+            message = ("Цель ниже стола — кисть зажата к его поверхности "
+                       f"(|ee−цель|={best_error:.1f} мм)")
+        elif _collides(best_theta, left):
+            message += " · рука у самой кромки стола"
     return _result(best_theta, status, message, left, best_error,
                    wanted=[float(v) for v in wanted],
                    clamped=[float(v) for v in wanted])
@@ -428,3 +460,13 @@ if __name__ == "__main__":
     for x, y, z in ((0, -300, 400), (120, 290, 0), (250, 0, 400), (0, -50, 400)):
         res = ik_solve(x, y, z)
         print(f"ik_solve({x},{y},{z}) -> {res['status']:9} err={res['err_mm']:5.1f} th={tuple(round(v,2) for v in res['theta'])} servo={res['servo']}")
+
+    print("table collider checks:")
+    for x, y, z, left in ((250, -600, 400, False), (-250, -650, 300, True),
+                          (200, -300, 450, False), (0, -400, 500, False)):
+        res = ik_solve(x, y, z, left=left)
+        f = fk(res["theta"], left)
+        ee_y, el_y = f["EE"][1], f["E"][1]
+        clean = ee_y >= TABLE_MIN_Y - 1e-9 and el_y >= TABLE_MIN_Y - 1e-9
+        print(f"  ({x},{y},{z}) l={int(left)} -> ee_y={ee_y:6.1f} el_y={el_y:6.1f} "
+              f"min={TABLE_MIN_Y:6.1f} clean={clean} st={res['status']:9} {res['message']}")
