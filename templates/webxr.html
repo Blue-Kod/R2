@@ -303,6 +303,9 @@ async function collectButton() {
                 dcActive = false;
                 setDCStatus(`Эпизод <b>${d.episode.episode_index}</b> сохранён — <b>${d.episode.rows}</b> кадров, ${d.episode.duration_s} с`);
                 setStatus(`сбор остановлен: эпизод ${d.episode.episode_index}`);
+                dcVrShow(`Эпизод ${d.episode.episode_index} сохранён`,
+                    `${d.episode.rows} кадров • время сбора: ${fmtDur(d.episode.duration_s)} • ${fmtDT(dcStartText)}`,
+                    6000);
             }
         } else {
             const r = await fetch('/api/datacollect/start', {
@@ -311,7 +314,11 @@ async function collectButton() {
             const d = await r.json();
             if (d && d.status === 'ok') {
                 dcActive = true; dcEpisode = d.episode_index; dcStartText = d.episode_start;
+                dcStartPerf = performance.now();
                 setDCStatus(`Сбор начат: <b>${fmtDT(dcStartText)}</b> — эпизод <b>${dcEpisode}</b>`);
+                dcVrShow(`Сбор начат`,
+                    `${fmtDT(dcStartText)} • эпизод ${dcEpisode} • время сбора: ${fmtDur(0)}`,
+                    4000);
             }
         }
         updateHint();
@@ -344,6 +351,73 @@ async function collectButton() {
     refreshDC();
     setInterval(() => { if (dcActive) refreshDC(); }, 1000);
 })();
+
+// ==== Текст сбора данных в VR (3D-спрайт перед камерой) ====
+const dcVrCanvas = document.createElement('canvas');
+dcVrCanvas.width = 1024; dcVrCanvas.height = 192;
+const dcVrCtx = dcVrCanvas.getContext('2d');
+const dcVrTex = new THREE.CanvasTexture(dcVrCanvas);
+const dcVrMat = new THREE.SpriteMaterial({ map: dcVrTex, transparent: true, depthTest: false });
+const dcVrSprite = new THREE.Sprite(dcVrMat);
+dcVrSprite.scale.set(2.7, 2.7 * 192 / 1024, 1);
+dcVrSprite.position.set(0, -0.12, -2.3);
+dcVrSprite.renderOrder = 999;
+dcVrSprite.visible = false;
+camera.add(dcVrSprite);
+
+let dcVrTitle = '', dcVrSub = '', dcVrUntil = 0, dcShowVr = false, dcStartPerf = 0;
+const fmtDur = (sec) => {
+    sec = Math.max(0, Math.floor(sec));
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return `${m}м ${String(s).padStart(2, '0')}с`;
+};
+function roundRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+function dcVrDraw(title, sub) {
+    const ctx = dcVrCtx, w = dcVrCanvas.width, h = dcVrCanvas.height;
+    ctx.clearRect(0, 0, w, h);
+    roundRectPath(ctx, 8, 8, w - 16, h - 16, 22);
+    ctx.fillStyle = 'rgba(8, 8, 12, 0.82)';
+    ctx.fill();
+    ctx.strokeStyle = '#2f6b34';
+    ctx.lineWidth = 4;
+    roundRectPath(ctx, 8, 8, w - 16, h - 16, 22);
+    ctx.stroke();
+    ctx.fillStyle = '#7de08a';
+    ctx.font = 'bold 50px monospace';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(title, 32, h * 0.36, w - 64);
+    ctx.fillStyle = '#cfd6e4';
+    ctx.font = '36px monospace';
+    ctx.fillText(sub, 32, h * 0.78, w - 64);
+    dcVrTex.needsUpdate = true;
+}
+function dcVrShow(title, sub, ms) {
+    dcVrTitle = title; dcVrSub = sub;
+    dcVrUntil = performance.now() + ms;
+    dcShowVr = true;
+}
+function updateVrDCText() {
+    const now = performance.now();
+    if (dcActive) {
+        dcVrDraw(`СБОР • эпизод ${dcEpisode}`,
+            `${fmtDT(dcStartText)} • время сбора: ${fmtDur((now - dcStartPerf) / 1000)}`);
+        dcVrSprite.visible = true;
+    } else if (dcShowVr && now < dcVrUntil) {
+        dcVrDraw(dcVrTitle, dcVrSub);
+        dcVrSprite.visible = true;
+    } else {
+        dcShowVr = false;
+        dcVrSprite.visible = false;
+    }
+}
 
 // ==== Главный цикл ====
 const euler = new THREE.Euler();
@@ -451,6 +525,8 @@ function frame(time, xrFrame) {
             sendTeleop({ neck, tilt, targets, grip, frozen });
         }
     }
+
+    updateVrDCText();
 
     renderer.render(scene, camera);
 }
