@@ -50,6 +50,17 @@ def create_app() -> Flask:
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.jinja_env.auto_reload = True
     app.secret_key = os.urandom(24).hex()
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+    # HTTP (порт 80) автоматически переадресует на HTTPS (443): панель,
+    # веб-сокеты и API работают только в зашифрованном контексте.
+    @app.before_request
+    def _redirect_https():
+        if request.is_secure:
+            return None
+        host = request.host.split(":")[0]
+        return redirect(f"https://{host}{request.full_path}", code=308)
 
     # --- Auth helpers ---
 
