@@ -140,18 +140,17 @@ TABLE_Z1 = 1500.0
 TABLE_MARGIN = 0.0
 TABLE_MIN_Y = TABLE_TOP_Y + TABLE_MARGIN
 TABLE_COLLISION_PENALTY = 1e6
-# Кран-предпочтение (работает, пока TABLE_ENABLED): в рабочей зоне стола —
-# цель не выше TABLE_MIN_Y + TABLE_CRANE_ZONE — среди поз, достающих одну и
-# ту же цель, выбирается ветка с высоким локтем (elbow_y заметно выше кисти),
-# «кран-ветка», а не провисшая натуральная. Байас мягкий: TABLE_CRANE_LIFT —
-# целевой «лифт» elbow_y − ee_y (мм); за каждый мм недобора добавляется
-# TABLE_CRANE_WEIGHT мм-ошибки, но не более TABLE_CRANE_BIAS_MAX — чтобы кран
-# не ломал единственно достижимые позы. Выше зоны стола (например, работа
-# у головы) кран-предпочтение выключено — поведение прежнее.
+# Кран-предпочтение (работает, пока TABLE_ENABLED=True — ВСЕГДА в режиме
+# стола): среди поз, достающих одну и ту же цель, выбирается ветка с
+# высоким локтем (elbow_y заметно выше кисти), «кран-ветка», а не
+# провисшая натуральная («через низ»). Байас ДОМИНАНТНЫЙ
+# (TABLE_CRANE_BIAS_MAX = 1e6 > любой ошибки достижения): если кран-ветка
+# существует — выбирается всегда, даже если ей не хватает точности до цели.
+# TABLE_CRANE_LIFT — целевой «лифт» elbow_y − ee_y (мм); за каждый мм
+# недобора добавляется TABLE_CRANE_WEIGHT мм-ошибки (до BIAS_MAX).
 TABLE_CRANE_LIFT = 150.0
 TABLE_CRANE_WEIGHT = 5.0
-TABLE_CRANE_BIAS_MAX = 60.0
-TABLE_CRANE_ZONE = 200.0
+TABLE_CRANE_BIAS_MAX = 1e6
 TABLE_START_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90,
     4: 230, 5: 230,
@@ -383,7 +382,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     """
     z = -z
     wanted = np.array([float(x), float(y), float(z)], dtype=float)
-    prefer_crane = TABLE_ENABLED and wanted[1] < TABLE_MIN_Y + TABLE_CRANE_ZONE
+    prefer_crane = TABLE_ENABLED
     coarse = _ranges(left, *GRID_STEPS[0])
     positions, elbow = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - wanted, axis=-1)
