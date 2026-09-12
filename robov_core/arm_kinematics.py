@@ -330,6 +330,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
             "unreachable" (дальше лимита; servo всё равно указывает на
             ближайшую достижимую позу).
     """
+    z = -z
     wanted = np.array([float(x), float(y), float(z)], dtype=float)
     coarse = _ranges(left, *GRID_STEPS[0])
     positions = _fk_grid_positions(*coarse, left)
