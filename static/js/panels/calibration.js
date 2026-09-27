@@ -81,7 +81,9 @@ export const calibrationPanel = {
         const d = await api.calibration();
         offsets = normalizeOffsets(d.offsets);
         inverted = new Set((d.inverted || []).map(Number));
-        status.textContent = 'offsets → config.json';
+        status.textContent = d.connected
+          ? 'шина подключена · offsets → config.json'
+          : 'шина PCA9685 не отвечает';
       } catch {
         // Fall back to defaults from the config snapshot.
         offsets = {};
@@ -100,6 +102,19 @@ export const calibrationPanel = {
       h('span', { class: 'text-[13px] font-medium', text: 'Калибровка offsets' }),
       h('div', { class: 'grow' }),
       status,
+      button({
+        size: 'xs', variant: 'ghost', iconName: 'refresh', label: 'Переподключить',
+        onClick: async () => {
+          try {
+            const d = await api.reinitServo();
+            offsets = normalizeOffsets(d.offsets);
+            inverted = new Set((d.inverted || []).map(Number));
+            status.textContent = d.connected ? 'шина подключена' : 'шина PCA9685 не отвечает';
+            render();
+            if (!d.connected) toast('PCA9685 не отвечает по I2C', 'error');
+          } catch (err) { toast(err.message, 'error'); }
+        },
+      }),
       button({
         size: 'xs', variant: 'ghost', label: 'Сброс',
         onClick: async () => {

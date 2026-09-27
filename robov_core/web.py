@@ -28,6 +28,7 @@ from robov_core.high_level import (
     get_logs, robot_config,
     get_servo_offsets, set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
     get_servo_calibration, set_servo_calibration, reset_servo_calibration,
+    reinit_servo_bus,
 )
 from robov_core.arm_kinematics import browser_config
 from robov_core.data_collector import DataCollector
@@ -604,6 +605,15 @@ def create_app() -> Flask:
         if not reset_servo_calibration():
             return jsonify({"status": "error", "message": "Servo controller not initialized"}), 503
         return jsonify({"status": "ok", **get_servo_calibration()})
+
+    @app.route("/api/servo/reinit", methods=["POST"])
+    @require_auth
+    def api_servo_reinit():
+        """Переоткрыть I2C-шину PCA9685 (кнопка «переподключить»)."""
+        ok = reinit_servo_bus()
+        return jsonify({"status": "ok" if ok else "error",
+                        "connected": ok,
+                        **get_servo_calibration()})
 
     def ik_request_data():
         data = request.get_json(silent=True) or {}

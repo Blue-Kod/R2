@@ -560,8 +560,19 @@ def get_servo_calibration() -> Dict[str, object]:
         return {
             "offsets": {str(ch): float(DEFAULT_OFFSETS.get(ch, 0.0)) for ch in CHANNELS},
             "inverted": sorted(INVERTED_CHANNELS),
+            "connected": False,
         }
-    return servo.calibration()
+    data = servo.calibration()
+    data["connected"] = servo.is_connected()
+    return data
+
+
+def reinit_servo_bus() -> bool:
+    """Переоткрыть I2C-шину PCA9685 (лечит «отвалившуюся» связь)."""
+    servo = _servo
+    if servo is None:
+        return False
+    return servo.reinit()
 
 
 def set_servo_calibration(offsets=None, inverted=None) -> bool:

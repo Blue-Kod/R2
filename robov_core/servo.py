@@ -179,6 +179,12 @@ class ServoController:
         # mover-потоков каналов дают [Errno 22] Invalid argument. Все записи в
         # шину сериализуем одним мьютексом.
         self._bus_lock: threading.Lock = threading.Lock()
+        # Восстановление связи с PCA9685: шина на Orange Pi иногда «отваливается»
+        # (нет ACK), и тогда нужен повторный open + set_pwm_freq.
+        self._reinit_lock: threading.Lock = threading.Lock()
+        self._last_reinit: float = 0.0
+        self._last_error: str = ""
+        self._watchdog_started: bool = False
 
         # Плавное движение: per-channel mover.
         #   _move_targets[ch]   — последняя целевая команда (None = нет задачи)
@@ -211,15 +217,106 @@ class ServoController:
         # Persisted calibration (config.json) overrides the defaults above.
         self.load_calibration()
 
+        self._open_pwm()
+        if not self.initialized and self._chip_available():
+            # Шина может подняться позже (после переподключения питания/шлейфа).
+            self._start_watchdog()
+
+    # ------------------------------------------------------------------
+    # Шина PCA9685: открытие и восстановление
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _chip_available() -> bool:
+        try:
+            import importlib
+            importlib.import_module("PCA9685_smbus2")
+            return True
+        except Exception:
+            return False
+
+    def _open_pwm(self) -> bool:
         try:
             from PCA9685_smbus2 import PCA9685
             self.pwm = PCA9685.PCA9685(interface=self.bus, address=self.address)
             self.pwm.set_pwm_freq(self.freq)
             self.initialized = True
             print(f"PCA9685 инициализирована на шине {self.bus}, адрес {hex(self.address)}")
+            return True
         except Exception as e:
-            print(f"Не удалось инициализировать PCA9685: {e}")
+            self.pwm = None
             self.initialized = False
+            self._last_error = str(e)
+            print(f"Не удалось инициализировать PCA9685: {e}")
+            return False
+
+    def _close_pwm(self) -> None:
+        pwm, self.pwm = self.pwm, None
+        if pwm is None:
+            return
+        for name in ("close", "deinit"):
+            fn = getattr(pwm, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+                break
+
+    def reinit(self) -> bool:
+        """Переоткрыть шину PCA9685 (лечит «отвалившуюся» I2C)."""
+        return self._reinit_pwm(min_interval=0.0)
+
+    def _reinit_pwm(self, min_interval: float = 2.0) -> bool:
+        now = time.monotonic()
+        with self._reinit_lock:
+            if now - self._last_reinit < min_interval:
+                return self.initialized
+            self._last_reinit = now
+            self._close_pwm()
+            ok = self._open_pwm()
+            if ok:
+                self._restore_pose()
+            else:
+                print(f"[Servo] PCA9685 reinit failed: {self._last_error}")
+            return ok
+
+    def _restore_pose(self) -> None:
+        """После восстановления шины вернуть сервы в известную позу."""
+        for ch, cmd in list(self.current_angles.items()):
+            if ch not in self.channel_configs:
+                continue
+            try:
+                physical = self._physical_command(ch, int(cmd))
+                self._write_pwm(ch, self.angle_to_pulse(physical, ch))
+            except Exception:
+                pass
+
+    def _start_watchdog(self) -> None:
+        if self._watchdog_started:
+            return
+        self._watchdog_started = True
+
+        def loop() -> None:
+            while True:
+                time.sleep(5.0)
+                if not self.initialized:
+                    self._reinit_pwm(min_interval=5.0)
+
+        threading.Thread(target=loop, daemon=True, name="servo-i2c-watchdog").start()
+
+    def _write_pwm(self, channel: int, pulse: int) -> bool:
+        if self.pwm is None:
+            return False
+        try:
+            with self._bus_lock:
+                self.pwm.set_pwm(channel, 0, pulse)
+            return True
+        except Exception as e:
+            self._last_error = str(e)
+            return False
+
+    def is_connected(self) -> bool:
+        return bool(self.initialized and self.pwm is not None)
 
     # ------------------------------------------------------------------
     # Offset management
@@ -484,24 +581,28 @@ class ServoController:
         return logical
 
     def _set_servo_immediate(self, channel: int, physical_angle: float, command_angle: Optional[int] = None) -> bool:
+        if self.pwm is None and not self._reinit_pwm():
+            return False
         try:
             pulse = self.angle_to_pulse(physical_angle, channel)
-            for attempt in range(5):
-                try:
-                    with self._bus_lock:
-                        self.pwm.set_pwm(channel, 0, pulse)
-                    break
-                except Exception:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.01 * (attempt + 1))
+        except Exception as e:
+            print(f"Ошибка установки сервопривода {channel}: {e}")
+            return False
+        for attempt in range(4):
+            if self._write_pwm(channel, pulse):
+                with self.lock:
+                    if command_angle is not None:
+                        self.current_angles[channel] = command_angle
+                return True
+            time.sleep(0.01 * (attempt + 1))
+        # Шина «отвалилась» (нет ACK) — переоткрываем и пробуем ещё раз.
+        if self._reinit_pwm(min_interval=1.0) and self._write_pwm(channel, pulse):
             with self.lock:
                 if command_angle is not None:
                     self.current_angles[channel] = command_angle
             return True
-        except Exception as e:
-            print(f"Ошибка установки сервопривода {channel}: {e}")
-            return False
+        print(f"Ошибка установки сервопривода {channel}: {self._last_error}")
+        return False
 
     # ------------------------------------------------------------------
     # Расслабление сервоприводов
