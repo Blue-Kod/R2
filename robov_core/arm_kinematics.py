@@ -122,9 +122,20 @@ IK_TOLERANCE_MM = 50.0
 IK_CLEARANCE_MARGIN = 0.0
 W_NAT = 0.3
 
-# Левая рука в модели НЕ зеркальна по X: IK-координаты совпадают с моделью
-# (проверено на железе: LEFT (-115,0,250) даёт корректный ch5=225).
-INVERT_LEFT_X = False
+# Линейная калибровка оси X левой руки. Наблюдено на железе, что реальный x
+# связан с поданной в IK целью как  real_x = a*target_x + b  (a=-37/23, b=-300).
+# Чтобы ВВОД совпал с реальным, в модель для левой подаём обратную функцию:
+#   target_x = LEFT_X_A * x + LEFT_X_B,   LEFT_X_A = 1/a, LEFT_X_B = -b/a.
+LEFT_X_A = -23.0 / 37.0          # ≈ -0.62162
+LEFT_X_B = -6900.0 / 37.0        # ≈ -186.486
+
+
+def _left_target_x(x: float) -> float:
+    return LEFT_X_A * float(x) + LEFT_X_B
+
+
+def _left_report_x(tx: float) -> float:
+    return (float(tx) - LEFT_X_B) / LEFT_X_A
 
 # Сетка поиска IK: (шаг, радиус окна вокруг текущей точки).
 # None-радиус — первая грубая решётка по всему диапазону.
@@ -358,9 +369,9 @@ def _result(theta: Optional[Tuple[float, float, float]], status: str,
     if theta is not None:
         result["servo"] = to_servo_commands(theta, left)
         ee = fk(theta, left)["EE"]
-        if left and INVERT_LEFT_X:
+        if left:
             ee = ee.copy()
-            ee[0] = -ee[0]
+            ee[0] = _left_report_x(ee[0])
         result["ee"] = [float(v) for v in ee]
     result["ok"] = err_mm is not None and err_mm <= IK_TOLERANCE_MM
     return result
@@ -383,7 +394,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
             ближайшую достижимую позу).
     """
     z = -z
-    tx = -float(x) if (left and INVERT_LEFT_X) else float(x)
+    tx = _left_target_x(x) if left else float(x)
     wanted = np.array([tx, float(y), float(z)], dtype=float)
     prefer_crane = TABLE_ENABLED
     coarse = _ranges(left, *GRID_STEPS[0])
