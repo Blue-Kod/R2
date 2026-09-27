@@ -23,6 +23,12 @@ function channelsFromBoot(boot) {
   });
 }
 
+// Fixed width for up to 4 characters ("270°"), so all rows line up and the
+// sliders end up the same size.
+const VALUE_CLASS = 'w-11 shrink-0 text-right font-mono text-[11px] tabular-nums';
+const SETTLED = 'text-foreground/90';
+const MOVING = 'text-muted-foreground'; // промежуточный угол — чуть темнее
+
 export const servosPanel = {
   id: 'servos',
   title: 'Сервоприводы',
@@ -36,26 +42,28 @@ export const servosPanel = {
 
     for (const c of channels) {
       const val = angles[c.id] != null ? angles[c.id] : Math.round((c.min + c.max) / 2);
-      const out = h('span', { class: 'w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground/90', text: `${val}°` });
-      const live = h('span', { class: 'hidden w-16 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground/70' });
+      const out = h('span', { class: `${VALUE_CLASS} ${SETTLED}`, text: `${val}°` });
       const range = h('input', {
         type: 'range', min: c.min, max: c.max, value: val,
         class: 'h-1.5 flex-1 cursor-pointer accent-primary',
         title: c.inverted ? `инверсия, offset ${c.offset}°` : (c.offset ? `offset ${c.offset}°` : ''),
       });
+      range.addEventListener('pointerdown', () => { range._dragging = true; });
       range.addEventListener('input', () => {
-        range._touched = Date.now();
+        range._dragging = true;
         out.textContent = `${range.value}°`;
+        out.className = `${VALUE_CLASS} ${SETTLED}`;
       });
       range.addEventListener('change', () => {
-        range._touched = Date.now();
+        range._dragging = false;
         api.setServo(c.id, parseInt(range.value, 10)).catch((err) => toast(err.message, 'error'));
         burst();
       });
-      sliders.set(c.id, { range, out, live });
+      range.addEventListener('pointerup', () => { range._dragging = false; });
+      sliders.set(c.id, { range, out });
       list.appendChild(h('div', { class: 'flex items-center gap-2' },
         h('label', { class: 'w-20 shrink-0 text-[11.5px] text-muted-foreground', text: c.name }),
-        range, out, live));
+        range, out));
     }
 
     const refresh = async () => {
@@ -68,26 +76,20 @@ export const servosPanel = {
       const targets = d.angles || {};
       const positions = d.positions || {};
       for (const [ch, e] of sliders) {
+        if (e.range._dragging) continue; // пока тянешь — показываем введённое
         const target = targets[ch];
         const pos = positions[ch];
-        // Слайдер = команда-цель. Не перетираем ввод, пока с ним работают.
-        const interacting = document.activeElement === e.range
-          || (Date.now() - (e.range._touched || 0) < 1200);
-        if (target != null && !interacting) {
-          e.range.value = target;
-          e.out.textContent = `${target}°`;
-        }
-        // Живой индикатор фактического положения — видно только пока рука едет.
-        if (target != null && pos != null && pos !== target) {
-          e.live.textContent = `${pos}°`;
-          e.live.classList.remove('hidden');
-        } else {
-          e.live.classList.add('hidden');
-        }
+        if (target != null) e.range.value = target; // слайдер = команда-цель
+        const shown = pos != null ? pos : target;
+        if (shown == null) continue;
+        const moving = pos != null && target != null && pos !== target;
+        e.out.textContent = `${shown}°`;
+        // Промежуточный угол показываем вместо обычного, чуть приглушённым.
+        e.out.className = `${VALUE_CLASS} ${moving ? MOVING : SETTLED}`;
       }
     };
 
-    // Короткий быстрый опрос после команды, чтобы индикатор «бежал» за рукой.
+    // Короткий быстрый опрос после команды, чтобы число «бежало» за рукой.
     let fastTimer = null;
     const burst = () => {
       clearInterval(fastTimer);
