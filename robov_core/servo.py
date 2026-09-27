@@ -351,6 +351,15 @@ class ServoController:
                 "inverted": sorted(self.inverted_channels),
             }
 
+    def positions(self) -> Dict[str, int]:
+        """Фактическое (сглаженное) положение каналов — для живого индикатора."""
+        with self.lock:
+            return {
+                str(ch): int(round(self._move_positions.get(
+                    ch, float(self.current_angles.get(ch, 0)))))
+                for ch in sorted(self.channel_configs)
+            }
+
     def load_calibration(self, path: Path = CONFIG_PATH) -> bool:
         """Применить offsets/инверсию из config.json (если файл есть)."""
         try:
@@ -447,15 +456,22 @@ class ServoController:
         target_command = int(max(command_min, min(command_max, angle)))
 
         if not smooth:
+            with self.lock:
+                self.current_angles[channel] = target_command
+                self._move_positions.pop(channel, None)
             with self._get_cond(channel):
                 self._move_targets.pop(channel, None)
-                self._move_positions.pop(channel, None)
             return self._set_servo_immediate(
-                channel, self._physical_command(channel, target_command),
-                target_command)
+                channel, self._physical_command(channel, target_command))
 
-        # Плавный режим: обновляем цель и будим mover-поток (не блокируемся).
+        # Плавный режим: цель фиксируем сразу (UI/API видят команду), а
+        # фактическое положение ведёт mover-поток в _move_positions.
         self._ensure_mover(channel)
+        with self.lock:
+            if channel not in self._move_positions:
+                self._move_positions[channel] = float(
+                    self.current_angles.get(channel, target_command))
+            self.current_angles[channel] = target_command
         with self._get_cond(channel):
             self._move_targets[channel] = target_command
             self._mover_conds[channel].notify_all()
@@ -536,7 +552,7 @@ class ServoController:
             distance = float(target) - current
             if abs(distance) <= deadband:
                 self._set_servo_immediate(
-                    channel, physical_command(target), target)
+                    channel, physical_command(target))
                 with self.lock:
                     self._move_positions[channel] = float(target)
                     self._move_velocities[channel] = 0.0
@@ -564,7 +580,7 @@ class ServoController:
                 command = int(max(command_min, min(command_max, command)))
 
             self._set_servo_immediate(
-                channel, physical_command(command), command)
+                channel, physical_command(command))
             with self.lock:
                 self._move_positions[channel] = float(command)
                 self._move_velocities[channel] = velocity

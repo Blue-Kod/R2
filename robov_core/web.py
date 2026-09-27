@@ -22,7 +22,7 @@ from robov_core.terminal_shell import TerminalShell
 
 from robov_core.high_level import (
     APP_VERSION, ROOT_DIR, check_root_password,
-    get_servo_angles, get_servo_limits,
+    get_servo_angles, get_servo_positions, get_servo_limits,
     get_stereo_camera, health_snapshot, ip_address,
     shell_output, shell_start, shell_write,
     get_logs, robot_config,
@@ -597,7 +597,8 @@ def create_app() -> Flask:
     @app.route("/api/servo/angles")
     @require_auth
     def servo_angles():
-        return jsonify({"angles": get_servo_angles()})
+        return jsonify({"angles": get_servo_angles(),
+                        "positions": get_servo_positions()})
 
     # --- Calibration (offsets / inversion) -> config.json ---
 

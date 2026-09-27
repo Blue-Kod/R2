@@ -629,6 +629,18 @@ def get_servo_angles() -> Dict[int, int]:
         return {}
 
 
+def get_servo_positions() -> Dict[int, int]:
+    """Фактическое (сглаженное) положение каналов — для живого индикатора."""
+    servo = _servo
+    if servo is None:
+        return {}
+    try:
+        return {int(ch): int(v) for ch, v in servo.positions().items()}
+    except Exception as e:
+        log(f"Error getting servo positions: {e}")
+        return {}
+
+
 def get_servo_limits() -> Dict[int, List[int]]:
     """Логические диапазоны команд [min, max] из servo.py."""
     servo = _servo
