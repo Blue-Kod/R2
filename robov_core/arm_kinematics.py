@@ -96,7 +96,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from robov_core.servo import DEFAULT_COMMAND_LIMITS, DEFAULT_POSE
+from robov_core.servo import DEFAULT_COMMAND_LIMITS, DEFAULT_POSE, START_POSE
 
 
 BASE_X = 115.0
@@ -151,12 +151,6 @@ TABLE_COLLISION_PENALTY = 1e6
 TABLE_CRANE_LIFT = 150.0
 TABLE_CRANE_WEIGHT = 5.0
 TABLE_CRANE_BIAS_MAX = 1e6
-TABLE_START_POSE: Dict[int, int] = {
-    0: 90, 1: 135, 2: 135, 3: 90,
-    4: 230, 5: 230,
-    6: 0, 7: 0,
-    8: 90, 9: 90,
-}
 
 
 def _side(left: bool) -> str:
@@ -173,8 +167,8 @@ def rest_angles(left: bool = False) -> Dict[int, int]:
 
 
 def start_pose() -> Dict[int, int]:
-    """Стартовая поза всех каналов (стол/обычная)."""
-    return dict(TABLE_START_POSE if TABLE_ENABLED else DEFAULT_POSE)
+    """Стартовая поза всех каналов — из servo.START_POSE (единый источник)."""
+    return dict(START_POSE)
 
 
 def servo_ranges(left: bool = False) -> Dict[int, Tuple[int, int]]:

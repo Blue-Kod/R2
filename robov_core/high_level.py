@@ -542,6 +542,67 @@ def get_servo_offsets() -> Dict[int, float]:
         return dict(servo.offsets)
 
 
+def robot_config() -> dict:
+    """Единый конфиг робота (серво + кинематика) для API и фронтенда.
+
+    Единственная точка, где собирается конфиг для UI: значения берутся из
+    servo.servo_config() и arm_kinematics.browser_config(), без дублей.
+    """
+    from robov_core.servo import servo_config
+    return {"servo": servo_config(), "ik": arm_kinematics.browser_config()}
+
+
+def get_servo_calibration() -> Dict[str, object]:
+    """Текущая калибровка (offsets + инвертированные каналы)."""
+    servo = _servo
+    if servo is None:
+        from robov_core.servo import CHANNELS, DEFAULT_OFFSETS, INVERTED_CHANNELS
+        return {
+            "offsets": {str(ch): float(DEFAULT_OFFSETS.get(ch, 0.0)) for ch in CHANNELS},
+            "inverted": sorted(INVERTED_CHANNELS),
+        }
+    return servo.calibration()
+
+
+def set_servo_calibration(offsets=None, inverted=None) -> bool:
+    """Применить калибровку к серво и сохранить в config.json."""
+    servo = _servo
+    if servo is None:
+        return False
+    if offsets:
+        for ch_str, value in offsets.items():
+            try:
+                channel = int(ch_str)
+                angle_offset = float(value)
+            except (TypeError, ValueError):
+                continue
+            servo.set_offset(channel, angle_offset)
+    if inverted is not None:
+        wanted = set()
+        for item in inverted:
+            try:
+                wanted.add(int(item))
+            except (TypeError, ValueError):
+                pass
+        for channel in servo.channel_configs:
+            servo.set_inverted(channel, channel in wanted)
+    servo.save_calibration()
+    return True
+
+
+def reset_servo_calibration() -> bool:
+    """Вернуть offsets/инверсию к значениям из servo.py и сохранить."""
+    servo = _servo
+    if servo is None:
+        return False
+    from robov_core.servo import INVERTED_CHANNELS
+    servo.reset_offsets_to_default()
+    for channel in servo.channel_configs:
+        servo.set_inverted(channel, channel in INVERTED_CHANNELS)
+    servo.save_calibration()
+    return True
+
+
 def get_servo_angles() -> Dict[int, int]:
     servo = _servo
     if servo is None:

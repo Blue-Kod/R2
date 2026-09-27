@@ -1,12 +1,27 @@
 import { api } from '../api.js';
 import { h, iconButton, panelBody, toast, icon } from '../ui.js';
 
-const NAMES = {
-  0: 'Шея', 1: 'Пр. плечо', 2: 'Лев. плечо', 3: 'Наклон',
-  4: 'Пов. прав.', 5: 'Пов. лев.', 6: 'Пр. локоть', 7: 'Лев. локоть',
-  8: 'Пр. захват', 9: 'Лев. захват',
-};
-const ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/** Channel descriptors come from the server config (servo.servo_config()). */
+function channelsFromBoot(boot) {
+  const cfg = boot?.servo;
+  if (cfg?.channels?.length) {
+    return cfg.channels.map((c) => ({
+      id: c.id,
+      name: c.name,
+      min: c.command_min ?? c.min ?? 0,
+      max: c.command_max ?? c.max ?? 270,
+      offset: c.offset ?? 0,
+      inverted: !!c.inverted,
+    }));
+  }
+  // Fallback: derive from the legacy servo_limits map.
+  const limits = boot?.servo_limits || {};
+  const ids = boot?.servo?.order || Object.keys(limits);
+  return (ids.length ? ids : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).map((id) => {
+    const lim = limits[id] || [0, 270];
+    return { id: Number(id), name: `ch${id}`, min: lim[0], max: lim[1], offset: 0, inverted: false };
+  });
+}
 
 export const servosPanel = {
   id: 'servos',
@@ -14,26 +29,26 @@ export const servosPanel = {
   icon: 'sliders',
   group: 'Управление',
   mount(el, ctx) {
-    const limits = ctx.boot.servo_limits || {};
-    const angles = ctx.boot.servo_angles || {};
+    const channels = channelsFromBoot(ctx.boot);
+    const angles = ctx.boot?.servo_angles || {};
     const list = h('div', { class: 'flex flex-col gap-3.5 overflow-y-auto pr-1' });
     const sliders = new Map();
 
-    for (const ch of ORDER) {
-      const lim = limits[ch] || [0, 270];
-      const val = angles[ch] != null ? angles[ch] : Math.round((lim[0] + lim[1]) / 2);
+    for (const c of channels) {
+      const val = angles[c.id] != null ? angles[c.id] : Math.round((c.min + c.max) / 2);
       const out = h('span', { class: 'w-11 shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground/90', text: `${val}°` });
       const range = h('input', {
-        type: 'range', min: lim[0], max: lim[1], value: val,
+        type: 'range', min: c.min, max: c.max, value: val,
         class: 'h-1.5 flex-1 cursor-pointer accent-primary',
+        title: c.inverted ? `инверсия, offset ${c.offset}°` : (c.offset ? `offset ${c.offset}°` : ''),
       });
       range.addEventListener('input', () => { out.textContent = `${range.value}°`; });
       range.addEventListener('change', () => {
-        api.setServo(ch, parseInt(range.value, 10)).catch((err) => toast(err.message, 'error'));
+        api.setServo(c.id, parseInt(range.value, 10)).catch((err) => toast(err.message, 'error'));
       });
-      sliders.set(ch, { range, out });
+      sliders.set(c.id, { range, out });
       list.appendChild(h('div', { class: 'flex items-center gap-2' },
-        h('label', { class: 'w-24 shrink-0 text-[11.5px] text-muted-foreground', text: NAMES[ch] }),
+        h('label', { class: 'w-24 shrink-0 text-[11.5px] text-muted-foreground', text: c.name }),
         range, out));
     }
 

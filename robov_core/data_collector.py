@@ -33,6 +33,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from robov_core.servo import DEFAULT_POSE as DEFAULT_ANGLES
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "collected_data"
 META_FILE = DATA_DIR / "meta.json"
 
@@ -58,11 +60,6 @@ STATE_CHANNELS: List[Tuple[int, str]] = [
 ]
 # Каналы грипперов нормализуются 0..1; остальные хранятся в градусах.
 GRIPPER_CHANNELS = {8, 9}
-
-DEFAULT_ANGLES: Dict[int, int] = {
-    0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
-    5: 45, 6: 180, 7: 180, 8: 90, 9: 90,
-}
 
 
 def _schema() -> pa.Schema:

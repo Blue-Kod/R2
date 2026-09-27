@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
 import math
 import threading
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 # ----------------------------------------------------------------------
@@ -13,7 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple
 # отрицательное — меньше.
 # ----------------------------------------------------------------------
 DEFAULT_OFFSETS: Dict[int, float] = {
-    0: 0.0, 1: 0, 2: 0, 3: 0.0, 4: -10,
+    0: 0.0, 1: 0, 2: 0, 3: 0.0, 4: 0.0,
     5: 0, 6: 0.0, 7: 0, 8: 0.0, 9: 0.0
 }
 
@@ -31,30 +33,47 @@ DEFAULT_OFFSETS: Dict[int, float] = {
 #   «назад-вниз»). В rest-позе углы 135 = середина 0..270, поэтому смена
 #   инверсии не двигает позу покоя, а только меняет направление.
 # ----------------------------------------------------------------------
-INVERTED_CHANNELS: Set[int] = {2, 4, 8}
+INVERTED_CHANNELS: Set[int] = {2, 4, 7, 8}
 # ----------------------------------------------------------------------
 
+# Персистентная калибровка (offsets/инверсия), правится из браузера.
+CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config.json"
+
 # ----------------------------------------------------------------------
-# Поза по умолчанию (логические углы на старте).
-# Единый источник правды: контроллер, high_level и dev-инструменты
-# берут значения отсюда.
+# ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ по серво.
+# Каналы, их имена, поза покоя (rest), поза включения (start), оффсеты,
+# инверсия, физические и командные лимиты — определяются только здесь.
+# arm_kinematics, data_collector, high_level, API и браузер берут значения
+# отсюда (см. servo_config()).
 # ----------------------------------------------------------------------
-DEFAULT_POSE: Dict[int, int] = {
+CHANNELS: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+CHANNEL_NAMES: Dict[int, str] = {
+    0: "Шея", 1: "Пр. плечо", 2: "Лев. плечо", 3: "Наклон",
+    4: "Пов. прав.", 5: "Пов. лев.", 6: "Пр. локоть", 7: "Лев. локоть",
+    8: "Пр. захват", 9: "Лев. захват",
+}
+
+# Поза покоя (reference для маппинга theta<->команда; не физический старт).
+REST_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
-    5: 45, 6: 180, 7: 180, 8: 90, 9: 90
+    5: 45, 6: 180, 7: 180, 8: 90, 9: 90,
+}
+# Обратная совместимость: старое имя позы покоя.
+DEFAULT_POSE = REST_POSE
+
+# Поза включения: применяется при старте робота.
+# Руки по умолчанию: плечо (1/2) = 45°, локоть (6/7) = 180°.
+START_POSE: Dict[int, int] = {
+    0: 90, 1: 45, 2: 45, 3: 90, 4: 230,
+    5: 230, 6: 180, 7: 180, 8: 90, 9: 90,
 }
 # ----------------------------------------------------------------------
 
 
 def _initial_pose() -> Dict[int, int]:
-    """Стартовая поза: в режиме стола — сложенная манипуляторная (ch4/5=225,
-    локти согнуты), иначе DEFAULT_POSE. Ленивый импорт arm_kinematics, чтобы
-    не создавать цикл (arm_kinematics сам импортирует servo)."""
-    try:
-        from robov_core.arm_kinematics import start_pose
-        return start_pose()
-    except Exception:
-        return dict(DEFAULT_POSE)
+    """Стартовая поза каналов — servo.START_POSE (единый источник правды)."""
+    return dict(START_POSE)
 # ----------------------------------------------------------------------
 
 ChannelConfig = Tuple[int, int, int, int]
@@ -91,6 +110,42 @@ MOVE_TICK: float = 0.01        # период управления, с (100 Гц
 MOVE_MAX_SPEED: float = 300.0  # крейсерская скорость, град/с
 MOVE_ACCEL: float = 1000.0     # разгон/торможение, град/с^2
 MOVE_DEADBAND: float = 0.5     # мёртвая зона у цели, град
+# ----------------------------------------------------------------------
+
+
+def servo_config() -> Dict[str, object]:
+    """Полный серво-конфиг для API и фронтенда (JSON-совместимый).
+
+    Единственная точка, откуда UI/скрипты узнают каналы, имена, лимиты,
+    оффсеты, инверсию и позы. Никаких дублей этих данных в других модулях.
+    """
+    return {
+        "order": list(CHANNELS),
+        "channels": [
+            {
+                "id": ch,
+                "name": CHANNEL_NAMES.get(ch, f"ch{ch}"),
+                "min": cfg[0],
+                "max": cfg[1],
+                "pulse_min": cfg[2],
+                "pulse_max": cfg[3],
+                "command_min": DEFAULT_COMMAND_LIMITS.get(ch, cfg[:2])[0],
+                "command_max": DEFAULT_COMMAND_LIMITS.get(ch, cfg[:2])[1],
+                "offset": float(DEFAULT_OFFSETS.get(ch, 0.0)),
+                "inverted": ch in INVERTED_CHANNELS,
+            }
+            for ch, cfg in sorted(DEFAULT_CHANNEL_CONFIGS.items())
+        ],
+        "rest": {str(ch): int(v) for ch, v in REST_POSE.items()},
+        "start": {str(ch): int(v) for ch, v in START_POSE.items()},
+        "inverted": sorted(INVERTED_CHANNELS),
+        "move": {
+            "tick": MOVE_TICK,
+            "max_speed": MOVE_MAX_SPEED,
+            "accel": MOVE_ACCEL,
+            "deadband": MOVE_DEADBAND,
+        },
+    }
 # ----------------------------------------------------------------------
 
 
@@ -149,6 +204,9 @@ class ServoController:
         for ch in self.channel_configs:
             self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
 
+        # Persisted calibration (config.json) overrides the defaults above.
+        self.load_calibration()
+
         try:
             from PCA9685_smbus2 import PCA9685
             self.pwm = PCA9685.PCA9685(interface=self.bus, address=self.address)
@@ -179,6 +237,57 @@ class ServoController:
             for ch in self.channel_configs:
                 self.offsets[ch] = float(DEFAULT_OFFSETS.get(ch, 0.0))
         print("Offsets reset to defaults")
+
+    # ------------------------------------------------------------------
+    # Персистентная калибровка (config.json)
+    # ------------------------------------------------------------------
+    def calibration(self) -> Dict[str, object]:
+        """Текущие offsets и инвертированные каналы (для API/UI)."""
+        with self.lock:
+            return {
+                "offsets": {str(ch): float(self.offsets.get(ch, 0.0))
+                            for ch in sorted(self.channel_configs)},
+                "inverted": sorted(self.inverted_channels),
+            }
+
+    def load_calibration(self, path: Path = CONFIG_PATH) -> bool:
+        """Применить offsets/инверсию из config.json (если файл есть)."""
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return False
+        try:
+            offsets = data.get("offsets") or {}
+            for ch_str, value in offsets.items():
+                ch = int(ch_str)
+                if ch in self.channel_configs:
+                    self.offsets[ch] = float(value)
+            inverted = data.get("inverted")
+            if isinstance(inverted, list):
+                self.inverted_channels = {int(c) for c in inverted
+                                          if int(c) in self.channel_configs}
+            print(f"[Servo] Калибровка загружена из {path}")
+            return True
+        except Exception as e:
+            print(f"[Servo] Ошибка чтения калибровки: {e}")
+            return False
+
+    def save_calibration(self, path: Path = CONFIG_PATH) -> bool:
+        """Записать текущие offsets/инверсию в config.json."""
+        try:
+            payload = {
+                "offsets": {str(ch): float(self.offsets.get(ch, 0.0))
+                            for ch in sorted(self.channel_configs)},
+                "inverted": sorted(self.inverted_channels),
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print(f"[Servo] Калибровка сохранена в {path}")
+            return True
+        except Exception as e:
+            print(f"[Servo] Не удалось сохранить калибровку: {e}")
+            return False
 
     # ------------------------------------------------------------------
     # Инверсия каналов
@@ -288,16 +397,14 @@ class ServoController:
         потоков/целей при телеопе.
         """
         command_min, command_max = self.command_limits[channel]
-        inverted = channel in self.inverted_channels
-        offset = self.offsets.get(channel, 0)
-
-        def logical_cmd(command: int) -> int:
-            adjusted = command + int(round(offset))
-            return int(max(command_min, min(command_max, adjusted)))
 
         def physical_command(command: int) -> int:
-            logical = logical_cmd(command)
-            if inverted:
+            # Offset/inversion читаются «на лету», чтобы изменения калибровки
+            # применялись со следующего движения без перезапуска mover-потока.
+            offset = self.offsets.get(channel, 0)
+            logical = int(max(command_min, min(
+                command_max, command + int(round(offset)))))
+            if channel in self.inverted_channels:
                 return (command_min + command_max) - logical
             return logical
 

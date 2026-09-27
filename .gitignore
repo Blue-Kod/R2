@@ -17,3 +17,6 @@ __pycache__/
 
 # Collected VLA training data (parquet + meta.json)
 /collected_data/
+
+# Per-device servo calibration (written by the browser calibration panel)
+/config.json

@@ -25,8 +25,9 @@ from robov_core.high_level import (
     get_servo_angles, get_servo_limits,
     get_stereo_camera, health_snapshot, ip_address,
     shell_output, shell_start, shell_write,
-    get_logs,
+    get_logs, robot_config,
     get_servo_offsets, set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
+    get_servo_calibration, set_servo_calibration, reset_servo_calibration,
 )
 from robov_core.arm_kinematics import browser_config
 from robov_core.data_collector import DataCollector
@@ -199,14 +200,16 @@ def create_app() -> Flask:
 
         system_data = health_snapshot()
         system_data["ip"] = ip_address()
+        robot = robot_config()
         return jsonify({
             "version": APP_VERSION,
             "ip": system_data["ip"],
             "camera_params": camera_params,
+            "servo": robot["servo"],
             "servo_angles": get_servo_angles(),
             "servo_limits": get_servo_limits(),
             "servo_offsets": get_servo_offsets(),
-            "ik_config": browser_config(),
+            "ik_config": robot["ik"],
         })
 
     # --- WebXR teleop ---
@@ -582,6 +585,25 @@ def create_app() -> Flask:
     @require_auth
     def servo_angles():
         return jsonify({"angles": get_servo_angles()})
+
+    # --- Calibration (offsets / inversion) -> config.json ---
+
+    @app.route("/api/calibration", methods=["GET", "POST"])
+    @require_auth
+    def api_calibration():
+        if request.method == "GET":
+            return jsonify(get_servo_calibration())
+        data = request.get_json(silent=True) or {}
+        if not set_servo_calibration(data.get("offsets"), data.get("inverted")):
+            return jsonify({"status": "error", "message": "Servo controller not initialized"}), 503
+        return jsonify({"status": "ok", **get_servo_calibration()})
+
+    @app.route("/api/calibration/reset", methods=["POST"])
+    @require_auth
+    def api_calibration_reset():
+        if not reset_servo_calibration():
+            return jsonify({"status": "error", "message": "Servo controller not initialized"}), 503
+        return jsonify({"status": "ok", **get_servo_calibration()})
 
     def ik_request_data():
         data = request.get_json(silent=True) or {}

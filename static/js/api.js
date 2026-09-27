@@ -55,6 +55,10 @@ export const api = {
   servoAngles: () => request('GET', '/api/servo/angles'),
   setServo: (ch, angle) => request('POST', `/api/servo/${ch}/${angle}`, { body: {} }),
 
+  calibration: () => request('GET', '/api/calibration'),
+  setCalibration: (offsets, inverted) => request('POST', '/api/calibration', { body: { offsets, inverted } }),
+  resetCalibration: () => request('POST', '/api/calibration/reset', { body: {} }),
+
   ikMove: (x, y, z, left) => request('POST', '/api/ik/move', { body: { x, y, z, left } }),
 
   cmdSend: (command) => request('POST', '/api/cmd/send', { body: { command } }),

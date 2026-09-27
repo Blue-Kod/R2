@@ -22,6 +22,7 @@ import requests
 import argparse
 import platform
 import filecmp
+import hashlib
 import datetime
 import time
 import pwd
@@ -50,6 +51,8 @@ SERVICE_FILE = f"/etc/systemd/system/{SERVICE_NAME}.service"
 INTERNET_CHECK_HOST = "8.8.8.8"
 LAST_COMMIT_FILE = ".last_commit"
 SETUP_COMPLETE_FLAG = ".setup_complete"  # Flag for first-run installation
+PIP_HASH_FILE = ".pip_requirements_hash"  # Hash of last installed requirements.txt
+APT_HASH_FILE = ".apt_requirements_hash"  # Hash of last installed APT package set
 
 def gh_request(url, *, stream=False, timeout=30, attempts=4):
     """GET с ретраями на 429/403/5xx — GitHub rate-limit (unauthenticated).
@@ -269,6 +272,75 @@ def install_pip_dependencies():
         log_message(f"[PIP] Exception during pip install: {e}")
         return False
 
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+def _hash_file(path: str) -> str:
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+def _read_hash(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+def _write_hash(path: str, value: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(value)
+    except OSError as e:
+        log_message(f"[!] Could not write {path}: {e}")
+
+def _requirements_hash(script_dir: str) -> str:
+    try:
+        return _hash_file(os.path.join(script_dir, REQUIREMENTS_FILE))
+    except OSError:
+        return ""
+
+def _apt_hash() -> str:
+    return _sha256_text("\n".join(REQUIREMENTS_APT))
+
+def ensure_dependencies() -> bool:
+    """Install dependencies that changed since the last successful install.
+
+    Unlike first-run setup (guarded by .setup_complete), this runs on every
+    start and only does work when requirements.txt or the APT package list
+    changed. Newly added libraries (e.g. flask-sock, paramiko) therefore get
+    installed automatically after an update, without a manual pip install.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    changed = False
+
+    if platform.system() == "Linux":
+        apt_path = os.path.join(script_dir, APT_HASH_FILE)
+        want = _apt_hash()
+        if _read_hash(apt_path) != want:
+            log_message("[APT] Package list changed - checking missing packages...")
+            if install_apt_dependencies():
+                _write_hash(apt_path, want)
+                changed = True
+            else:
+                log_message("[APT] Some packages failed to install.")
+        else:
+            log_message("[APT] Package list unchanged, skipping.")
+
+    req_path = os.path.join(script_dir, REQUIREMENTS_FILE)
+    if os.path.exists(req_path):
+        pip_path = os.path.join(script_dir, PIP_HASH_FILE)
+        want = _requirements_hash(script_dir)
+        if _read_hash(pip_path) != want:
+            log_message("[PIP] requirements.txt changed - installing...")
+            if install_pip_dependencies():
+                _write_hash(pip_path, want)
+                changed = True
+            else:
+                log_message("[PIP] Install failed; will retry on next start.")
+        else:
+            log_message("[PIP] requirements.txt unchanged, skipping.")
+    return changed
+
 def setup_sudoers(target_user: str) -> bool:
     """Create sudoers drop-in file so the robot can run without a password
     at boot (autostart) and execute privileged commands.
@@ -336,6 +408,13 @@ def perform_first_run_setup():
     if not install_pip_dependencies():
         log_message("[SETUP] PIP installation failed.")
         return False
+
+    # Record dependency hashes so ensure_dependencies() skips reinstalling on
+    # subsequent starts (only re-runs when requirements change).
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if platform.system() == "Linux":
+        _write_hash(os.path.join(script_dir, APT_HASH_FILE), _apt_hash())
+    _write_hash(os.path.join(script_dir, PIP_HASH_FILE), _requirements_hash(script_dir))
 
     # Sudoers setup — allow passwordless shutdown, audio, etc.
     setup_sudoers(target_user)
@@ -420,7 +499,7 @@ def save_last_commit_info(target_dir, sha):
         log_message(f"[!] Error saving .last_commit: {e}")
 
 SKIP_DIRS = {".git", "venv", "__pycache__", "models", "dev", "node_modules", ".idea", ".vscode"}
-SKIP_FILES = {".last_commit", ".setup_complete"}
+SKIP_FILES = {".last_commit", ".setup_complete", ".pip_requirements_hash", ".apt_requirements_hash"}
 
 def get_changed_files(old_sha, new_sha):
     """Use GitHub Compare API to get files changed between two commits.
@@ -769,8 +848,15 @@ def main():
         repo_updated = download_and_extract_repo(script_dir, script_name, target_user)
         if not repo_updated:
             log_message("[*] Repository update failed or not needed.")
+
+        # Install dependencies that changed in this update (requirements.txt /
+        # APT package list), so new libraries land without a manual pip install.
+        try:
+            ensure_dependencies()
+        except Exception as e:
+            log_message(f"[!] Dependency check failed: {e}")
     else:
-        log_message("[*] No internet, skipping update.")
+        log_message("[*] No internet, skipping update and dependency check.")
 
     # Start main.py
     if not args.no_start:

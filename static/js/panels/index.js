@@ -6,6 +6,7 @@ import { logsPanel } from './logs.js';
 import { pythonPanel } from './python.js';
 import { systemPanel } from './system.js';
 import { datacollectPanel } from './datacollect.js';
+import { calibrationPanel } from './calibration.js';
 import { filesPanel } from './files.js';
 
 export const PANELS = [
@@ -16,6 +17,7 @@ export const PANELS = [
   logsPanel,
   pythonPanel,
   systemPanel,
+  calibrationPanel,
   datacollectPanel,
   filesPanel,
 ];

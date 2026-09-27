@@ -24,7 +24,7 @@ export const PRESETS = {
     label: 'Отладка',
     root: col(
       stack('58%', 'terminal', 'logs', 'python'),
-      stack('42%', 'system', 'datacollect'),
+      stack('42%', 'system', 'calibration', 'datacollect'),
     ),
   },
   files: {
@@ -46,7 +46,7 @@ export const PRESETS = {
     root: stack(
       null,
       'video', 'servos', 'ik', 'terminal', 'logs',
-      'files', 'datacollect', 'python', 'system',
+      'files', 'datacollect', 'python', 'system', 'calibration',
     ),
   },
 };
