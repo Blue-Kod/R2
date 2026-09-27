@@ -59,6 +59,7 @@ export const api = {
   setCalibration: (offsets, inverted) => request('POST', '/api/calibration', { body: { offsets, inverted } }),
   resetCalibration: () => request('POST', '/api/calibration/reset', { body: {} }),
   reinitServo: () => request('POST', '/api/servo/reinit', { body: {} }),
+  servoPower: (enabled) => request('POST', '/api/servo/power', { body: { enabled } }),
 
   ikMove: (x, y, z, left) => request('POST', '/api/ik/move', { body: { x, y, z, left } }),
 

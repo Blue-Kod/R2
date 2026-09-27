@@ -100,10 +100,37 @@ export const servosPanel = {
       }, 250);
     };
 
+    // Тумблер питания серв: расслабить (снять сигнал) / снова включить.
+    let servosEnabled = true;
+    const applyPowerState = () => {
+      powerBtn.title = servosEnabled ? 'Расслабить сервы' : 'Включить сервы';
+      powerBtn.classList.toggle('text-destructive', !servosEnabled);
+    };
+    const powerBtn = iconButton('power', {
+      title: 'Расслабить сервы',
+      onClick: async (e) => {
+        const btn = e.currentTarget;
+        const next = !servosEnabled;
+        btn.disabled = true;
+        try {
+          await api.servoPower(next);
+          servosEnabled = next;
+          applyPowerState();
+          toast(next ? 'Сервы включены' : 'Сервы расслаблены', 'success');
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      },
+    });
+    applyPowerState();
+
     const head = h('div', { class: 'flex items-center gap-2' },
       icon('sliders', 'size-4 text-muted-foreground'),
       h('span', { class: 'text-[13px] font-medium', text: 'Сервоприводы' }),
       h('div', { class: 'grow' }),
+      powerBtn,
       iconButton('refresh', { title: 'Обновить углы', onClick: refresh }));
 
     el.appendChild(panelBody(head, list));

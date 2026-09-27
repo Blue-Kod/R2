@@ -600,6 +600,15 @@ def create_app() -> Flask:
         return jsonify({"angles": get_servo_angles(),
                         "positions": get_servo_positions()})
 
+    @app.route("/api/servo/power", methods=["POST"])
+    @require_auth
+    def api_servo_power():
+        """Включить сервы или расслабить их. body: {"enabled": bool}."""
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get("enabled", True))
+        servo_toggle(enabled)
+        return jsonify({"status": "ok", "enabled": enabled})
+
     # --- Calibration (offsets / inversion) -> config.json ---
 
     @app.route("/api/calibration", methods=["GET", "POST"])

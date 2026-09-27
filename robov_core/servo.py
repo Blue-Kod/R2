@@ -36,6 +36,16 @@ DEFAULT_OFFSETS: Dict[int, float] = {
 INVERTED_CHANNELS: Set[int] = {2, 4, 7, 8, 9}
 # ----------------------------------------------------------------------
 
+# ----------------------------------------------------------------------
+# Спец-значение PCA9685 «выход навсегда LOW» — бит 12 регистра OFF (0x1000).
+# Только оно реально снимает сигнал с канала и расслабляет серву: выход
+# становится постоянным LOW, т.е. импульсов нет. Запись (ON=0, OFF=0) НЕ
+# выключает канал (ON == OFF — недопустимая комбинация, генерация остаётся).
+# Так же поступают библиотеки Adafruit: setPWM(pin, 0, 4096).
+# ----------------------------------------------------------------------
+FULL_OFF: int = 0x1000
+# ----------------------------------------------------------------------
+
 # Персистентная калибровка (offsets/инверсия), правится из браузера.
 CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config.json"
 
@@ -281,7 +291,13 @@ class ServoController:
             return ok
 
     def _restore_pose(self) -> None:
-        """После восстановления шины вернуть сервы в известную позу."""
+        """После восстановления шины вернуть сервы в известную позу.
+
+        Если сервы расслаблены (relax_all), позу НЕ восстанавливаем — иначе
+        watchdog и fallback в _set_servo_immediate снова их запитывают.
+        """
+        if not self._enabled:
+            return
         for ch, cmd in list(self.current_angles.items()):
             if ch not in self.channel_configs:
                 continue
@@ -310,6 +326,22 @@ class ServoController:
         try:
             with self._bus_lock:
                 self.pwm.set_pwm(channel, 0, pulse)
+            return True
+        except Exception as e:
+            self._last_error = str(e)
+            return False
+
+    def _write_off(self, channel: int) -> bool:
+        """Снять сигнал с канала: OFF=0x1000 (full-off) → выход всегда LOW.
+
+        Именно это расслабляет серву. Запись (ON=0, OFF=0) канал НЕ
+        выключает, поэтому серва продолжает держать нагрузку.
+        """
+        if self.pwm is None:
+            return False
+        try:
+            with self._bus_lock:
+                self.pwm.set_pwm(channel, 0, FULL_OFF)
             return True
         except Exception as e:
             self._last_error = str(e)
@@ -484,6 +516,10 @@ class ServoController:
             return self._mover_conds[channel]
 
     def _ensure_mover(self, channel: int) -> None:
+        # Если сервы расслаблены — не создаём/оживляем mover (закр. гонку с
+        # relax_all: MOVE-поток не должен снова запитать канал).
+        if not self._enabled:
+            return
         with self.lock:
             thread = self._mover_threads.get(channel)
             if thread is not None and thread.is_alive():
@@ -533,6 +569,8 @@ class ServoController:
         deadband = profile["deadband"]
 
         while not self._mover_stop.is_set():
+            if not self._enabled:
+                break
             with cond:
                 cond.wait_for(
                     lambda: channel in self._move_targets
@@ -647,7 +685,7 @@ class ServoController:
         relaxed = 0
         for ch in self.channel_configs:
             for attempt in range(3):
-                if self._write_pwm(ch, 0):
+                if self._write_off(ch):
                     relaxed += 1
                     break
                 self._reinit_pwm(min_interval=0.0, restore=False)
