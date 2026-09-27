@@ -97,5 +97,6 @@ export const api = {
   setCamera: (showLeft) => request('POST', '/api/camera/params', { body: { show_left: showLeft } }),
 
   update: () => request('POST', '/api/update', { body: {} }),
+  reboot: () => request('POST', '/api/reboot', { body: {} }),
   shutdown: () => request('POST', '/api/shutdown', { body: {} }),
 };

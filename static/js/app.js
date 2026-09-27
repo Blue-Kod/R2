@@ -51,7 +51,7 @@ function buildHeader() {
       h('span', { class: 'font-mono text-foreground/70', text: '/' }),
       h('span', { text: 'Команды' })),
     modeBtn,
-    iconButton('refresh', { title: 'Обновить и перезапустить', onClick: doUpdate }),
+    iconButton('refresh', { title: 'Перезагрузить робота', onClick: doReboot }),
     iconButton('power', { title: 'Выключить', onClick: doShutdown }),
     iconButton('logout', { title: 'Выйти', onClick: doLogout }));
 }
@@ -155,7 +155,8 @@ function openPalette() {
   commands.push({ label: 'Сбросить раскладку', icon: 'refresh', run: () => workspace.reset() });
   commands.push({ label: 'Мобильный режим', icon: 'phone', run: () => { setStoredMode('mobile'); buildShell(boot); } });
   commands.push({ label: 'Полный интерфейс', icon: 'monitor', run: () => { setStoredMode('desktop'); buildShell(boot); } });
-  commands.push({ label: 'Обновить и перезапустить', icon: 'refresh', run: doUpdate });
+  commands.push({ label: 'Перезагрузить робота (reboot)', icon: 'refresh', run: doReboot });
+  commands.push({ label: 'Обновить код и перезапустить', icon: 'refresh', run: doUpdate });
   commands.push({ label: 'Выключить робота', icon: 'power', run: doShutdown });
   commands.push({ label: 'Выйти', icon: 'logout', run: doLogout });
 
@@ -209,6 +210,13 @@ function confirmAction(message, confirmLabel, fn) {
 async function doUpdate() {
   confirmAction('Обновить репозиторий и перезапустить R2? Соединение прервётся на несколько секунд.', 'Обновить', async () => {
     try { await api.update(); toast('Перезапуск запущен…', 'success', 8000); }
+    catch (err) { toast(err.message, 'error'); }
+  });
+}
+
+async function doReboot() {
+  confirmAction('Перезагрузить робота? Выполнится «sudo reboot».', 'Перезагрузить', async () => {
+    try { await api.reboot(); toast('Перезагрузка робота…', 'success', 8000); }
     catch (err) { toast(err.message, 'error'); }
   });
 }

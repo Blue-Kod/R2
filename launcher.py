@@ -358,11 +358,13 @@ def setup_sudoers(target_user: str) -> bool:
     python_bin = shutil.which("python3") or "/usr/bin/python3"
     systemctl_bin = shutil.which("systemctl") or "/usr/bin/systemctl"
     journalctl_bin = shutil.which("journalctl") or "/usr/bin/journalctl"
+    reboot_bin = shutil.which("reboot") or "/usr/sbin/reboot"
     commands = [
         python_bin,
         systemctl_bin,
         journalctl_bin,
         "/usr/sbin/shutdown",
+        reboot_bin,
         "/usr/bin/amixer",
         "/usr/bin/aplay",
     ]

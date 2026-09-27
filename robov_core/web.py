@@ -384,6 +384,18 @@ def create_app() -> Flask:
         threading.Thread(target=_shutdown, daemon=True).start()
         return jsonify({"status": "ok", "message": "Shutting down"})
 
+    @app.route("/api/reboot", methods=["POST"])
+    @require_auth
+    def api_reboot():
+        log("Reboot command received")
+        def _reboot():
+            servo_toggle(False)
+            time.sleep(0.5)
+            cleanup()
+            subprocess.run(["sudo", "reboot"], timeout=5)
+        threading.Thread(target=_reboot, daemon=True).start()
+        return jsonify({"status": "ok", "message": "Rebooting"})
+
     # --- Shell ---
 
     @app.route("/api/cmd/send", methods=["POST"])
