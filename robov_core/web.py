@@ -378,7 +378,7 @@ def create_app() -> Flask:
         log("Shutdown command received")
         def _shutdown():
             servo_toggle(False)
-            time.sleep(0.5)
+            time.sleep(0.7)
             cleanup()
             subprocess.run(["sudo", "shutdown", "-P", "now"], timeout=5)
         threading.Thread(target=_shutdown, daemon=True).start()
@@ -390,7 +390,7 @@ def create_app() -> Flask:
         log("Reboot command received")
         def _reboot():
             servo_toggle(False)
-            time.sleep(0.5)
+            time.sleep(0.7)
             cleanup()
             subprocess.run(["sudo", "reboot"], timeout=5)
         threading.Thread(target=_reboot, daemon=True).start()

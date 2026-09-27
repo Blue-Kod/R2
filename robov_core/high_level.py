@@ -433,15 +433,18 @@ def start_background() -> None:
 
 def servo_toggle(enable: bool) -> None:
     servo = _servo
-    if servo is None or not servo.initialized:
+    if servo is None:
         return
     if enable:
+        if not servo.initialized:
+            servo.reinit()
         # Сначала снимаем блок relax_all(), иначе set_servo() откажется
         # (сервы не включатся после выключения).
         servo.enable_all()
         for ch in servo.channel_configs:
             servo.set_servo(ch, servo.current_angles.get(ch, 90), smooth=False)
     else:
+        # relax_all() сам попробует восстановить шину, если она «отвалилась».
         servo.relax_all()
 
 

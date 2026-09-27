@@ -33,7 +33,7 @@ DEFAULT_OFFSETS: Dict[int, float] = {
 #   «назад-вниз»). В rest-позе углы 135 = середина 0..270, поэтому смена
 #   инверсии не двигает позу покоя, а только меняет направление.
 # ----------------------------------------------------------------------
-INVERTED_CHANNELS: Set[int] = {2, 4, 7, 8}
+INVERTED_CHANNELS: Set[int] = {2, 4, 7, 8, 9}
 # ----------------------------------------------------------------------
 
 # Персистентная калибровка (offsets/инверсия), правится из браузера.
@@ -266,7 +266,7 @@ class ServoController:
         """Переоткрыть шину PCA9685 (лечит «отвалившуюся» I2C)."""
         return self._reinit_pwm(min_interval=0.0)
 
-    def _reinit_pwm(self, min_interval: float = 2.0) -> bool:
+    def _reinit_pwm(self, min_interval: float = 2.0, restore: bool = True) -> bool:
         now = time.monotonic()
         with self._reinit_lock:
             if now - self._last_reinit < min_interval:
@@ -274,9 +274,9 @@ class ServoController:
             self._last_reinit = now
             self._close_pwm()
             ok = self._open_pwm()
-            if ok:
+            if ok and restore:
                 self._restore_pose()
-            else:
+            elif not ok:
                 print(f"[Servo] PCA9685 reinit failed: {self._last_error}")
             return ok
 
@@ -620,13 +620,23 @@ class ServoController:
         for cond in list(self._mover_conds.values()):
             with cond:
                 cond.notify_all()
-        if not self.initialized or self.pwm is None:
+        # Дать mover-потокам завершиться, чтобы не перезаписали нули.
+        time.sleep(0.05)
+        # Если шина «отвалилась» — пытаемся восстановить, иначе нули не уйдут.
+        if not self.is_connected():
+            self._reinit_pwm(min_interval=0.0, restore=False)
+        if self.pwm is None:
+            print("[Servo] relax_all: PCA9685 недоступна — сигнал снять нельзя")
             return
+        relaxed = 0
         for ch in self.channel_configs:
-            try:
-                self.pwm.set_pwm(ch, 0, 0)
-            except Exception as e:
-                print(f"Не удалось расслабить серво {ch}: {e}")
+            for attempt in range(3):
+                if self._write_pwm(ch, 0):
+                    relaxed += 1
+                    break
+                self._reinit_pwm(min_interval=0.0, restore=False)
+                time.sleep(0.01 * (attempt + 1))
+        print(f"[Servo] Сервы расслаблены ({relaxed}/{len(self.channel_configs)})")
 
     def enable_all(self) -> None:
         """Разрешить управление сервами снова (снимает блок relax_all)."""

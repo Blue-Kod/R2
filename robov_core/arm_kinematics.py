@@ -122,6 +122,10 @@ IK_TOLERANCE_MM = 50.0
 IK_CLEARANCE_MARGIN = 0.0
 W_NAT = 0.3
 
+# Ось X левой руки физически зеркальна относительно модели, поэтому в IK
+# инвертируем X для левой руки, чтобы +X двигал её так же, как правую.
+INVERT_LEFT_X = True
+
 # Сетка поиска IK: (шаг, радиус окна вокруг текущей точки).
 # None-радиус — первая грубая решётка по всему диапазону.
 GRID_STEPS = ((8.0, None), (2.0, 10.0), (0.4, 2.0), (0.08, 0.5))
@@ -353,7 +357,11 @@ def _result(theta: Optional[Tuple[float, float, float]], status: str,
               "reach_gap": float(reach_gap)}
     if theta is not None:
         result["servo"] = to_servo_commands(theta, left)
-        result["ee"] = [float(v) for v in fk(theta, left)["EE"]]
+        ee = fk(theta, left)["EE"]
+        if left and INVERT_LEFT_X:
+            ee = ee.copy()
+            ee[0] = -ee[0]
+        result["ee"] = [float(v) for v in ee]
     result["ok"] = err_mm is not None and err_mm <= IK_TOLERANCE_MM
     return result
 
@@ -375,7 +383,8 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
             ближайшую достижимую позу).
     """
     z = -z
-    wanted = np.array([float(x), float(y), float(z)], dtype=float)
+    tx = -float(x) if (left and INVERT_LEFT_X) else float(x)
+    wanted = np.array([tx, float(y), float(z)], dtype=float)
     prefer_crane = TABLE_ENABLED
     coarse = _ranges(left, *GRID_STEPS[0])
     positions, elbow = _fk_grid_positions(*coarse, left)

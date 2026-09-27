@@ -9,17 +9,28 @@ export const ikPanel = {
   mount(el, ctx) {
     const baseX = ctx.boot.ik_config?.base_x ?? 115;
     const side = { value: 'right' };
+    let xTouched = false;
 
     const numField = (name, value) => {
       const input = h('input', { type: 'number', step: '1', value, class: inputClass });
       return { input, node: h('label', { class: 'flex flex-col gap-1.5' }, microLabel(name), input) };
     };
     const fx = numField('X, мм', baseX);
+    fx.input.addEventListener('input', () => { xTouched = true; });
     const fy = numField('Y, мм', 0);
     const fz = numField('Z, мм', 0);
 
+    // One shared radio name per panel instance (otherwise both look selected).
+    const radioGroup = `ik-arm-${Math.random().toString(36).slice(2)}`;
     const armRadio = (text, val) => h('label', { class: 'flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[12px] text-muted-foreground has-[:checked]:border-primary/40 has-[:checked]:text-foreground' },
-      h('input', { type: 'radio', name: `ik-arm-${Math.random().toString(36).slice(2)}`, checked: side.value === val, class: 'accent-primary', onchange: () => { side.value = val; } }), text);
+      h('input', {
+        type: 'radio', name: radioGroup, checked: side.value === val, class: 'accent-primary',
+        onchange: () => {
+          side.value = val;
+          // If the user hasn't edited X, mirror the default for the new arm.
+          if (!xTouched) fx.input.value = String(val === 'left' ? -baseX : baseX);
+        },
+      }), text);
 
     const status = h('div', { class: 'min-h-[34px] overflow-y-auto text-[11px] leading-relaxed text-muted-foreground' });
     const btn = button({ label: 'Вычислить IK и переместить', className: 'w-full', onClick: () => run() });
