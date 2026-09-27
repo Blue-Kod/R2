@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -15,18 +16,73 @@ from flask import (
     Flask, Response, jsonify, render_template, request,
     send_file, session, redirect, url_for
 )
+from flask_sock import Sock
+
+from robov_core.terminal_shell import TerminalShell
 
 from robov_core.high_level import (
-    ROOT_DIR, check_root_password,
+    APP_VERSION, ROOT_DIR, check_root_password,
     get_servo_angles, get_servo_limits,
     get_stereo_camera, health_snapshot, ip_address,
     shell_output, shell_start, shell_write,
-    set_emote, get_emote, supported_emotes,
-    set_eyes_position, get_eyes_position, get_logs,
+    get_logs,
     get_servo_offsets, set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
 )
 from robov_core.arm_kinematics import browser_config
 from robov_core.data_collector import DataCollector
+
+
+def _default_ssh_user() -> str:
+    for key in ("R2_SSH_USER", "SUDO_USER", "USER"):
+        value = os.environ.get(key)
+        if value and value != "root":
+            return value
+    try:
+        import getpass
+        user = getpass.getuser()
+        if user and user != "root":
+            return user
+    except Exception:
+        pass
+    return "orangepi"
+
+
+def open_terminal_shell() -> TerminalShell:
+    """Interactive shell for the terminal panel.
+
+    Default behaviour: SSH to the robot itself and auto-connect (no prompts) so
+    the session behaves like a real login shell. Auth prefers local SSH keys and
+    falls back to the account password. If SSH is unavailable (no sshd/paramiko)
+    it falls back to a local pty shell, so the terminal always works.
+    """
+    mode = os.environ.get("R2_TERMINAL_MODE", "ssh").lower()
+    if mode != "local":
+        host = os.environ.get("R2_SSH_HOST", "127.0.0.1")
+        try:
+            port = int(os.environ.get("R2_SSH_PORT", "22"))
+        except ValueError:
+            port = 22
+        shell = TerminalShell()
+        try:
+            shell.start_ssh(
+                host=host,
+                port=port,
+                user=os.environ.get("R2_SSH_USER") or _default_ssh_user(),
+                password=os.environ.get("R2_SSH_PASSWORD", "orangepi"),
+            )
+            log(f"Terminal: SSH self-connect to {host} opened")
+            return shell
+        except Exception as exc:
+            log(f"Terminal: SSH self-connect to {host} failed ({exc}); using local shell")
+            try:
+                shell.close()
+            except Exception:
+                pass
+
+    shell = TerminalShell()
+    shell.start_local()
+    log("Terminal: local shell opened")
+    return shell
 
 _collector = DataCollector(
     state_getter=get_servo_angles,
@@ -60,6 +116,8 @@ def create_app() -> Flask:
     app.config["SESSION_COOKIE_SECURE"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
+    sock = Sock(app)
+
     # HTTP (порт 80) автоматически переадресует на HTTPS (443): панель,
     # веб-сокеты и API работают только в зашифрованном контексте.
     @app.before_request
@@ -68,6 +126,10 @@ def create_app() -> Flask:
             return None
         host = request.host.split(":")[0]
         return redirect(f"https://{host}{request.full_path}", code=308)
+
+    @app.route("/favicon.ico")
+    def favicon():
+        return redirect("/static/favicon.svg", code=302)
 
     # --- Auth helpers ---
 
@@ -117,6 +179,13 @@ def create_app() -> Flask:
     @app.route("/")
     @require_auth
     def index():
+        # The dockable workspace shell; panels fetch their own data via API.
+        return render_template("base.html")
+
+    @app.route("/api/bootstrap")
+    @require_auth
+    def api_bootstrap():
+        """Initial state for the shell and panels (replaces inline Jinja data)."""
         camera = get_stereo_camera()
         camera_params = {}
         if camera:
@@ -126,27 +195,19 @@ def create_app() -> Flask:
                     "fps": round(getattr(camera, 'fps', 0.0), 1),
                     "img_size": getattr(camera, 'img_size', [640, 360]),
                 }
-
-        servo_angles = get_servo_angles()
-        servo_limits = get_servo_limits()
-        servo_offsets = get_servo_offsets()
-
-        current_emote = get_emote()
-        eyes_x, eyes_y = get_eyes_position()
+            camera_params["layout"] = camera.layout()
 
         system_data = health_snapshot()
         system_data["ip"] = ip_address()
-
-        return render_template("index.html",
-                               camera_params=camera_params,
-                               servo_angles=servo_angles,
-                               servo_limits=servo_limits,
-                                servo_offsets=servo_offsets,
-                                ik_config=browser_config(),
-                                current_emote=current_emote,
-                               eyes_position={"x": eyes_x, "y": eyes_y},
-                               supported_emotes=supported_emotes(),
-                               system_data=system_data)
+        return jsonify({
+            "version": APP_VERSION,
+            "ip": system_data["ip"],
+            "camera_params": camera_params,
+            "servo_angles": get_servo_angles(),
+            "servo_limits": get_servo_limits(),
+            "servo_offsets": get_servo_offsets(),
+            "ik_config": browser_config(),
+        })
 
     # --- WebXR teleop ---
 
@@ -340,6 +401,53 @@ def create_app() -> Flask:
         time.sleep(0.1)
         return jsonify({"output": shell_output()})
 
+    # Full interactive terminal: xterm.js <-> WebSocket <-> local pty bash.
+    # Same origin as the app, so the Flask session cookie authenticates it.
+    @sock.route("/ws/terminal")
+    def ws_terminal(ws):
+        if not session.get("authenticated"):
+            try:
+                ws.close()
+            except Exception:
+                pass
+            return
+
+        shell = open_terminal_shell()
+        try:
+            log("Terminal: WS session opened")
+            while shell.running:
+                try:
+                    message = ws.receive(timeout=0.02)
+                except TimeoutError:
+                    message = None
+                except Exception:
+                    break
+                if message:
+                    try:
+                        payload = json.loads(message)
+                    except (ValueError, TypeError):
+                        payload = {"type": "input", "data": message}
+                    kind = payload.get("type")
+                    if kind == "input":
+                        shell.write(payload.get("data", ""))
+                    elif kind == "resize":
+                        try:
+                            shell.resize(int(payload.get("cols", 80)),
+                                         int(payload.get("rows", 24)))
+                        except (TypeError, ValueError):
+                            pass
+                    elif kind == "close":
+                        break
+                output = shell.read()
+                if output:
+                    try:
+                        ws.send(json.dumps({"type": "output", "data": output}))
+                    except Exception:
+                        break
+        finally:
+            shell.close()
+            log("Terminal: WS session closed")
+
     # --- Video ---
 
     @app.route("/video_feed")
@@ -424,7 +532,10 @@ def create_app() -> Flask:
     def camera_params():
         camera = get_stereo_camera()
         if not camera:
-            return jsonify({"error": "Camera not initialized"}), 500
+            # No camera: keep the endpoints usable for the UI (empty layout).
+            if request.method == "GET":
+                return jsonify({"show_left": True, "layout": None})
+            return jsonify({"status": "ok"})
         if request.method == "GET":
             return jsonify({
                 "show_left": camera.show_left,
@@ -496,36 +607,6 @@ def create_app() -> Flask:
             return jsonify({"error": "x, y and z must be numbers"}), 400
         return jsonify(move_ik_detail(*point, left=left))
 
-    # --- Emote / Eyes ---
-
-    @app.route("/api/emote", methods=["GET", "POST"])
-    @require_auth
-    def api_emote():
-        if request.method == "GET":
-            return jsonify({"status": "ok", "emote": get_emote(), "supported": supported_emotes()})
-        data = request.get_json(silent=True) or {}
-        emotion_name = str(data.get("emotion_name") or "")
-        if set_emote(emotion_name):
-            return jsonify({"status": "ok", "emote": get_emote()})
-        return jsonify({"status": "error", "message": "Unsupported emotion",
-                        "supported": supported_emotes()}), 400
-
-    @app.route("/api/eyes", methods=["GET", "POST"])
-    @require_auth
-    def api_eyes():
-        if request.method == "GET":
-            x, y = get_eyes_position()
-            return jsonify({"status": "ok", "x": x, "y": y})
-        data = request.get_json(silent=True) or {}
-        try:
-            x = float(data.get("x", 0.0))
-            y = float(data.get("y", 0.0))
-        except (TypeError, ValueError):
-            return jsonify({"status": "error", "message": "x and y must be numbers"}), 400
-        set_eyes_position(x, y)
-        x, y = get_eyes_position()
-        return jsonify({"status": "ok", "x": x, "y": y})
-
     # --- Python exec ---
 
     @app.route("/api/python/exec", methods=["POST"])
@@ -559,7 +640,8 @@ def create_app() -> Flask:
     @app.route("/file_manager")
     @require_auth
     def file_manager():
-        return render_template("file_manager.html")
+        # The file manager is now the "Файлы" panel inside the workspace.
+        return redirect("/?panel=files", code=308)
 
     def normalize_path(path_str: str) -> Path:
         if not path_str or path_str.strip() == "":
@@ -766,37 +848,5 @@ def create_app() -> Flask:
             return jsonify({"error": "Permission denied"}), 403
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
-    @app.route("/api/help/files")
-    @require_auth
-    def api_help_files():
-        docs_dir = ROOT_DIR / "docs"
-        files = []
-        try:
-            for f in sorted(docs_dir.iterdir()):
-                if f.suffix == ".md":
-                    content = f.read_text("utf-8")
-                    title = content.split("\n")[0].lstrip("# ").strip() if content else f.stem
-                    files.append({"path": f.name, "title": title})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-        return jsonify(files)
-
-    @app.route("/api/help")
-    @require_auth
-    def api_help():
-        path = request.args.get("path", "ssh_help.md")
-        help_path = ROOT_DIR / "docs" / path
-        # prevent path traversal
-        try:
-            help_path = help_path.resolve().relative_to((ROOT_DIR / "docs").resolve())
-            help_path = ROOT_DIR / "docs" / help_path
-        except ValueError:
-            return "Invalid path", 400
-        try:
-            raw = help_path.read_text(encoding="utf-8")
-            return raw, 200, {"Content-Type": "text/plain; charset=utf-8"}
-        except Exception as e:
-            return f"Ошибка загрузки справки: {e}", 500
 
     return app

@@ -1,0 +1,197 @@
+/* Golden Layout theme — restyled to the R2 (Negentropy) dark language.
+ * Base layout rules live in vendor/goldenlayout/goldenlayout-base.css; this
+ * file only paints. Loaded after r2.css so the CSS variables are available.
+ */
+
+.lm_root {
+    font-family: var(--font-sans, system-ui, sans-serif);
+    font-size: 12px;
+}
+
+/* --- Stack content surface --- */
+.lm_stack {
+    background: transparent;
+}
+.lm_content {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    color: var(--foreground);
+}
+.lm_stack > .lm_items {
+    border-radius: var(--radius-lg);
+}
+
+/* --- Header / tabs --- */
+.lm_header {
+    height: 32px;
+    background: transparent;
+    border: 0;
+}
+.lm_header .lm_tabs {
+    height: 32px;
+    align-items: stretch;
+}
+.lm_header .lm_tab {
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    margin: 0;
+    padding: 0 26px 0 12px;
+    border: 0;
+    border-right: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    transition: color 150ms var(--ease-out), background-color 150ms var(--ease-out);
+}
+.lm_header .lm_tab:hover {
+    color: var(--foreground);
+    background: oklch(1 0 0 / 4%);
+}
+.lm_header .lm_tab.lm_active {
+    color: var(--foreground);
+    background: var(--background);
+}
+.lm_header .lm_tab .lm_title {
+    max-width: 220px;
+    padding: 0;
+}
+.lm_header .lm_tab .lm_close_tab,
+.lm_header .lm_tab .lm_maximise {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    top: 7px;
+    right: 4px;
+    border-radius: var(--radius-sm);
+    color: var(--muted-foreground);
+    opacity: 0;
+    transition: opacity 120ms var(--ease-out), background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.lm_header .lm_tab:hover .lm_close_tab,
+.lm_header .lm_tab.lm_active .lm_close_tab,
+.lm_header .lm_tab.lm_active .lm_maximise {
+    opacity: 1;
+}
+.lm_header .lm_tab .lm_close_tab:hover,
+.lm_header .lm_tab .lm_maximise:hover {
+    color: var(--foreground);
+    background: oklch(1 0 0 / 10%);
+}
+.lm_header .lm_tab .lm_close_tab::before {
+    content: "\00d7";
+    font-size: 15px;
+    line-height: 1;
+}
+.lm_header .lm_tab .lm_maximise::before {
+    content: "\2921";
+    font-size: 12px;
+    line-height: 1;
+}
+
+/* Stack-level controls (dropdown, maximise, close) in the header corner. */
+.lm_header .lm_controls {
+    top: 0;
+    height: 32px;
+    align-items: center;
+    gap: 2px;
+    padding-right: 4px;
+}
+.lm_header .lm_controls > * {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--muted-foreground);
+    transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.lm_header .lm_controls > *:hover {
+    color: var(--foreground);
+    background: oklch(1 0 0 / 10%);
+}
+.lm_header .lm_controls .lm_maximise::before {
+    content: "\2921";
+    font-size: 13px;
+}
+.lm_header .lm_controls .lm_close::before {
+    content: "\00d7";
+    font-size: 16px;
+}
+.lm_header .lm_controls .lm_tabdropdown::before {
+    content: "\2261";
+    border: 0;
+    color: inherit;
+    font-size: 13px;
+}
+
+/* Dropdown list of overflowed tabs. */
+.lm_header .lm_tabdropdown_list {
+    top: 32px;
+    background: var(--popover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 24px oklch(0 0 0 / 0.4);
+    padding: 4px;
+    overflow: hidden;
+}
+.lm_header .lm_tabdropdown_list .lm_tab {
+    height: 26px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--muted-foreground);
+    padding-right: 10px;
+}
+.lm_header .lm_tabdropdown_list .lm_tab:hover {
+    color: var(--foreground);
+    background: oklch(1 0 0 / 8%);
+}
+
+/* --- Siders / split handles --- */
+.lm_splitter {
+    background: transparent;
+    transition: background-color 120ms var(--ease-out);
+}
+.lm_splitter:hover,
+.lm_splitter.lm_dragging {
+    background: var(--primary);
+    opacity: 0.25;
+}
+.lm_splitter.lm_vertical {
+    height: 6px;
+}
+.lm_splitter.lm_horizontal {
+    width: 6px;
+}
+
+/* --- Drag proxy & drop indicator --- */
+.lm_dragProxy .lm_content {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 12px 32px oklch(0 0 0 / 0.5);
+    opacity: 0.9;
+}
+.lm_dropTargetIndicator {
+    outline: 1px dashed var(--primary);
+    outline-offset: -1px;
+    border-radius: var(--radius-md);
+    transition: all 150ms var(--ease-out);
+}
+.lm_dropTargetIndicator .lm_inner {
+    background: var(--primary);
+    opacity: 0.08;
+    border-radius: var(--radius-md);
+}
+
+/* --- Popout / maximise placeholder --- */
+.lm_maximised {
+    z-index: 40;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}

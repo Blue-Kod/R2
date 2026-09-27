@@ -15,6 +15,7 @@ class TerminalShell:
         self._lock = threading.Lock()
         self._master_fd = None
         self._slave_fd = None
+        self._pid = None
         self._ssh_client = None
         self._ssh_channel = None
 
@@ -30,31 +31,56 @@ class TerminalShell:
                 bufsize=0,
             )
         else:
-            import pty
+            # pty.fork() gives the child its own session + controlling terminal,
+            # so bash enables job control and full-screen apps (top, vim) work.
+            import fcntl
             import os
-            self._master_fd, self._slave_fd = pty.openpty()
-            self._proc = subprocess.Popen(
-                ["/bin/bash", "-i"],
-                stdin=self._slave_fd,
-                stdout=self._slave_fd,
-                stderr=self._slave_fd,
-                close_fds=True,
-            )
-            os.close(self._slave_fd)
+            import pty
+            import struct
+            import termios
+
+            env = os.environ.copy()
+            env["TERM"] = "xterm-256color"
+            env["COLORTERM"] = "truecolor"
+
+            pid, master_fd = pty.fork()
+            if pid == 0:
+                os.environ.update(env)
+                try:
+                    os.execvpe("/bin/bash", ["/bin/bash", "-i"], env)
+                except Exception:
+                    os._exit(127)
+            self._pid = pid
+            self._master_fd = master_fd
+            try:
+                fcntl.ioctl(master_fd, termios.TIOCSWINSZ,
+                            struct.pack("HHHH", 24, 80, 0, 0))
+            except Exception:
+                pass
         self._running = True
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader_thread.start()
 
-    def start_ssh(self, host: str, port: int, user: str, password: str):
+    def start_ssh(self, host: str, port: int, user: str, password: str,
+                  key_filename: str | None = None):
         self.close()
+        import os
         import paramiko
         self._mode = "ssh"
         self._ssh_client = paramiko.SSHClient()
         self._ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self._ssh_client.connect(
-            host, port=port, username=user, password=password,
-            look_for_keys=False, allow_agent=False, timeout=10,
+        # Prefer local SSH keys / agent (passwordless), fall back to the password.
+        kwargs = dict(
+            port=port, username=user, timeout=10,
+            banner_timeout=10, auth_timeout=10,
+            look_for_keys=True, allow_agent=True,
         )
+        if password:
+            kwargs["password"] = password
+        keyfile = key_filename or os.environ.get("R2_SSH_KEY")
+        if keyfile:
+            kwargs["key_filename"] = keyfile
+        self._ssh_client.connect(host, **kwargs)
         self._ssh_channel = self._ssh_client.invoke_shell(
             term="xterm-256color", width=80, height=24,
         )
@@ -131,20 +157,25 @@ class TerminalShell:
                                 pass
                 else:
                     import os
+                    import signal
+                    if self._pid:
+                        try:
+                            os.kill(self._pid, signal.SIGHUP)
+                        except Exception:
+                            pass
+                        try:
+                            os.kill(self._pid, signal.SIGTERM)
+                        except Exception:
+                            pass
+                        try:
+                            os.waitpid(self._pid, 0)
+                        except Exception:
+                            pass
                     if self._master_fd is not None:
                         try:
                             os.close(self._master_fd)
                         except Exception:
                             pass
-                    if self._proc:
-                        try:
-                            self._proc.terminate()
-                            self._proc.wait(timeout=3)
-                        except Exception:
-                            try:
-                                self._proc.kill()
-                            except Exception:
-                                pass
             elif self._mode == "ssh":
                 if self._ssh_channel:
                     try:
@@ -158,6 +189,7 @@ class TerminalShell:
                         pass
         self._mode = None
         self._proc = None
+        self._pid = None
         self._master_fd = None
         self._slave_fd = None
         self._ssh_client = None

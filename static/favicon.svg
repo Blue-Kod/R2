@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <style>
+    .tile { fill: #0a0a0a; }
+    .mark { stroke: #f0f0f0; }
+    @media (prefers-color-scheme: light) {
+      .tile { fill: #ffffff; }
+      .mark { stroke: #111111; }
+    }
+  </style>
+  <rect class="tile" x="2" y="2" width="44" height="44" rx="12"/>
+  <g class="mark" transform="translate(4.05 8.8) scale(0.95)" fill="none"
+     stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 26V6h9a4.5 4.5 0 0 1 0 9H8M13 15l6.5 11"/>
+    <path d="M25 10a4.5 4.5 0 0 1 9 0l-9 16h9"/>
+  </g>
+</svg>

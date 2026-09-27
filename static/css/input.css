@@ -1,0 +1,181 @@
+/* R2 design system — Negentropy visual language (dark-only).
+ * Source for the Tailwind v4 standalone CLI. Build (dev machine only):
+ *   ./tools/tailwindcss -i static/css/input.css -o static/css/r2.css --minify
+ * The compiled r2.css is committed; the robot never needs Node/Tailwind.
+ */
+@import "tailwindcss";
+
+@source "../../templates";
+@source "../js";
+
+/* --- Geist Variable (self-hosted, latin + cyrillic) --- */
+@font-face {
+    font-family: 'Geist Variable';
+    font-style: normal;
+    font-display: swap;
+    font-weight: 100 900;
+    src: url('../fonts/geist-cyrillic-ext-wght-normal-DjL33-gN.woff2') format('woff2-variations');
+    unicode-range: U+460-52F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+    font-family: 'Geist Variable';
+    font-style: normal;
+    font-display: swap;
+    font-weight: 100 900;
+    src: url('../fonts/geist-cyrillic-wght-normal-BEAKL7Jp.woff2') format('woff2-variations');
+    unicode-range: U+301, U+400-45F, U+490-491, U+4B0-4B1, U+2116;
+}
+@font-face {
+    font-family: 'Geist Variable';
+    font-style: normal;
+    font-display: swap;
+    font-weight: 100 900;
+    src: url('../fonts/geist-vietnamese-wght-normal-6IgcOCM7.woff2') format('woff2-variations');
+    unicode-range: U+102-103, U+110-111, U+128-129, U+168-169, U+1A0-1A1, U+1AF-1B0, U+300-301, U+303-304, U+308-309, U+323, U+329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+    font-family: 'Geist Variable';
+    font-style: normal;
+    font-display: swap;
+    font-weight: 100 900;
+    src: url('../fonts/geist-latin-ext-wght-normal-DC-KSUi6.woff2') format('woff2-variations');
+    unicode-range: U+100-2BA, U+2BD-2C5, U+2C7-2CC, U+2CE-2D7, U+2DD-2FF, U+304, U+308, U+329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: 'Geist Variable';
+    font-style: normal;
+    font-display: swap;
+    font-weight: 100 900;
+    src: url('../fonts/geist-latin-wght-normal-BgDaEnEv.woff2') format('woff2-variations');
+    unicode-range: U+00??, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* --- Token bridge: CSS vars -> Tailwind color/radius/font utilities --- */
+@theme inline {
+    --font-sans: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-heading: var(--font-sans);
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Dark-only theme: Negentropy's `.dark` palette applied at the root. */
+:root {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --radius: 0.625rem;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    html, body {
+        height: 100%;
+    }
+    body {
+        @apply bg-background text-foreground font-sans antialiased;
+        overflow: hidden;
+        cursor: default;
+    }
+    input:not([type='button']):not([type='submit']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='color']),
+    textarea,
+    [contenteditable='true'] {
+        cursor: text;
+    }
+    /* No selection caret on chrome; real fields and content stay selectable. */
+    header, aside, form, [role='dialog'], [role='menu'], [role='listbox'], [data-chrome] {
+        -webkit-touch-callout: none;
+        user-select: none;
+    }
+    input, textarea, select, [contenteditable='true'], [data-selectable='true'] {
+        user-select: text;
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: oklch(1 0 0 / 12%); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 20%); }
+}
+
+/* --- Motion utilities (mirrors tw-animate-css usage in Negentropy) --- */
+@keyframes r2-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes r2-slide-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes r2-zoom-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes r2-shimmer { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+
+.anim-in { animation: r2-slide-up 200ms var(--ease-out) both; }
+.anim-fade { animation: r2-fade-in 150ms var(--ease-out) both; }
+.anim-zoom { animation: r2-zoom-in 150ms var(--ease-out) both; }
+.shimmer { animation: r2-shimmer 1.4s ease-in-out infinite; }
+.press { transition: scale 150ms var(--ease-out), background-color 150ms var(--ease-out); }
+.press:active { scale: 0.96; }
+
+/* Brand mark: stroke draw-in. Normalised with pathLength="1" so it works at
+   any path length / size. `.r2-mark-draw` loops (loading); `.r2-mark-intro`
+   draws once on mount, staggered per part. */
+@keyframes r2-draw-loop {
+    0% { stroke-dashoffset: 1; }
+    45% { stroke-dashoffset: 0; }
+    55% { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: -1; }
+}
+@keyframes r2-draw-once {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+}
+.r2-mark-draw path {
+    stroke-dasharray: 1;
+    animation: r2-draw-loop 2.4s var(--ease-out) infinite;
+}
+.r2-mark-intro path {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: r2-draw-once 0.85s var(--ease-out) both;
+}
+.r2-mark-intro path:nth-child(2) { animation-delay: 0.10s; }
+.r2-mark-intro path:nth-child(3) { animation-delay: 0.22s; }
+.r2-mark-intro path:nth-child(4) { animation-delay: 0.36s; }
+@media (prefers-reduced-motion: reduce) {
+    .anim-in, .anim-fade, .anim-zoom, .shimmer { animation: none; }
+    .press:active { scale: 1; }
+    .r2-mark-draw path, .r2-mark-intro path { animation: none; stroke-dashoffset: 0; }
+}

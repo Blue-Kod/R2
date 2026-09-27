@@ -16,10 +16,6 @@ from robov_core.camera import StereoCamera
 from robov_core.servo import ServoController
 from robov_core import arm_kinematics
 
-_HAS_DISPLAY = False
-EyeDisplay = None
-optimize_for_arm = None
-
 # --- Configuration ---
 APP_VERSION = "0.2"
 HTTP_HOST = "0.0.0.0"
@@ -28,7 +24,6 @@ HTTPS_PORT = 443
 CAMERA_SOURCE = 0
 CAMERA_PARAMS_FILE = "cam_params.json"
 LAUNCHER_SCRIPT = "launcher.py"
-EYES_SCALE_FACTOR = 1.3
 APP_PASSWORD = "orangepi"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -81,11 +76,8 @@ def check_root_password(password: str) -> bool:
 # --- Global state ---
 _camera: Optional[StereoCamera] = None
 _servo: Optional[ServoController] = None
-_display: Optional[EyeDisplay] = None
-_eye_api = None
 _lock: threading.Lock = threading.Lock()
 _servo_lock: threading.Lock = threading.Lock()
-_display_lock: threading.Lock = threading.Lock()
 
 _logs_buffer: deque = deque(maxlen=500)
 
@@ -123,16 +115,6 @@ _shell_running: bool = False
 _shell_lock: threading.Lock = threading.Lock()
 _shell_thread: Optional[threading.Thread] = None
 
-_current_emote: str = "normal"
-_eyes_x: float = 0.0
-_eyes_y: float = 0.0
-_emote_lock: threading.Lock = threading.Lock()
-_emotions_dir: str = os.path.join(os.path.dirname(__file__), "emotions")
-_supported_emotes: List[str] = []
-if os.path.isdir(_emotions_dir):
-    _supported_emotes = [os.path.splitext(f)[0] for f in os.listdir(_emotions_dir) if f.endswith(".png")]
-
-_display_thread: Optional[threading.Thread] = None
 _all_threads: List[threading.Thread] = []
 
 _tts_ready: bool = False
@@ -355,49 +337,6 @@ def shell_onetime(command: str) -> str:
     return shell_output().replace(old_output, "")
 
 
-def set_emote(emotion_name: str) -> bool:
-    global _current_emote
-    name = str(emotion_name or "").strip().lower()
-    if name not in _supported_emotes:
-        return False
-    with _emote_lock:
-        _current_emote = name
-    if _eye_api:
-        try:
-            _eye_api.update_emote(name)
-        except Exception:
-            pass
-    return True
-
-
-def get_emote() -> str:
-    with _emote_lock:
-        return _current_emote
-
-
-def set_eyes_position(x: float, y: float) -> None:
-    global _eyes_x, _eyes_y
-    x = max(-1.0, min(1.0, float(x)))
-    y = max(-1.0, min(1.0, float(y)))
-    with _emote_lock:
-        _eyes_x = x
-        _eyes_y = y
-    if _eye_api:
-        try:
-            _eye_api.update_eyes_position(x, y)
-        except Exception:
-            pass
-
-
-def get_eyes_position() -> Tuple[float, float]:
-    with _emote_lock:
-        return _eyes_x, _eyes_y
-
-
-def supported_emotes() -> List[str]:
-    return sorted(_supported_emotes)
-
-
 def cpu_temp() -> str:
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r", encoding="utf-8") as file:
@@ -429,47 +368,6 @@ def health_snapshot() -> dict:
         "ram": psutil.virtual_memory().percent,
         "temp": cpu_temp(),
     }
-
-
-def _display_worker() -> None:
-    global _display, _eye_api
-
-    if not _HAS_DISPLAY:
-        print("[!] eyes_display.py not available, skipping display")
-        return
-
-    if optimize_for_arm:
-        optimize_for_arm()
-
-    with _display_lock:
-        _display = EyeDisplay(scale_factor=EYES_SCALE_FACTOR)
-
-    _eye_api = _display.api
-    _display.start()
-
-
-def stop_display() -> None:
-    global _display, _eye_api, _display_thread
-    if _display:
-        try:
-            _display.stop()
-        except Exception:
-            pass
-        _display = None
-        _eye_api = None
-        _display_thread = None
-
-
-def start_display() -> None:
-    global _display, _eye_api, _display_thread
-    if _display_thread and _display_thread.is_alive():
-        return
-    if not _HAS_DISPLAY:
-        return
-    t = threading.Thread(target=_display_worker, daemon=True, name="r2-display-thread")
-    t.start()
-    _display_thread = t
-    _all_threads.append(t)
 
 
 def start_background() -> None:
@@ -512,12 +410,6 @@ def start_background() -> None:
         log(f"HTTPS: https://<robot-ip>:{HTTPS_PORT}/webxr (self-signed, подтвердите в браузере шлема)")
     except Exception as e:
         log(f"HTTPS disabled: {e}")
-
-    if _HAS_DISPLAY:
-        global _display_thread
-        _display_thread = threading.Thread(target=_display_worker, daemon=True, name="r2-display-thread")
-        _display_thread.start()
-        _all_threads.append(_display_thread)
 
     # Initialize TTS early so it's ready when needed
     try:
@@ -568,8 +460,6 @@ def cleanup() -> None:
         _collector.close()
     except Exception:
         pass
-
-    stop_display()
 
     if _servo is not None:
         log("Relaxing servos...")
@@ -642,10 +532,6 @@ def grab(target) -> bool:
 def move_arm_to(target, left: bool = False) -> bool:
     log(f"move_arm_to() stub called — target={target}, left={left}")
     return False
-
-
-def emote(emotion_name: str) -> bool:
-    return set_emote(emotion_name)
 
 
 def get_servo_offsets() -> Dict[int, float]:

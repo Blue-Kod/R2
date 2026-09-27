@@ -3,6 +3,9 @@
 /backups/
 .idea/
 .vscode/
+
+# Tailwind standalone CLI (dev-only, ~100 MB; fetched by tools/build-css.sh)
+/tools/tailwindcss
 *.swp
 *.swo
 *~

@@ -29,5 +29,11 @@ python-dotenv>=1.0.0
 # WebSocket support
 websockets>=11.0.0
 
+# WebSocket route inside Flask (browser terminal over the same origin)
+flask-sock>=0.7.0
+
+# SSH client for the self-connecting terminal
+paramiko>=3.4.0
+
 # Parquet data collection (LeRobot format) for VLA training
 pyarrow>=15.0.0
