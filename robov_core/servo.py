@@ -15,8 +15,8 @@ from typing import Dict, List, Optional, Set, Tuple
 # отрицательное — меньше.
 # ----------------------------------------------------------------------
 DEFAULT_OFFSETS: Dict[int, float] = {
-    0: 0.0, 1: 0, 2: 0, 3: 0.0, 4: 0.0,
-    5: 0, 6: 0.0, 7: 0, 8: 0.0, 9: 0.0
+    0: 0.0, 1: 0.0, 2: 0, 3: 0.0, 4: 0.0,
+    5: 0.0, 6: 0.0, 7: 0, 8: 0.0, 9: 0.0
 }
 
 # ----------------------------------------------------------------------
@@ -62,11 +62,11 @@ REST_POSE: Dict[int, int] = {
 # Обратная совместимость: старое имя позы покоя.
 DEFAULT_POSE = REST_POSE
 
-# Поза включения: применяется при старте робота.
-# Руки по умолчанию: плечо (1/2) = 45°, локоть (6/7) = 180°.
+# Поза включения (по умолчанию): применяется при старте робота.
+# Руки вниз, как у человека: 90 135 135 90 45 45 180 180 90 90
 START_POSE: Dict[int, int] = {
-    0: 90, 1: 45, 2: 45, 3: 90, 4: 230,
-    5: 230, 6: 180, 7: 180, 8: 90, 9: 90,
+    0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
+    5: 45, 6: 180, 7: 180, 8: 90, 9: 90,
 }
 # ----------------------------------------------------------------------
 
@@ -175,6 +175,10 @@ class ServoController:
 
         self.current_angles: Dict[int, int] = _initial_pose()
         self.lock: threading.Lock = threading.Lock()
+        # I2C/шина PCA9685 не потокобезопасна: одновременные записи из
+        # mover-потоков каналов дают [Errno 22] Invalid argument. Все записи в
+        # шину сериализуем одним мьютексом.
+        self._bus_lock: threading.Lock = threading.Lock()
 
         # Плавное движение: per-channel mover.
         #   _move_targets[ch]   — последняя целевая команда (None = нет задачи)
@@ -482,12 +486,13 @@ class ServoController:
     def _set_servo_immediate(self, channel: int, physical_angle: float, command_angle: Optional[int] = None) -> bool:
         try:
             pulse = self.angle_to_pulse(physical_angle, channel)
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
-                    self.pwm.set_pwm(channel, 0, pulse)
+                    with self._bus_lock:
+                        self.pwm.set_pwm(channel, 0, pulse)
                     break
                 except Exception:
-                    if attempt == 2:
+                    if attempt == 4:
                         raise
                     time.sleep(0.01 * (attempt + 1))
             with self.lock:
