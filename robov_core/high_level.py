@@ -673,6 +673,64 @@ def set_servo_command(channel: int, angle: int) -> bool:
     return servo.set_servo(channel, angle, smooth=True)
 
 
+def test_servo_cycle(channel: int = 12, duration: float = 5.0) -> bool:
+    """Тестовый прогон одного сервопривода: полный ход min→max за
+    ``duration`` секунд и обратно max→min за те же ``duration``.
+
+    Один полный цикл = 2·duration (по умолчанию 5 с туда + 5 с обратно).
+    Диапазон берётся из лимитов канала; канал 12 (по умолчанию) в основном
+    конфиге отсутствует — для него задаётся типовой ход 0..180°.
+
+    Команда блокирующая. Удобно вызывать из Python-панели:
+        test_servo_cycle(12)
+    """
+    servo = _servo
+    if servo is None:
+        log("test_servo_cycle: сервоконтроллер не инициализирован")
+        return False
+
+    if not servo.initialized:
+        servo.reinit()
+    if not servo.initialized:
+        log("test_servo_cycle: PCA9685 недоступна")
+        return False
+
+    # Канал, которого нет в основном конфиге (например 12): типовой 0..180.
+    if channel not in servo.channel_configs:
+        min_a, max_a, p_min, p_max = 0, 180, 120, 520
+        servo.channel_configs[channel] = (min_a, max_a, p_min, p_max)
+        servo.command_limits[channel] = (min_a, max_a)
+        servo.offsets.setdefault(channel, 0.0)
+
+    lo, hi = servo.command_limits.get(channel, servo.channel_configs[channel][:2])
+    lo, hi = int(lo), int(hi)
+    if hi <= lo:
+        log(f"test_servo_cycle: канал {channel}: некорректный диапазон {lo}..{hi}")
+        return False
+
+    # Тест должен реально двигать серву — снимаем возможную блокировку relax.
+    servo.enable_all()
+
+    def sweep(a_from: int, a_to: int) -> None:
+        """Пройти от a_from до a_to ровно за duration секунд (по часам)."""
+        t0 = time.monotonic()
+        while True:
+            frac = (time.monotonic() - t0) / duration
+            if frac > 1.0:
+                frac = 1.0
+            angle_value = a_from + (a_to - a_from) * frac
+            servo.set_servo(channel, int(round(angle_value)), smooth=False)
+            if frac >= 1.0:
+                break
+            time.sleep(0.01)
+
+    log(f"test_servo_cycle: канал {channel}, {lo}→{hi} и {hi}→{lo} по {duration:g}с")
+    sweep(lo, hi)
+    sweep(hi, lo)
+    log(f"test_servo_cycle: канал {channel} — цикл завершён")
+    return True
+
+
 # Последний командованный theta на сторону: старт для непрерывности ветки IK
 # (а не физические углы, которые отстают от команд на ходу).
 _last_ik_start: Dict[bool, Optional[Tuple[float, float, float]]] = {
