@@ -11,17 +11,12 @@ from robov_core.high_level import start_background, APP_VERSION
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="R2 Robot Controller")
+    parser = argparse.ArgumentParser(description="R2 by Loginov.")
     parser.add_argument("--version", action="store_true", help="Show version")
     return parser.parse_args()
 
 
 def _handle_termination(signum, frame):
-    """Systemd stop/reboot присылает SIGTERM — расслабляем сервы и выходим.
-
-    Без этого при системном ребуте (не через наш /api/reboot) процесс
-    умирает молча, и сервы остаются под нагрузкой.
-    """
     try:
         from robov_core.high_level import cleanup
         cleanup()

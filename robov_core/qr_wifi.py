@@ -84,8 +84,7 @@ def scan_qr_frame(frame) -> str | None:
 
 
 def format_ip_for_speech(ip: str) -> str:
-    """192.168.1.42 -> '192 точка 168 точка 1 точка 42' (чтобы TTS проговорил)."""
-    return ip.replace(".", " точка ") if ip else ip
+    return ip.replace(".", " точка ") if ip else "Не удалось узнать."
 
 
 def start_wifi_setup(speak_func, log_func) -> None:
@@ -122,9 +121,9 @@ def start_wifi_setup(speak_func, log_func) -> None:
                 if connect_to_wifi(ssid, password):
                     address = ip_address()
                     speak_func(
-                        "Подключение к Wi-Fi выполнено. "
-                        f"Мой адрес в локальной сети: {format_ip_for_speech(address)}. "
-                        "Я готов к работе."
+                        f"""Подключение к Wi-Fi выполнено.
+                        Мой адрес в локальной сети: {format_ip_for_speech(address)}. 
+                        Я готов к работе."""
                     )
                     log_func(f"[WiFi] Connected to {ssid}, IP={address}")
                     return

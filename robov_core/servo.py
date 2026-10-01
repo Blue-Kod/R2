@@ -698,7 +698,7 @@ class ServoController:
         self._mover_stop.clear()
 
     # ------------------------------------------------------------------
-    # Тест и калибровка
+    # Тест и кал`ибровка
     # ------------------------------------------------------------------
     def test_cycle(self, channels: Optional[List[int]] = None, delay: int = 1) -> None:
         if channels is None:
