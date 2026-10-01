@@ -83,21 +83,26 @@ def scan_qr_frame(frame) -> str | None:
     return None
 
 
+def format_ip_for_speech(ip: str) -> str:
+    """192.168.1.42 -> '192 точка 168 точка 1 точка 42' (чтобы TTS проговорил)."""
+    return ip.replace(".", " точка ") if ip else ip
+
+
 def start_wifi_setup(speak_func, log_func) -> None:
     log_func("[WiFi] No internet — starting QR setup")
 
-    from robov_core.high_level import get_stereo_camera
+    from robov_core.high_level import get_stereo_camera, ip_address
 
     camera = get_stereo_camera()
     if camera is None:
         log_func("[WiFi] Camera not available, skipping QR scan")
         return
 
-    speak_func("Я не подключён к интернету. Пожалуйста, покажите QR-код с настройками Wi-Fi перед камерой.")
+    speak_func("Ошибка подключения к интернету. Пожалуйста, покажите QR-код для подключения к сети Wi-Fi перед камерой.")
     time.sleep(1)
 
     last_speak_time = 0
-    speak_interval = 10
+    speak_interval = 30
 
     while not check_internet():
         frame = camera.get_latest_frame()
@@ -115,8 +120,13 @@ def start_wifi_setup(speak_func, log_func) -> None:
                 speak_func(f"Найден QR-код. Подключаюсь к сети {ssid}.")
 
                 if connect_to_wifi(ssid, password):
-                    speak_func("Подключение к Wi-Fi выполнено. Я готов к работе.")
-                    log_func(f"[WiFi] Connected to {ssid}")
+                    address = ip_address()
+                    speak_func(
+                        "Подключение к Wi-Fi выполнено. "
+                        f"Мой адрес в локальной сети: {format_ip_for_speech(address)}. "
+                        "Я готов к работе."
+                    )
+                    log_func(f"[WiFi] Connected to {ssid}, IP={address}")
                     return
                 else:
                     speak_func("Не удалось подключиться. Попробуйте другой QR-код.")
