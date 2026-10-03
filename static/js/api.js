@@ -44,6 +44,7 @@ export const api = {
   logout: () => request('POST', '/api/logout', { body: {} }),
 
   stats: () => request('GET', '/api/data'),
+  logs: () => request('GET', '/api/logs'),
   ip: () => request('GET', '/api/ip'),
 
   servoAngles: () => request('GET', '/api/servo/angles'),

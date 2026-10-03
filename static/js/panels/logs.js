@@ -17,7 +17,7 @@ export const logsPanel = {
     const tick = async () => {
       if (!alive) return;
       try {
-        const d = await api.stats();
+        const d = await api.logs();
         const logs = d.logs || [];
         if (logs.length !== lastLen) { out.textContent = logs.join('\n'); lastLen = logs.length; }
         const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 60;

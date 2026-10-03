@@ -20,3 +20,6 @@ __pycache__/
 
 # Per-device servo calibration (written by the browser calibration panel)
 /config.json
+
+# Persisted Flask session key (stable across restarts)
+/.secret_key

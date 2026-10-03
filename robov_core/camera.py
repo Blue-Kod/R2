@@ -59,6 +59,10 @@ class StereoCamera:
         self._raw_jpeg: Optional[bytes] = None
         self._latest_stereo_jpeg: Optional[bytes] = None
         self._stereo_seq: int = 0
+        # Число активных MJPEG-потребителей: пока никто не смотрит, не тратим
+        # CPU на decode+encode кадра (на Orange Pi это заметная доля ядра).
+        self._feed_consumers: int = 0
+        self._stereo_consumers: int = 0
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
 
@@ -282,13 +286,14 @@ class StereoCamera:
             return None
         return self._process_frame(raw, left, size)
 
-    def get_frame(self) -> np.ndarray:
+    def get_frame(self, left: Optional[bool] = None) -> np.ndarray:
+        if left is None:
+            with self.lock:
+                left = self.show_left
         if self.backend == "ffmpeg":
             raw = self._decode_latest()
             if raw is None:
                 return self._no_camera_frame()
-            with self.lock:
-                left = self.show_left
             return self._process_frame(raw, left)
         if not self.cap or not self.cap.isOpened():
             if not self.initialize_camera():
@@ -299,8 +304,6 @@ class StereoCamera:
             self.cap = None
             return self._no_camera_frame()
 
-        with self.lock:
-            left = self.show_left
         frame = self._process_frame(raw, left)
 
         with self.lock:
@@ -352,7 +355,7 @@ class StereoCamera:
             self._latest_stereo_jpeg = raw
             self._stereo_seq += 1
             left = self.show_left
-            self._jpeg_seq += 1
+            need_eye = self._feed_consumers > 0
             self._frame_count += 1
             now = time.time()
             if now - self._last_frame_time >= 1.0:
@@ -363,6 +366,9 @@ class StereoCamera:
         # Стрим/бразузер/VR должны видеть один глаз (левый/правый), а не
         # склейку stereo-кадра. raw_jpeg хранит полный кадр для декод-путей,
         # а latest_jpeg — обрезанную до выбранного глаза JPEG (как в opencv).
+        # Декод+encode делаем только когда есть зритель /video_feed.
+        if not need_eye:
+            return
         try:
             img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
             if img is not None:
@@ -377,6 +383,7 @@ class StereoCamera:
                                     [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
                 with self.lock:
                     self._latest_jpeg = jpeg
+                    self._jpeg_seq += 1
         except Exception:
             pass
 
@@ -395,11 +402,17 @@ class StereoCamera:
 
         with self.lock:
             left = self.show_left
+            need_eye = self._feed_consumers > 0
+            need_stereo = self._stereo_consumers > 0
         frame = self._process_frame(raw, left)
 
+        jpeg = None
+        stereo_jpeg = None
         try:
-            jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
-            stereo_jpeg = cv2.imencode(".jpg", raw, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+            if need_eye:
+                jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+            if need_stereo:
+                stereo_jpeg = cv2.imencode(".jpg", raw, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
         except Exception:
             jpeg = None
             stereo_jpeg = None
@@ -448,6 +461,20 @@ class StereoCamera:
     def get_latest_jpeg(self) -> Tuple[Optional[bytes], int]:
         with self.lock:
             return self._latest_jpeg, self._jpeg_seq
+
+    def add_consumer(self, stereo: bool = False) -> None:
+        with self.lock:
+            if stereo:
+                self._stereo_consumers += 1
+            else:
+                self._feed_consumers += 1
+
+    def remove_consumer(self, stereo: bool = False) -> None:
+        with self.lock:
+            if stereo:
+                self._stereo_consumers = max(0, self._stereo_consumers - 1)
+            else:
+                self._feed_consumers = max(0, self._feed_consumers - 1)
 
     def get_stereo_jpeg(self) -> Tuple[Optional[bytes], int]:
         """Полный стерео-кадр (оба глаза) для VR-семплинга по UV."""

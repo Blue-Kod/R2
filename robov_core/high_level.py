@@ -362,12 +362,7 @@ def get_camera(left: bool) -> Optional:
     camera = get_stereo_camera()
     if camera is None:
         return None
-    with camera.lock:
-        old_show_left = camera.show_left
-    camera.update_params(show_left=left)
-    frame = camera.get_frame()
-    camera.update_params(show_left=old_show_left)
-    return frame
+    return camera.get_frame(left=left)
 
 
 def get_raw_frame(left: bool = True):
@@ -521,6 +516,9 @@ _last_ik_start: Dict[bool, Optional[Tuple[float, float, float]]] = {
 MOVE_RATE_DEG_S = 150.0
 _last_cmd_angle: Dict[int, float] = {}
 _last_cmd_time: Dict[int, float] = {}
+# Flask работает threaded=True, а телеоп шлёт IK на 20 Гц параллельно с
+# web-API: без лока rate-limiter и _last_ik_start гоняются.
+_ik_lock = threading.Lock()
 
 
 def ik_detail(x: float, y: float, z: float, left: bool = False,
@@ -531,7 +529,8 @@ def ik_detail(x: float, y: float, z: float, left: bool = False,
     (непрерывность при движении), пока она есть; иначе — текущие углы.
     """
     if start is None:
-        start = _last_ik_start[left]
+        with _ik_lock:
+            start = _last_ik_start[left]
     if start is None:
         servo = _servo
         if servo is not None:
@@ -552,27 +551,28 @@ def _rate_limit_commands(commands: Dict[int, float]) -> Dict[int, float]:
     now = time.monotonic()
     servo = _servo
     limited: Dict[int, float] = {}
-    for ch, angle in commands.items():
-        prev = _last_cmd_angle.get(ch)
-        phys = None
-        if servo is not None:
-            phys = float(servo.current_angles.get(ch, 90.0))
-        if prev is None:
-            # Первая команда канала после старта: едем к цели сразу (плавность
-            # физического движения обеспечивает mover серво), иначе dt=0
-            # заморозил бы руку на первом движении.
-            prev = phys if phys is not None else float(angle)
-            value = float(angle)
-        else:
-            age = now - _last_cmd_time.get(ch, now)
-            if phys is not None and age > 0.5 and abs(prev - phys) > 1.0:
-                prev = phys
-            dt = max(0.0, now - _last_cmd_time.get(ch, now))
-            cap = MOVE_RATE_DEG_S * dt
-            value = prev + max(-cap, min(cap, float(angle) - prev))
-        limited[ch] = value
-        _last_cmd_angle[ch] = value
-        _last_cmd_time[ch] = now
+    with _ik_lock:
+        for ch, angle in commands.items():
+            prev = _last_cmd_angle.get(ch)
+            phys = None
+            if servo is not None:
+                phys = float(servo.current_angles.get(ch, 90.0))
+            if prev is None:
+                # Первая команда канала после старта: едем к цели сразу
+                # (плавность физического движения обеспечивает mover серво),
+                # иначе dt=0 заморозил бы руку на первом движении.
+                prev = phys if phys is not None else float(angle)
+                value = float(angle)
+            else:
+                age = now - _last_cmd_time.get(ch, now)
+                if phys is not None and age > 0.5 and abs(prev - phys) > 1.0:
+                    prev = phys
+                dt = max(0.0, now - _last_cmd_time.get(ch, now))
+                cap = MOVE_RATE_DEG_S * dt
+                value = prev + max(-cap, min(cap, float(angle) - prev))
+            limited[ch] = value
+            _last_cmd_angle[ch] = value
+            _last_cmd_time[ch] = now
     return limited
 
 
@@ -585,8 +585,9 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
     от текущего положения (сброс rate-limiter), чтобы рука всегда
     ехала к полной цели, а не к промежуточной из предыдущего вызова.
     """
-    _last_cmd_angle.clear()
-    _last_cmd_time.clear()
+    with _ik_lock:
+        _last_cmd_angle.clear()
+        _last_cmd_time.clear()
     result = ik_detail(x, y, z, left)
     result["moved"] = False
     if not result["servo"]:
@@ -596,7 +597,8 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
         if not set_servo_command(channel, int(round(angle_value))):
             result["message"] += "; не удалось запустить движение серво"
             return result
-    _last_ik_start[left] = arm_kinematics.theta_from_commands(limited, left)
+    with _ik_lock:
+        _last_ik_start[left] = arm_kinematics.theta_from_commands(limited, left)
     result["servo"] = {ch: int(round(v)) for ch, v in limited.items()}
     result["moved"] = True
     return result

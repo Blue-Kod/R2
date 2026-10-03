@@ -1,10 +1,9 @@
 """Сбор данных для VLA-обучения в формат LeRobot (parquet).
 
-Данные пишутся в ``ROOT_DIR/collected_data/<session>.parquet``; сквозные
-счётчики ``episode_index``/``index`` — в ``collected_data/meta.json``
-(переживают перезапуск процесса). Один parquet-файл = одна сессия сбора
-(все эпизоды подряд; эпизод пишется одним row-group'ом, так что обучение
-может читать файл как единый датасет).
+Данные пишутся в ``ROOT_DIR/collected_data/<session>/episode_<N>.parquet``
+(один файл на эпизод; эпизод пишется row-group'ами по мере сбора, поэтому
+память не растёт с длиной эпизода). Сквозные счётчики ``episode_index`` /
+``index`` — в ``collected_data/meta.json`` (переживают перезапуск процесса).
 
 Схема колонок (по договорённости для VLA):
 - observation.images.left/right — struct {bytes: binary, path: string}
@@ -39,6 +38,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "collected_data"
 META_FILE = DATA_DIR / "meta.json"
 
 SAMPLE_HZ = 20.0          # желаемая частота сэмплирования, Гц
+BATCH_SIZE = 100          # строк в одном row-group (граница памяти эпизода)
 IMG_WH = (1280, 720)      # разрешение ректифицированных JPEG
 JPEG_QUALITY = 85         # качество JPEG с камер
 COMPRESSION = "zstd"      # сжатие parquet
@@ -108,7 +108,14 @@ class DataCollector:
         self._start_mono: Optional[float] = None
         self._start_wall: Optional[datetime] = None
         self._task = ""
-        self._rows: List[Dict] = []
+        # Потоковая запись: в памяти только маленький батч + один предыдущий
+        # сэмпл (для action[t]=state[t+1]); всё остальное уходит на диск.
+        self._writer: Optional[pq.ParquetWriter] = None
+        self._pending: List[Dict] = []
+        self._prev_sample: Optional[Dict] = None
+        self._row_count = 0
+        self._first_index = 0
+        self._last_ts = 0.0
 
         self._session_name: Optional[str] = None
 
@@ -162,12 +169,16 @@ class DataCollector:
             self._meta["next_episode"] = self._episode_index + 1
             self._task = task or ""
             self._frame = 0
-            self._rows = []
+            self._pending = []
+            self._prev_sample = None
+            self._row_count = 0
+            self._last_ts = 0.0
+            self._first_index = int(self._meta.get("next_index", 0))
             self._start_mono = _time.monotonic()
             self._start_wall = datetime.now()
             if self._session_name is None:
                 self._session_name = f"collect-{self._start_wall:%Y%m%d-%H%M%S}"
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            self._open_writer()
             self._save_meta()
             self._collecting = True
             self._thread = threading.Thread(target=self._loop, daemon=True,
@@ -190,17 +201,17 @@ class DataCollector:
             return {**self.status(), "episode": result}
 
     def close(self) -> None:
-        """Остановить сбор (если шёл)."""
-
+        """Остановить сбор (если шёл) и отбросить незавершённый эпизод."""
         with self._lock:
             if self._collecting:
                 self._collecting = False
-            self._rows = []
         if self._thread is not None:
             try:
                 self._thread.join(timeout=2.0)
             except Exception:
                 pass
+        with self._lock:
+            self._discard_episode()
         self._collecting = False
         self._thread = None
 
@@ -247,66 +258,112 @@ class DataCollector:
             return {"bytes": b"", "path": ""}
         return {"bytes": jpeg.tobytes(), "path": ""}
 
+    def _episode_path(self) -> Path:
+        fname = f"{self._session_name}/episode_{int(self._episode_index):06d}.parquet"
+        return DATA_DIR / fname
+
+    def _open_writer(self) -> None:
+        path = self._episode_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._writer = pq.ParquetWriter(str(path), _schema(),
+                                        compression=COMPRESSION)
+
+    def _close_writer(self) -> None:
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    def _table_from(self, rows: List[Dict]) -> pa.Table:
+        image = pa.struct([("bytes", pa.binary()), ("path", pa.string())])
+        vector = pa.list_(pa.float32(), STATE_DIM)
+        episode = int(self._episode_index)
+        return pa.Table.from_arrays([
+            pa.array([r["img_left"] for r in rows], type=image),
+            pa.array([r["img_right"] for r in rows], type=image),
+            pa.array([r["state"] for r in rows], type=vector),
+            pa.array([r["action"] for r in rows], type=vector),
+            pa.array([self._task] * len(rows), type=pa.string()),
+            pa.array([r["timestamp"] for r in rows], type=pa.float32()),
+            pa.array([r["frame_index"] for r in rows], type=pa.int64()),
+            pa.array([episode] * len(rows), type=pa.int64()),
+            pa.array([self._first_index + r["frame_index"] for r in rows],
+                     type=pa.int64()),
+        ], schema=_schema())
+
+    def _flush(self) -> None:
+        if not self._pending or self._writer is None:
+            return
+        rows = self._pending
+        try:
+            self._writer.write_table(self._table_from(rows))
+        except Exception as exc:
+            print(f"[DataCollector] write failed: {exc}", flush=True)
+        finally:
+            # Всегда чистим батч: иначе при ошибке записи он растёт без границ.
+            self._pending = []
+
+    def _emit(self, sample: Dict, action: List[float]) -> None:
+        self._pending.append({
+            "img_left": sample["img_left"],
+            "img_right": sample["img_right"],
+            "state": sample["state"],
+            "action": action,
+            "timestamp": sample["timestamp"],
+            "frame_index": sample["frame_index"],
+        })
+        self._row_count += 1
+
     def _sample_once(self) -> None:
+        """Сэмплировать кадр. action[t]=state[t+1], поэтому строку пишем с
+        задержкой в один сэмпл (последнюю закрывает _finalize_episode)."""
         left = self._rectified_jpeg(True)
         right = self._rectified_jpeg(False)
         state = self._state_vector()
-        self._rows.append({
+        sample = {
             "img_left": left,
             "img_right": right,
             "state": state,
             "timestamp": float(_time.monotonic() - self._start_mono),
             "frame_index": self._frame,
-        })
+        }
         self._frame += 1
+        self._last_ts = sample["timestamp"]
+        if self._prev_sample is not None:
+            self._emit(self._prev_sample, sample["state"])
+        self._prev_sample = sample
+        if len(self._pending) >= BATCH_SIZE:
+            self._flush()
 
     def _loop(self) -> None:
         interval = 1.0 / SAMPLE_HZ
         while self._collecting:
             try:
-                with self._lock:
-                    if not self._collecting:
-                        break
-                    self._sample_once()
+                # Кодирование JPEG — вне self._lock: иначе status()/stop()
+                # ждут его десятки миллисекунд.
+                self._sample_once()
             except Exception:
                 pass
             _time.sleep(interval)
 
     def _finalize_episode(self) -> Dict:
-        """Сдвиг action[t]=state[t+1], запись эпизода отдельным parquet-файлом."""
-        rows = self._rows
-        n = len(rows)
+        """Дописать хвост (dummy action), закрыть parquet и записать meta."""
+        if self._prev_sample is not None:
+            self._emit(self._prev_sample, self._prev_sample["state"])
+            self._prev_sample = None
+        self._flush()
+        self._close_writer()
+
+        n = self._row_count
         episode = int(self._episode_index)
-        first_index = int(self._meta.get("next_index", 0))
+        first_index = self._first_index
         if n == 0:
+            self._discard_episode()
             raise RuntimeError("Эпизод пуст — нечего сохранять")
 
-        states = [r["state"] for r in rows]
-        actions = [rows[j + 1]["state"]
-                   if j + 1 < n else rows[n - 1]["state"]
-                   for j in range(n)]
-        indexes = [first_index + j for j in range(n)]
-
-        image = pa.struct([("bytes", pa.binary()), ("path", pa.string())])
-        vector = pa.list_(pa.float32(), STATE_DIM)
-        table = pa.Table.from_arrays([
-            pa.array([r["img_left"] for r in rows], type=image),
-            pa.array([r["img_right"] for r in rows], type=image),
-            pa.array(states, type=vector),
-            pa.array(actions, type=vector),
-            pa.array([self._task] * n, type=pa.string()),
-            pa.array([r["timestamp"] for r in rows], type=pa.float32()),
-            pa.array([r["frame_index"] for r in rows], type=pa.int64()),
-            pa.array([episode] * n, type=pa.int64()),
-            pa.array(indexes, type=pa.int64()),
-        ], schema=_schema())
-
         fname = f"{self._session_name}/episode_{episode:06d}.parquet"
-        path = DATA_DIR / fname
-        path.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(table, str(path), compression=COMPRESSION)
-
-        duration = round(rows[-1]["timestamp"], 3)
         record = {
             "episode_index": episode,
             "file": fname,
@@ -314,7 +371,7 @@ class DataCollector:
             "rows": n,
             "task": self._task,
             "started": self._start_wall.isoformat(timespec="seconds"),
-            "duration_s": duration,
+            "duration_s": round(self._last_ts, 3),
             "index_first": first_index,
             "index_last": first_index + n - 1,
             "timestamp": _time.time(),
@@ -324,12 +381,27 @@ class DataCollector:
         self._meta["next_index"] = first_index + n
         self._save_meta()
 
-        self._rows = []
+        self._reset_episode_state()
+        return record
+
+    def _reset_episode_state(self) -> None:
+        self._pending = []
+        self._prev_sample = None
+        self._row_count = 0
         self._frame = 0
         self._episode_index = None
         self._start_mono = None
         self._start_wall = None
-        return record
+
+    def _discard_episode(self) -> None:
+        """Закрыть и удалить незавершённый эпизод (shutdown/пустой)."""
+        self._close_writer()
+        if self._episode_index is not None and self._session_name:
+            try:
+                self._episode_path().unlink()
+            except OSError:
+                pass
+        self._reset_episode_state()
 
     # --- просмотр / скачивание данных ---
 

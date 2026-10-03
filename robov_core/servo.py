@@ -194,8 +194,10 @@ class ServoController:
         self._move_targets: Dict[int, Optional[int]] = {}
         self._move_velocities: Dict[int, float] = {}
         self._move_positions: Dict[int, float] = {}
-        self._mover_conds: Dict[int, threading.Condition] = {}
-        self._mover_threads: Dict[int, threading.Thread] = {}
+        # Один mover-поток на все каналы (вместо 10): меньше переключений
+        # контекста и локов, а I2C-записи всё равно сериализованы _bus_lock.
+        self._mover_cond = threading.Condition()
+        self._mover_thread: Optional[threading.Thread] = None
         self._mover_stop = threading.Event()
 
         self.offsets: Dict[int, float] = {}
@@ -470,129 +472,108 @@ class ServoController:
             with self.lock:
                 self.current_angles[channel] = target_command
                 self._move_positions.pop(channel, None)
-            with self._get_cond(channel):
+            with self._mover_cond:
                 self._move_targets.pop(channel, None)
             return self._set_servo_immediate(
                 channel, self._physical_command(channel, target_command))
 
         # Плавный режим: цель фиксируем сразу (UI/API видят команду), а
         # фактическое положение ведёт mover-поток в _move_positions.
-        self._ensure_mover(channel)
+        self._ensure_mover()
         with self.lock:
             if channel not in self._move_positions:
                 self._move_positions[channel] = float(
                     self.current_angles.get(channel, target_command))
             self.current_angles[channel] = target_command
-        with self._get_cond(channel):
+        with self._mover_cond:
             self._move_targets[channel] = target_command
-            self._mover_conds[channel].notify_all()
+            self._mover_cond.notify_all()
         return True
 
-    def _get_cond(self, channel: int) -> threading.Condition:
-        with self.lock:
-            if channel not in self._mover_conds:
-                self._mover_conds[channel] = threading.Condition()
-            return self._mover_conds[channel]
-
-    def _ensure_mover(self, channel: int) -> None:
+    def _ensure_mover(self) -> None:
         # Если сервы расслаблены — не создаём/оживляем mover (закр. гонку с
         # relax_all: MOVE-поток не должен снова запитать канал).
         if not self._enabled:
             return
         with self.lock:
-            thread = self._mover_threads.get(channel)
+            thread = self._mover_thread
             if thread is not None and thread.is_alive():
                 self._mover_stop.clear()
                 return
             self._mover_stop.clear()
             mover = threading.Thread(
-                target=self._mover_loop, args=(channel,),
-                daemon=True, name=f"servo-mover-ch{channel}")
-            self._mover_threads[channel] = mover
+                target=self._mover_loop, daemon=True, name="servo-mover")
+            self._mover_thread = mover
             mover.start()
 
-    def _mover_loop(self, channel: int) -> None:
-        """Плавно ведёт серво к последней цели (трапеция скорости).
+    def _mover_loop(self) -> None:
+        """Один поток плавно ведёт все каналы к их последним целям.
 
-        Скорость растёт с ускорением ``accel`` до ``max_speed`` и тормозит
-        у цели, чтобы серво мягко остановилось без рывка и перелёта.
-        Новые цели просто заменяют целевую команду — никакого накопления
-        потоков/целей при телеопе.
+        Скорость растёт с ускорением ``MOVE_ACCEL`` до ``MOVE_MAX_SPEED`` и
+        тормозит у цели (трапеция). Новые цели заменяют старые — накопления
+        нет. Пока целей нет, поток спит на condition и не жжёт CPU.
         """
-        command_min, command_max = self.command_limits[channel]
-
-        def physical_command(command: int) -> int:
-            # Offset/inversion читаются «на лету», чтобы изменения калибровки
-            # применялись со следующего движения без перезапуска mover-потока.
-            offset = self.offsets.get(channel, 0)
-            logical = int(max(command_min, min(
-                command_max, command + int(round(offset)))))
-            if channel in self.inverted_channels:
-                return (command_min + command_max) - logical
-            return logical
-
-        cond = self._get_cond(channel)
-        max_speed = MOVE_MAX_SPEED
-        accel = MOVE_ACCEL
         tick = MOVE_TICK
-        deadband = MOVE_DEADBAND
-
         while not self._mover_stop.is_set():
             if not self._enabled:
                 break
-            with cond:
-                cond.wait_for(
-                    lambda: channel in self._move_targets
-                    or self._mover_stop.is_set(),
-                    timeout=0.05)
-                if self._mover_stop.is_set():
-                    break
-                target = self._move_targets.get(channel)
-                if target is None:
-                    continue
-
-            with self.lock:
-                current = self._move_positions.get(
-                    channel, float(self.current_angles.get(channel, target)))
-                velocity = self._move_velocities.get(channel, 0.0)
-
-            distance = float(target) - current
-            if abs(distance) <= deadband:
-                self._set_servo_immediate(
-                    channel, physical_command(target))
-                with self.lock:
-                    self._move_positions[channel] = float(target)
-                    self._move_velocities[channel] = 0.0
-                with cond:
-                    self._move_targets.pop(channel, None)
-                continue
-
-            # Максимально допустимая скорость, чтобы успеть затормозить.
-            v_brake = math.sqrt(2.0 * accel * abs(distance))
-            v_target = min(max_speed, v_brake)
-            v_desired = v_target if distance > 0 else -v_target
-
-            # Разгон/торможение с ограничением accel за один тик.
-            dv = v_desired - velocity
-            dv = max(-accel * tick, min(accel * tick, dv))
-            velocity += dv
-            step = velocity * tick
-
-            # Не проскакиваем цель.
-            if abs(step) >= abs(distance):
-                command = target
-                velocity = 0.0
-            else:
-                command = int(round(current + step))
-                command = int(max(command_min, min(command_max, command)))
-
-            self._set_servo_immediate(
-                channel, physical_command(command))
-            with self.lock:
-                self._move_positions[channel] = float(command)
-                self._move_velocities[channel] = velocity
-
+            with self._mover_cond:
+                if not self._move_targets:
+                    self._mover_cond.wait(timeout=0.1)
+                    if self._mover_stop.is_set():
+                        break
+                    if not self._move_targets:
+                        continue
+                channels = list(self._move_targets.keys())
+            for channel in channels:
+                self._step_channel(channel, tick)
             time.sleep(tick)
+
+    def _step_channel(self, channel: int, tick: float) -> None:
+        """Один тик трапеции для канала (вызывается из mover-потока)."""
+        with self._mover_cond:
+            target = self._move_targets.get(channel)
+        if target is None:
+            return
+        command_min, command_max = self.command_limits[channel]
+        with self.lock:
+            current = self._move_positions.get(
+                channel, float(self.current_angles.get(channel, target)))
+            velocity = self._move_velocities.get(channel, 0.0)
+
+        distance = float(target) - current
+        if abs(distance) <= MOVE_DEADBAND:
+            self._set_servo_immediate(channel, self._physical_command(channel, target))
+            with self.lock:
+                self._move_positions[channel] = float(target)
+                self._move_velocities[channel] = 0.0
+            with self._mover_cond:
+                self._move_targets.pop(channel, None)
+            return
+
+        # Максимально допустимая скорость, чтобы успеть затормозить.
+        v_brake = math.sqrt(2.0 * MOVE_ACCEL * abs(distance))
+        v_target = min(MOVE_MAX_SPEED, v_brake)
+        v_desired = v_target if distance > 0 else -v_target
+
+        # Разгон/торможение с ограничением accel за один тик.
+        dv = v_desired - velocity
+        dv = max(-MOVE_ACCEL * tick, min(MOVE_ACCEL * tick, dv))
+        velocity += dv
+        step = velocity * tick
+
+        # Не проскакиваем цель.
+        if abs(step) >= abs(distance):
+            command = target
+            velocity = 0.0
+        else:
+            command = int(round(current + step))
+            command = int(max(command_min, min(command_max, command)))
+
+        self._set_servo_immediate(channel, self._physical_command(channel, command))
+        with self.lock:
+            self._move_positions[channel] = float(command)
+            self._move_velocities[channel] = velocity
 
     def _physical_command(self, channel: int, command: int) -> int:
         offset = self.offsets.get(channel, 0)
@@ -640,9 +621,8 @@ class ServoController:
         """
         self._enabled = False
         self._mover_stop.set()
-        for cond in list(self._mover_conds.values()):
-            with cond:
-                cond.notify_all()
+        with self._mover_cond:
+            self._mover_cond.notify_all()
         # Дать mover-потокам завершиться, чтобы не перезаписали нули.
         time.sleep(0.05)
         # Если шина «отвалилась» — пытаемся восстановить, иначе нули не уйдут.

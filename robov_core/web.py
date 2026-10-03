@@ -106,13 +106,36 @@ def _mjpeg_fps_worker() -> None:
 threading.Thread(target=_mjpeg_fps_worker, daemon=True, name="mjpeg-fps").start()
 
 
+def _load_secret_key() -> str:
+    """Стабильный ключ сессий: переживает перезапуск процесса.
+
+    Иначе каждый старт = os.urandom, и все сессии (в т.ч. открытый шлем)
+    разлогиниваются при рестарте.
+    """
+    path = ROOT_DIR / ".secret_key"
+    try:
+        if path.exists():
+            key = path.read_text(encoding="utf-8").strip()
+            if key:
+                return key
+        key = os.urandom(32).hex()
+        path.write_text(key, encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return key
+    except OSError:
+        return os.urandom(32).hex()
+
+
 def create_app() -> Flask:
     app = Flask(__name__,
                 template_folder=str(ROOT_DIR / "templates"),
                 static_folder=str(ROOT_DIR / "static"))
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.jinja_env.auto_reload = True
-    app.secret_key = os.urandom(24).hex()
+    app.secret_key = _load_secret_key()
     app.config["SESSION_COOKIE_SECURE"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
@@ -310,14 +333,13 @@ def create_app() -> Flask:
             if record.get("episode_index") == episode:
                 meta = record
                 break
+        state_col = table.column("observation.state").to_pylist()
         preview = {
             "episode_index": episode,
             "rows": table.num_rows,
             "schema": [str(field.type) for field in table.schema],
-            "first_state": table.column("observation.state").to_pylist()[0]
-            if table.num_rows else [],
-            "last_state": table.column("observation.state").to_pylist()[-1]
-            if table.num_rows else [],
+            "first_state": state_col[0] if state_col else [],
+            "last_state": state_col[-1] if state_col else [],
         }
         return jsonify({"episode": {**meta, "preview": preview}})
 
@@ -333,8 +355,12 @@ def create_app() -> Flask:
         payload["cam_h"] = camera.actual_height if camera else 0
         with _mjpeg_lock:
             payload["stream_fps"] = _mjpeg_fps
-        payload["logs"] = get_logs(500)
         return jsonify(payload)
+
+    @app.route("/api/logs")
+    @require_auth
+    def api_logs():
+        return jsonify({"logs": get_logs(500)})
 
     @app.route("/api/ip")
     @require_auth
@@ -353,7 +379,20 @@ def create_app() -> Flask:
                 [sys.executable, str(launcher_path)],
                 start_new_session=True,
             )
-            threading.Thread(target=lambda: (time.sleep(1), cleanup(), os._exit(0)), daemon=True).start()
+
+            def _restart() -> None:
+                time.sleep(1)
+                cleanup()
+                # Сбрасываем буферы (логи/parquet) перед жёстким выходом,
+                # чтобы launcher стартовал с чистого состояния.
+                try:
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                except Exception:
+                    pass
+                os._exit(0)
+
+            threading.Thread(target=_restart, daemon=True).start()
             return jsonify({"status": "ok", "message": "Restarting"})
         except Exception as exc:
             return jsonify({"status": "error", "message": str(exc)}), 500
@@ -438,27 +477,35 @@ def create_app() -> Flask:
     def video_feed():
         def stream():
             global _mjpeg_counter
+            cam = get_stereo_camera()
+            if cam:
+                cam.add_consumer(stereo=False)
             last_seq = -1
             last_placeholder = 0.0
-            while True:
+            try:
+                while True:
+                    camera = get_stereo_camera()
+                    jpeg, seq = camera.get_latest_jpeg() if camera else (None, -1)
+                    now = time.time()
+                    if jpeg is not None and seq != last_seq:
+                        last_seq = seq
+                        with _mjpeg_lock:
+                            _mjpeg_counter += 1
+                        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                    elif jpeg is None and now - last_placeholder >= 1.0:
+                        last_placeholder = now
+                        frame = np.zeros((360, 640, 3), dtype=np.uint8)
+                        cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+                        with _mjpeg_lock:
+                            _mjpeg_counter += 1
+                        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                    else:
+                        time.sleep(0.005)
+            finally:
                 camera = get_stereo_camera()
-                jpeg, seq = camera.get_latest_jpeg() if camera else (None, -1)
-                now = time.time()
-                if jpeg is not None and seq != last_seq:
-                    last_seq = seq
-                    with _mjpeg_lock:
-                        _mjpeg_counter += 1
-                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
-                elif jpeg is None and now - last_placeholder >= 1.0:
-                    last_placeholder = now
-                    frame = np.zeros((360, 640, 3), dtype=np.uint8)
-                    cv2.putText(frame, "No Camera", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
-                    with _mjpeg_lock:
-                        _mjpeg_counter += 1
-                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
-                else:
-                    time.sleep(0.005)
+                if camera:
+                    camera.remove_consumer(stereo=False)
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -472,27 +519,35 @@ def create_app() -> Flask:
         """
         def stream():
             global _mjpeg_counter
+            cam = get_stereo_camera()
+            if cam:
+                cam.add_consumer(stereo=True)
             last_seq = -1
             last_placeholder = 0.0
-            while True:
+            try:
+                while True:
+                    camera = get_stereo_camera()
+                    jpeg, seq = camera.get_stereo_jpeg() if camera else (None, -1)
+                    now = time.time()
+                    if jpeg is not None and seq != last_seq:
+                        last_seq = seq
+                        with _mjpeg_lock:
+                            _mjpeg_counter += 1
+                        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                    elif jpeg is None and now - last_placeholder >= 1.0:
+                        last_placeholder = now
+                        frame = np.zeros((720, 2560, 3), dtype=np.uint8)
+                        cv2.putText(frame, "No Camera", (900, 380), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+                        with _mjpeg_lock:
+                            _mjpeg_counter += 1
+                        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                    else:
+                        time.sleep(0.005)
+            finally:
                 camera = get_stereo_camera()
-                jpeg, seq = camera.get_stereo_jpeg() if camera else (None, -1)
-                now = time.time()
-                if jpeg is not None and seq != last_seq:
-                    last_seq = seq
-                    with _mjpeg_lock:
-                        _mjpeg_counter += 1
-                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
-                elif jpeg is None and now - last_placeholder >= 1.0:
-                    last_placeholder = now
-                    frame = np.zeros((720, 2560, 3), dtype=np.uint8)
-                    cv2.putText(frame, "No Camera", (900, 380), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
-                    with _mjpeg_lock:
-                        _mjpeg_counter += 1
-                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
-                else:
-                    time.sleep(0.005)
+                if camera:
+                    camera.remove_consumer(stereo=True)
 
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 

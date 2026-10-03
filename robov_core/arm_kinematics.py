@@ -90,6 +90,7 @@ theta = (t_sz, t_sx, t_eb) — физические углы звеньев, г�
 """
 
 import math
+from functools import lru_cache
 from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -320,6 +321,15 @@ def _ranges(left: bool, step: float, window: Optional[float],
     return tuple(out)
 
 
+@lru_cache(maxsize=2)
+def _coarse(left: bool):
+    """Грубая решётка IK (8°) и её FK. Не зависит от цели — считаем один раз
+    на сторону и переиспользуем (экономит ~3 мс на каждом вызове ik_solve)."""
+    rng = _ranges(left, *GRID_STEPS[0])
+    pos, elbow = _fk_grid_positions(*rng, left)
+    return rng, pos, elbow
+
+
 def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
                   left: bool) -> Tuple[Tuple[float, float, float], float]:
     positions, elbow = _fk_grid_positions(*ranges, left)
@@ -369,8 +379,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     z = -z
     tx = _left_target_x(x) if left else float(x)
     wanted = np.array([tx, float(y), float(z)], dtype=float)
-    coarse = _ranges(left, *GRID_STEPS[0])
-    positions, elbow = _fk_grid_positions(*coarse, left)
+    coarse, positions, elbow = _coarse(left)
     errors = np.linalg.norm(positions - wanted, axis=-1)
     below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
     errors = errors + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
@@ -380,7 +389,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     # score ниже (кран-байас работает в каскаде и при выборе).
     errors_crane = errors + _crane_lift_bias(elbow[..., 1], positions[..., 1])
 
-    count = min(8, errors.size)
+    count = min(5, errors.size)
     starts = []
     for scored in (errors_crane, errors):
         for index in np.argpartition(scored.ravel(), count - 1)[:count]:
