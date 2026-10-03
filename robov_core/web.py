@@ -21,16 +21,14 @@ from flask_sock import Sock
 from robov_core.terminal_shell import TerminalShell
 
 from robov_core.high_level import (
-    APP_VERSION, ROOT_DIR, check_root_password,
+    ROOT_DIR, check_root_password,
     get_servo_angles, get_servo_positions, get_servo_limits,
     get_stereo_camera, health_snapshot, ip_address,
-    shell_output, shell_start, shell_write,
     get_logs, robot_config,
-    get_servo_offsets, set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
+    set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
     get_servo_calibration, set_servo_calibration, reset_servo_calibration,
     reinit_servo_bus,
 )
-from robov_core.arm_kinematics import browser_config
 from robov_core.data_collector import DataCollector
 
 
@@ -172,10 +170,6 @@ def create_app() -> Flask:
         session.clear()
         return jsonify({"status": "ok"})
 
-    @app.route("/api/check-auth", methods=["GET"])
-    def api_check_auth():
-        return jsonify({"authenticated": session.get("authenticated", False)})
-
     # --- Main ---
 
     @app.route("/")
@@ -199,17 +193,11 @@ def create_app() -> Flask:
                 }
             camera_params["layout"] = camera.layout()
 
-        system_data = health_snapshot()
-        system_data["ip"] = ip_address()
         robot = robot_config()
         return jsonify({
-            "version": APP_VERSION,
-            "ip": system_data["ip"],
             "camera_params": camera_params,
             "servo": robot["servo"],
             "servo_angles": get_servo_angles(),
-            "servo_limits": get_servo_limits(),
-            "servo_offsets": get_servo_offsets(),
             "ik_config": robot["ik"],
         })
 
@@ -228,8 +216,6 @@ def create_app() -> Flask:
                 }
             camera_params["layout"] = camera.layout()
         return render_template("webxr.html",
-                               ik_config=browser_config(),
-                               servo_angles=get_servo_angles(),
                                camera_params=camera_params)
 
     @app.route("/api/webxr/teleop", methods=["POST"])
@@ -398,25 +384,6 @@ def create_app() -> Flask:
 
     # --- Shell ---
 
-    @app.route("/api/cmd/send", methods=["POST"])
-    @require_auth
-    def cmd_send():
-        data = request.get_json(silent=True) or {}
-        command = str(data.get("command", "")).strip()
-        if not command:
-            return jsonify({"error": "No command"}), 400
-        if shell_write(command):
-            return jsonify({"status": "ok"})
-        return jsonify({"error": "Shell not available"}), 500
-
-    @app.route("/api/cmd/output", methods=["GET"])
-    @require_auth
-    def cmd_output():
-        if not shell_output():
-            shell_start()
-        time.sleep(0.1)
-        return jsonify({"output": shell_output()})
-
     # Full interactive terminal: xterm.js <-> WebSocket <-> local pty bash.
     # Same origin as the app, so the Flask session cookie authenticates it.
     @sock.route("/ws/terminal")
@@ -530,18 +497,6 @@ def create_app() -> Flask:
         return Response(stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
     # --- Camera ---
-
-    @app.route("/update", methods=["POST"])
-    @require_auth
-    def update_camera():
-        camera = get_stereo_camera()
-        if not camera:
-            return jsonify({"error": "Camera not initialized"}), 500
-        data = request.get_json(silent=True) or {}
-        camera.update_params(
-            show_left=data.get("show_left"),
-        )
-        return jsonify({"ok": True})
 
     @app.route("/api/camera/params", methods=["GET", "POST"])
     @require_auth
@@ -690,12 +645,6 @@ def create_app() -> Flask:
             return jsonify({"stdout": stdout_capture.getvalue(), "stderr": stderr_capture.getvalue()}), 200
 
     # --- File manager ---
-
-    @app.route("/file_manager")
-    @require_auth
-    def file_manager():
-        # The file manager is now the "Файлы" panel inside the workspace.
-        return redirect("/?panel=files", code=308)
 
     def normalize_path(path_str: str) -> Path:
         if not path_str or path_str.strip() == "":

@@ -51,10 +51,6 @@ export class Workspace {
     return this;
   }
 
-  get panels() {
-    return [...this.registry.values()];
-  }
-
   _newInstId() {
     _instSeq += 1;
     return `${_instSeq}-${Math.random().toString(36).slice(2, 7)}`;
@@ -167,10 +163,6 @@ export class Workspace {
     return [...this.instances.values()].filter((entry) => entry.panel.id === id);
   }
 
-  isOpen(id) {
-    return this.instancesOf(id).length > 0;
-  }
-
   focus(id) {
     const [first] = this.instancesOf(id);
     if (first) {
@@ -219,19 +211,8 @@ export class Workspace {
     this._add(id, count > 0 ? `${panel.title} ${count + 1}` : panel.title);
   }
 
-  toggle(id) {
-    if (this.isOpen(id)) this.close(id);
-    else this.open(id);
-  }
-
   close(id) {
     for (const entry of this.instancesOf(id)) {
-      try { entry.container.close(); } catch { /* ignore */ }
-    }
-  }
-
-  closeAll() {
-    for (const entry of [...this.instances.values()]) {
       try { entry.container.close(); } catch { /* ignore */ }
     }
   }

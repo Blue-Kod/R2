@@ -3,9 +3,7 @@ import { h, icon, button, panelBody, toast } from '../ui.js';
 
 /** Channel descriptors from the server config (servo.servo_config()). */
 function channels(boot) {
-  const list = boot?.servo?.channels;
-  if (list?.length) return list.map((c) => ({ id: c.id, name: c.name }));
-  return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((id) => ({ id, name: `ch${id}` }));
+  return (boot?.servo?.channels || []).map((c) => ({ id: c.id, name: c.name }));
 }
 
 export const calibrationPanel = {

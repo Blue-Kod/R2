@@ -16,7 +16,6 @@ class TerminalShell:
         self._reader_thread = None
         self._lock = threading.Lock()
         self._master_fd = None
-        self._slave_fd = None
         self._pid = None
         self._ssh_client = None
         self._ssh_channel = None
@@ -193,7 +192,6 @@ class TerminalShell:
         self._proc = None
         self._pid = None
         self._master_fd = None
-        self._slave_fd = None
         self._ssh_client = None
         self._ssh_channel = None
 

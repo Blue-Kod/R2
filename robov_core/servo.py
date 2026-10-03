@@ -6,7 +6,7 @@ import math
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 # ----------------------------------------------------------------------
 # Пользовательская калибровка — РЕДАКТИРУЙТЕ ЗДЕСЬ
@@ -69,22 +69,15 @@ REST_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
     5: 45, 6: 180, 7: 180, 8: 90, 9: 90,
 }
-# Обратная совместимость: старое имя позы покоя.
-DEFAULT_POSE = REST_POSE
 
 # Поза включения (по умолчанию): применяется при старте робота.
 # Руки вниз, как у человека: 90 135 135 90 45 45 180 180 90 90
 START_POSE: Dict[int, int] = {
     0: 90, 1: 135, 2: 135, 3: 90, 4: 45,
-    5: 45, 6: 180, 7: 180, 8: 90, 9: 90,
+    5: 45, 6: 180, 7: 180, 8: 150, 9: 150,
 }
 # ----------------------------------------------------------------------
 
-
-def _initial_pose() -> Dict[int, int]:
-    """Стартовая поза каналов — servo.START_POSE (единый источник правды)."""
-    return dict(START_POSE)
-# ----------------------------------------------------------------------
 
 ChannelConfig = Tuple[int, int, int, int]
 
@@ -113,8 +106,7 @@ DEFAULT_COMMAND_LIMITS.update({0: (45, 135), 3: (45, 135),
 
 # ----------------------------------------------------------------------
 # Профиль движения (трапеция скорости): разгон, постоянная скорость,
-# торможение. Единые для всех каналов; при желании переопределить —
-# через ServoController.move_profile[ch] = {...}.
+# торможение. Единый для всех каналов.
 # ----------------------------------------------------------------------
 MOVE_TICK: float = 0.01        # период управления, с (100 Гц)
 MOVE_MAX_SPEED: float = 300.0  # крейсерская скорость, град/с
@@ -169,7 +161,6 @@ class ServoController:
         bus: int = 0,
         address: int = 0x40,
         freq: int = 50,
-        channel_configs: Optional[Dict[int, ChannelConfig]] = None
     ) -> None:
         self.bus: int = bus
         self.address: int = address
@@ -183,7 +174,7 @@ class ServoController:
         # расслабления на выключении. Возвращается только enable_all().
         self._enabled: bool = True
 
-        self.current_angles: Dict[int, int] = _initial_pose()
+        self.current_angles: Dict[int, int] = dict(START_POSE)
         self.lock: threading.Lock = threading.Lock()
         # I2C/шина PCA9685 не потокобезопасна: одновременные записи из
         # mover-потоков каналов дают [Errno 22] Invalid argument. Все записи в
@@ -206,16 +197,12 @@ class ServoController:
         self._mover_conds: Dict[int, threading.Condition] = {}
         self._mover_threads: Dict[int, threading.Thread] = {}
         self._mover_stop = threading.Event()
-        self.move_profile: Dict[int, Dict[str, float]] = {}
 
         self.offsets: Dict[int, float] = {}
         self.inverted_channels: Set[int] = set(INVERTED_CHANNELS)
 
-        if channel_configs is None:
-            self.channel_configs: Dict[int, ChannelConfig] = \
-                dict(DEFAULT_CHANNEL_CONFIGS)
-        else:
-            self.channel_configs = channel_configs
+        self.channel_configs: Dict[int, ChannelConfig] = \
+            dict(DEFAULT_CHANNEL_CONFIGS)
         self.command_limits: Dict[int, Tuple[int, int]] = {
             ch: tuple(DEFAULT_COMMAND_LIMITS.get(ch, cfg[:2]))
             for ch, cfg in self.channel_configs.items()
@@ -361,10 +348,6 @@ class ServoController:
             self.offsets[channel] = offset
         return True
 
-    def get_offset(self, channel: int) -> float:
-        with self.lock:
-            return self.offsets.get(channel, 0.0)
-
     def reset_offsets_to_default(self) -> None:
         with self.lock:
             for ch in self.channel_configs:
@@ -445,10 +428,6 @@ class ServoController:
                 self.inverted_channels.discard(channel)
         return True
 
-    def get_inverted(self, channel: int) -> bool:
-        with self.lock:
-            return channel in self.inverted_channels
-
     # ------------------------------------------------------------------
     # Преобразование угла в импульс
     # ------------------------------------------------------------------
@@ -470,7 +449,7 @@ class ServoController:
         """Move a servo using a logical command angle.
 
         ``current_angles`` deliberately stores the logical command from
-        DEFAULT_POSE/UI, never the inverted physical PWM angle. This keeps
+        REST_POSE/UI, never the inverted physical PWM angle. This keeps
         servo.py, the browser and IK in one coordinate system.
 
         ``smooth=True`` queues the target: per-channel mover thread подводит
@@ -532,15 +511,6 @@ class ServoController:
             self._mover_threads[channel] = mover
             mover.start()
 
-    def _profile(self, channel: int) -> Dict[str, float]:
-        default = {
-            "max_speed": MOVE_MAX_SPEED,
-            "accel": MOVE_ACCEL,
-            "tick": MOVE_TICK,
-            "deadband": MOVE_DEADBAND,
-        }
-        return {**default, **self.move_profile.get(channel, {})}
-
     def _mover_loop(self, channel: int) -> None:
         """Плавно ведёт серво к последней цели (трапеция скорости).
 
@@ -562,11 +532,10 @@ class ServoController:
             return logical
 
         cond = self._get_cond(channel)
-        profile = self._profile(channel)
-        max_speed = profile["max_speed"]
-        accel = profile["accel"]
-        tick = profile["tick"]
-        deadband = profile["deadband"]
+        max_speed = MOVE_MAX_SPEED
+        accel = MOVE_ACCEL
+        tick = MOVE_TICK
+        deadband = MOVE_DEADBAND
 
         while not self._mover_stop.is_set():
             if not self._enabled:
@@ -697,33 +666,3 @@ class ServoController:
         self._enabled = True
         self._mover_stop.clear()
 
-    # ------------------------------------------------------------------
-    # Тест и кал`ибровка
-    # ------------------------------------------------------------------
-    def test_cycle(self, channels: Optional[List[int]] = None, delay: int = 1) -> None:
-        if channels is None:
-            channels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-        if not self.initialized:
-            return
-        for ch in channels:
-            if ch not in self.channel_configs:
-                continue
-            min_angle, max_angle, _, _ = self.channel_configs[ch]
-            mid = (min_angle + max_angle) // 2
-            angles = [min_angle, mid, max_angle]
-            for angle in angles:
-                self.set_servo(ch, angle, smooth=True, step_delay=0.02, step_angle=3)
-                time.sleep(delay)
-            time.sleep(1)
-
-    def calibrate_channel(self, channel: int, min_pulse: Optional[int] = None, max_pulse: Optional[int] = None) -> Optional[Tuple[int, int]]:
-        if channel not in self.channel_configs:
-            print(f"Канал {channel} не найден")
-            return None
-        min_angle, max_angle, old_min, old_max = self.channel_configs[channel]
-        if min_pulse is not None:
-            old_min = int(min_pulse)
-        if max_pulse is not None:
-            old_max = int(max_pulse)
-        self.channel_configs[channel] = (min_angle, max_angle, old_min, old_max)
-        return old_min, old_max

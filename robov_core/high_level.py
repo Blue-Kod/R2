@@ -1,6 +1,4 @@
-import os
 import platform
-import re
 import socket
 import subprocess
 import sys
@@ -77,7 +75,6 @@ def check_root_password(password: str) -> bool:
 _camera: Optional[StereoCamera] = None
 _servo: Optional[ServoController] = None
 _lock: threading.Lock = threading.Lock()
-_servo_lock: threading.Lock = threading.Lock()
 
 _logs_buffer: deque = deque(maxlen=500)
 
@@ -107,13 +104,6 @@ sys.stdout = _stdout_capture
 sys.stderr = _stdout_capture
 
 _hardware_initialized: bool = False
-_shutdown_requested: bool = False
-
-_shell_proc = None
-_shell_buffer: deque = deque(maxlen=2000)
-_shell_running: bool = False
-_shell_lock: threading.Lock = threading.Lock()
-_shell_thread: Optional[threading.Thread] = None
 
 _all_threads: List[threading.Thread] = []
 
@@ -174,27 +164,6 @@ def speak(text: str) -> None:
         log(f"TTS error: {e}")
 
 
-def _strip_speech(text: str) -> str:
-    """Remove all markdown, HTML, code blocks, and formatting from TTS text."""
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"```[\s\S]*?```", "", text)
-    text = re.sub(r"`[^`\n]+`", "", text)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-    text = re.sub(r"\*([^*]+)\*", r"\1", text)
-    text = re.sub(r"__([^_]+)__", r"\1", text)
-    text = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"\1", text)
-    text = re.sub(r"~~([^~]+)~~", r"\1", text)
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^[-*+]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^\d+\.\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"---+", "", text)
-    text = re.sub(r"\|", " ", text)
-    text = re.sub(r"\n{2,}", " ", text)
-    return text.strip()
-
-
 def log(message: str) -> None:
     print(message)
 
@@ -244,99 +213,6 @@ def _init_hardware() -> None:
             log("Falling back to mock servo")
 
 
-def _shell_reader() -> None:
-    global _shell_running
-    try:
-        while _shell_running:
-            if _shell_proc is None:
-                data = b""
-            elif platform.system() == "Windows":
-                data = _shell_proc.stdout.read1(1024) if _shell_proc.stdout else b""
-            else:
-                import ptyprocess
-                data = _shell_proc.read(1024) if hasattr(_shell_proc, 'read') else b""
-            if not data:
-                break
-            text = _decode_output(data)
-            with _shell_lock:
-                _shell_buffer.append(text)
-    except Exception:
-        pass
-    finally:
-        _shell_running = False
-
-
-def _decode_output(data: bytes) -> str:
-    for enc in ("utf-8", "cp866", "cp1251"):
-        try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
-
-
-def shell_start() -> None:
-    global _shell_proc, _shell_running, _shell_thread
-
-    if _shell_running:
-        return
-    _shell_running = True
-
-    if platform.system() == "Windows":
-        try:
-            _shell_proc = subprocess.Popen(
-                ["powershell", "-NoLogo"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-        except Exception as exc:
-            log(f"Failed to start PowerShell: {exc}")
-            _shell_running = False
-            return
-    else:
-        try:
-            import ptyprocess
-            _shell_proc = ptyprocess.PtyProcess.spawn(["/bin/bash", "-i"])
-            _shell_proc.setwinsize(24, 80)
-        except Exception as exc:
-            log(f"Failed to start shell: {exc}")
-            _shell_running = False
-            return
-
-    _shell_thread = threading.Thread(target=_shell_reader, daemon=True)
-    _shell_thread.start()
-
-
-def shell_write(command: str) -> bool:
-    if not _shell_running or _shell_proc is None:
-        return False
-    try:
-        if not command.endswith("\n"):
-            command += "\n"
-        if platform.system() == "Windows":
-            if not _shell_proc.stdin:
-                return False
-            _shell_proc.stdin.write(command.encode("utf-8"))
-            _shell_proc.stdin.flush()
-        else:
-            _shell_proc.write(command.encode("utf-8"))
-        return True
-    except Exception:
-        return False
-
-
-def shell_output() -> str:
-    with _shell_lock:
-        return "".join(_shell_buffer)
-
-
-def shell_onetime(command: str) -> str:
-    old_output = shell_output()
-    shell_write(command)
-    return shell_output().replace(old_output, "")
-
-
 def cpu_temp() -> str:
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r", encoding="utf-8") as file:
@@ -379,9 +255,6 @@ def start_background() -> None:
     log(f"R2 v{APP_VERSION} - Starting...")
 
     _init_hardware()
-    shell_start()
-    if _shell_thread:
-        _all_threads.append(_shell_thread)
 
     from robov_core.web import create_app
     app = create_app()
@@ -449,14 +322,12 @@ def servo_toggle(enable: bool) -> None:
 
 
 def cleanup() -> None:
-    global _shutdown_requested, _hardware_initialized, _shell_running
+    global _hardware_initialized
 
     if not _hardware_initialized:
         return
 
     log("Starting clean shutdown...")
-    _shutdown_requested = True
-    _shell_running = False
 
     try:
         from robov_core.web import _collector
@@ -471,16 +342,6 @@ def cleanup() -> None:
     if _camera:
         _camera.stop_continuous_capture()
         _camera.release_camera()
-
-    if _shell_thread and _shell_thread.is_alive():
-        _shell_thread.join(timeout=2.0)
-
-    if _shell_proc:
-        try:
-            _shell_proc.terminate()
-            _shell_proc.wait(timeout=2.0)
-        except Exception:
-            pass
 
     for t in _all_threads:
         if t.is_alive() and t != threading.current_thread():
@@ -520,29 +381,6 @@ def angle(servo: int, angle_value: int) -> bool:
     if _servo is None:
         return False
     return _servo.set_servo(servo, angle_value, smooth=True, step_delay=0.01, step_angle=2)
-
-
-def goto(target) -> bool:
-    log(f"goto() stub called — target={target}")
-    return False
-
-
-def grab(target) -> bool:
-    log(f"grab() stub called — target={target}")
-    return False
-
-
-def move_arm_to(target, left: bool = False) -> bool:
-    log(f"move_arm_to() stub called — target={target}, left={left}")
-    return False
-
-
-def get_servo_offsets() -> Dict[int, float]:
-    servo = _servo
-    if servo is None:
-        return {}
-    with servo.lock:
-        return dict(servo.offsets)
 
 
 def robot_config() -> dict:
@@ -673,64 +511,6 @@ def set_servo_command(channel: int, angle: int) -> bool:
     return servo.set_servo(channel, angle, smooth=True)
 
 
-def test_servo_cycle(channel: int = 12, duration: float = 5.0) -> bool:
-    """Тестовый прогон одного сервопривода: полный ход min→max за
-    ``duration`` секунд и обратно max→min за те же ``duration``.
-
-    Один полный цикл = 2·duration (по умолчанию 5 с туда + 5 с обратно).
-    Диапазон берётся из лимитов канала; канал 12 (по умолчанию) в основном
-    конфиге отсутствует — для него задаётся типовой ход 0..180°.
-
-    Команда блокирующая. Удобно вызывать из Python-панели:
-        test_servo_cycle(12)
-    """
-    servo = _servo
-    if servo is None:
-        log("test_servo_cycle: сервоконтроллер не инициализирован")
-        return False
-
-    if not servo.initialized:
-        servo.reinit()
-    if not servo.initialized:
-        log("test_servo_cycle: PCA9685 недоступна")
-        return False
-
-    # Канал, которого нет в основном конфиге (например 12): типовой 0..180.
-    if channel not in servo.channel_configs:
-        min_a, max_a, p_min, p_max = 0, 180, 120, 520
-        servo.channel_configs[channel] = (min_a, max_a, p_min, p_max)
-        servo.command_limits[channel] = (min_a, max_a)
-        servo.offsets.setdefault(channel, 0.0)
-
-    lo, hi = servo.command_limits.get(channel, servo.channel_configs[channel][:2])
-    lo, hi = int(lo), int(hi)
-    if hi <= lo:
-        log(f"test_servo_cycle: канал {channel}: некорректный диапазон {lo}..{hi}")
-        return False
-
-    # Тест должен реально двигать серву — снимаем возможную блокировку relax.
-    servo.enable_all()
-
-    def sweep(a_from: int, a_to: int) -> None:
-        """Пройти от a_from до a_to ровно за duration секунд (по часам)."""
-        t0 = time.monotonic()
-        while True:
-            frac = (time.monotonic() - t0) / duration
-            if frac > 1.0:
-                frac = 1.0
-            angle_value = a_from + (a_to - a_from) * frac
-            servo.set_servo(channel, int(round(angle_value)), smooth=False)
-            if frac >= 1.0:
-                break
-            time.sleep(0.01)
-
-    log(f"test_servo_cycle: канал {channel}, {lo}→{hi} и {hi}→{lo} по {duration:g}с")
-    sweep(lo, hi)
-    sweep(hi, lo)
-    log(f"test_servo_cycle: канал {channel} — цикл завершён")
-    return True
-
-
 # Последний командованный theta на сторону: старт для непрерывности ветки IK
 # (а не физические углы, которые отстают от команд на ходу).
 _last_ik_start: Dict[bool, Optional[Tuple[float, float, float]]] = {
@@ -796,28 +576,6 @@ def _rate_limit_commands(commands: Dict[int, float]) -> Dict[int, float]:
     return limited
 
 
-def _ik_tuple(result: dict, left: bool) -> Tuple[bool, float, float, float]:
-    """Публичный компактный формат: ok, pan, shoulder, elbow."""
-    commands = result.get("servo")
-    if not commands:
-        return bool(result.get("ok")), 0.0, 0.0, 0.0
-    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
-    return (
-        bool(result.get("ok")),
-        float(commands[channels["shoulder_z"]]),
-        float(commands[channels["shoulder_x"]]),
-        float(commands[channels["elbow_x"]]),
-    )
-
-
-def ik(x: float, y: float, z: float, left: bool = False) -> Tuple[bool, float, float, float]:
-    """Вернуть (достижима_в_пределах_1см, pan, shoulder, elbow).
-
-    Углы — логические команды серво, в порядке pan, shoulder, elbow.
-    """
-    return _ik_tuple(ik_detail(x, y, z, left), left)
-
-
 def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
     """Вычислить IK и двигать руку к ближайшей достижимой позе.
 
@@ -843,19 +601,3 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
     result["moved"] = True
     return result
 
-
-def move_to_ik(x: float, y: float, z: float, left: bool = False) -> Tuple[bool, float, float, float]:
-    """Вычислить IK и переместить выбранную руку к ближайшей достижимой позе."""
-    detail = ik_detail(x, y, z, left)
-    if not detail["servo"]:
-        return _ik_tuple(detail, left)
-    for channel, angle_value in detail["servo"].items():
-        set_servo_command(channel, int(round(angle_value)))
-    return _ik_tuple(detail, left)
-
-
-def set_servo_offset(channel: int, offset: float) -> bool:
-    servo = _servo
-    if servo is None:
-        return False
-    return servo.set_offset(channel, offset)

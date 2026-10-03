@@ -19,7 +19,6 @@ CERT_FILE = CERT_DIR / "cert.pem"
 KEY_FILE = CERT_DIR / "key.pem"
 _MARKER = CERT_DIR / "san.txt"
 CERT_DAYS = 3650
-_IP_CACHE = {}
 
 
 def _detect_ips() -> tuple:

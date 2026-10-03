@@ -3,24 +3,14 @@ import { h, iconButton, panelBody, toast, icon } from '../ui.js';
 
 /** Channel descriptors come from the server config (servo.servo_config()). */
 function channelsFromBoot(boot) {
-  const cfg = boot?.servo;
-  if (cfg?.channels?.length) {
-    return cfg.channels.map((c) => ({
-      id: c.id,
-      name: c.name,
-      min: c.command_min ?? c.min ?? 0,
-      max: c.command_max ?? c.max ?? 270,
-      offset: c.offset ?? 0,
-      inverted: !!c.inverted,
-    }));
-  }
-  // Fallback: derive from the legacy servo_limits map.
-  const limits = boot?.servo_limits || {};
-  const ids = boot?.servo?.order || Object.keys(limits);
-  return (ids.length ? ids : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).map((id) => {
-    const lim = limits[id] || [0, 270];
-    return { id: Number(id), name: `ch${id}`, min: lim[0], max: lim[1], offset: 0, inverted: false };
-  });
+  return (boot?.servo?.channels || []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    min: c.command_min ?? c.min ?? 0,
+    max: c.command_max ?? c.max ?? 270,
+    offset: c.offset ?? 0,
+    inverted: !!c.inverted,
+  }));
 }
 
 // Fixed width for up to 4 characters ("270°"), so all rows line up and the

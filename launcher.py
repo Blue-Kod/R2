@@ -31,7 +31,6 @@ import json
 from pathlib import Path
 
 # Constants
-REPO_URL = "https://github.com/Blue-Kod/R2"
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
 

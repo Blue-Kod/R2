@@ -33,7 +33,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from robov_core.servo import DEFAULT_POSE as DEFAULT_ANGLES
+from robov_core.servo import REST_POSE as DEFAULT_ANGLES
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "collected_data"
 META_FILE = DATA_DIR / "meta.json"
@@ -111,7 +111,6 @@ class DataCollector:
         self._rows: List[Dict] = []
 
         self._session_name: Optional[str] = None
-        self._session_start: Optional[datetime] = None
 
         self._meta = _default_meta()
         self._load_meta()
@@ -166,7 +165,9 @@ class DataCollector:
             self._rows = []
             self._start_mono = _time.monotonic()
             self._start_wall = datetime.now()
-            self._open_writer()
+            if self._session_name is None:
+                self._session_name = f"collect-{self._start_wall:%Y%m%d-%H%M%S}"
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
             self._save_meta()
             self._collecting = True
             self._thread = threading.Thread(target=self._loop, daemon=True,
@@ -204,12 +205,6 @@ class DataCollector:
         self._thread = None
 
     # --- внутренняя механика ---
-
-    def _open_writer(self) -> None:
-        if self._session_name is None:
-            self._session_name = f"collect-{self._start_wall:%Y%m%d-%H%M%S}"
-            self._session_start = self._start_wall
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     def _state_vector(self) -> List[float]:
         angles = {}

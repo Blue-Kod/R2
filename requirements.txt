@@ -10,9 +10,6 @@ psutil>=5.9.0
 # HTTP requests
 requests>=2.31.0
 
-# Terminal/shell support
-ptyprocess>=0.7.0
-
 # OpenCV - use opencv-python-headless for server environments (no GUI deps)
 # For Orange Pi with display, use opencv-python instead
 opencv-python==4.9.0.80
@@ -22,12 +19,6 @@ numpy>=1.24.0,<2.0.0
 
 # Hardware I2C control for PCA9685 servo driver
 PCA9685-smbus2>=0.0.6
-
-# Environment variables
-python-dotenv>=1.0.0
-
-# WebSocket support
-websockets>=11.0.0
 
 # WebSocket route inside Flask (browser terminal over the same origin)
 flask-sock>=0.7.0

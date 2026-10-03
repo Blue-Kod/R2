@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, button, iconButton, panelBody, toast, modal, icon } from '../ui.js';
+import { h, iconButton, panelBody, toast, modal, icon } from '../ui.js';
 
 export const videoPanel = {
   id: 'video',

@@ -39,15 +39,9 @@ async function request(method, url, { body, raw } = {}) {
 }
 
 export const api = {
-  get: (url) => request('GET', url),
-  post: (url, body) => request('POST', url, { body }),
-  del: (url) => request('DELETE', url),
-
   // --- domain helpers ---
   bootstrap: () => request('GET', '/api/bootstrap'),
-  login: (password) => request('POST', '/api/login', { body: { password } }),
   logout: () => request('POST', '/api/logout', { body: {} }),
-  checkAuth: () => request('GET', '/api/check-auth'),
 
   stats: () => request('GET', '/api/data'),
   ip: () => request('GET', '/api/ip'),
@@ -62,9 +56,6 @@ export const api = {
   servoPower: (enabled) => request('POST', '/api/servo/power', { body: { enabled } }),
 
   ikMove: (x, y, z, left) => request('POST', '/api/ik/move', { body: { x, y, z, left } }),
-
-  cmdSend: (command) => request('POST', '/api/cmd/send', { body: { command } }),
-  cmdOutput: () => request('GET', '/api/cmd/output'),
 
   pythonExec: (code) => request('POST', '/api/python/exec', { body: { code } }),
 
@@ -84,7 +75,6 @@ export const api = {
       return d;
     });
   },
-  fileDownloadUrl: (path) => `/api/files/download?path=${encodeURIComponent(path)}`,
   fileUrl: (path) => `/api/files/download?path=${encodeURIComponent(path)}`,
 
   dcStatus: () => request('GET', '/api/datacollect/status'),

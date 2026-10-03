@@ -39,7 +39,6 @@ class StereoCamera:
         self.eye_h: int = 720
         self.show_left: bool = True
         self.fps: float = 30.0
-        self._tick: int = 0
         self._last_frame_time: float = time.time()
         self._frame_count: int = 0
 

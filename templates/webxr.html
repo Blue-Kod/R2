@@ -55,11 +55,7 @@
 </div>
 
 <script>
-const serverData = {
-    ik_config: {{ ik_config | tojson }},
-    servo_angles: {{ servo_angles | tojson }},
-    camera_params: {{ camera_params | tojson }}
-};
+const CAMERA_PARAMS = {{ camera_params | tojson }};
 
 // ==== Калибровочные константы (знаки при необходимости флипать) ====
 const HEAD_YAW_SIGN = 1;    // +yaw (влево) -> шея 135 (лево)
@@ -183,7 +179,7 @@ function applyCameraLayout(L) {
     }
 }
 (function () {
-    const L = serverData.camera_params && serverData.camera_params.layout;
+    const L = CAMERA_PARAMS && CAMERA_PARAMS.layout;
     applyCameraLayout(L);
 })();
 function updateCameraLayout() {
@@ -592,7 +588,6 @@ function freezeButtonIndex(src) {
     const prof = (src.profiles || []).join(' ');
     return /generic/.test(prof) ? 4 : 3;
 }
-const prevFreezeState = new Set();
 const holdState = new Map();   // src -> {start, long}
 let recenterRequested = false; // длинное удержание отпущено — одноразовый ресет
 function pollFreeze() {
@@ -628,10 +623,8 @@ function pollFreeze() {
                     onFreezeButton(src.handedness, true); // тап -> тоггл freeze
                 }
             }
-            prevFreezeState.delete(src);
             continue;
         }
-        prevFreezeState.add(src);
         let st = holdState.get(src);
         if (!st) {
             holdState.set(src, { start: now, long: false });
@@ -676,7 +669,6 @@ async function enterVR() {
         robotAnchorCaptured = false;
         smoothedTarget = { right: null, left: null };
         freezeBadge.classList.remove('show');
-        prevFreezeState.clear();
         holdState.clear();
         recenterRequested = false;
         enterBtn.classList.add('hidden');

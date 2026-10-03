@@ -1,6 +1,6 @@
 // R2 UI kit — vanilla DOM helpers and components in the Negentropy language.
 
-export const EASE = 'cubic-bezier(0.23,1,0.32,1)';
+const EASE = 'cubic-bezier(0.23,1,0.32,1)';
 
 /** Create an element: h('div', { class: 'x', onclick: fn }, child, ...). */
 export function h(tag, attrs = {}, ...children) {
@@ -21,7 +21,7 @@ export function h(tag, attrs = {}, ...children) {
   return node;
 }
 
-export function append(parent, children) {
+function append(parent, children) {
   for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
     parent.appendChild(child.nodeType ? child : document.createTextNode(String(child)));
@@ -41,34 +41,22 @@ const ICONS = {
   terminal: '<path d="M5 7l5 5-5 5M13 17h7"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
   code: '<path d="M7 8l-4 4 4 4M17 8l4 4-4 4M14 4l-4 16"/>',
-  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7M12 17h.01"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   file: '<path d="M14 3v5h5M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 18l5-5 3 3 3-4 5 6"/>',
   database: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
-  smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4 4 0 0 0 7 0M9 9h.01M15 9h.01"/>',
   cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M6 6l12 12M18 6l-12 12"/>',
-  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15a2 2 0 1 1 0-4 1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 4.6a2 2 0 1 1 4 0 1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.6 1.6 0 0 0 20 11a2 2 0 1 1 0 4z"/>',
   power: '<path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/>',
   logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/>',
-  command: '<path d="M9 3a3 3 0 1 0 3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12"/>',
-  chevron: '<path d="M6 9l6 6 6-6"/>',
   chevronRight: '<path d="M9 6l6 6-6 6"/>',
   check: '<path d="M5 12l5 5L20 6"/>',
   alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
-  download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
-  external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
-  trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/>',
-  edit: '<path d="M4 20h4L19 9a2 2 0 0 0-3-3L5 17v3zM14 6l3 3"/>',
   upload: '<path d="M12 20V8M7 13l5-5 5 5M5 4h14"/>',
   folderPlus: '<path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 11v5M9.5 13.5h5"/>',
   save: '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 3v6h7V3M8 21v-7h8v7"/>',
-  database2: '<path d="M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
-  activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
   panelLeft: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9.5 4v16"/>',
   monitor: '<rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/>',
   phone: '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>',
@@ -158,14 +146,8 @@ export function label(text, className = '') {
   return h('span', { class: `font-semibold text-[10px] uppercase tracking-[0.08em] text-muted-foreground/80 ${className}`, text });
 }
 
-export function field(labelText, input, className = '') {
-  return h('label', { class: `flex flex-col gap-1.5 ${className}` }, label(labelText), input);
-}
-
 export const inputClass =
   'h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:opacity-50';
-export const textareaClass =
-  'w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 resize-none';
 
 export function spinner(className = 'size-4') {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -225,10 +207,4 @@ export function modal({ title, body, footer, width = 'max-w-lg', onClose } = {})
 // --- Section wrapper used inside panels ---
 export function panelBody(...children) {
   return h('div', { class: 'flex h-full min-h-0 flex-col gap-3 p-3' }, ...children);
-}
-
-/** Auto-scroll a container to the bottom only if the user was already there. */
-export function stickyScroll(el, threshold = 40) {
-  const near = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-  return () => { if (near) el.scrollTop = el.scrollHeight; };
 }

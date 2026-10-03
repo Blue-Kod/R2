@@ -15,8 +15,7 @@
           от поворота ч1. В базовой позе ось ч4 смотрит по Z, но при повороте
           ч1 в 225° (90 от базового угла) эта же ось разворачивается в сторону оси Y (по правилам
           серийной кинематики: матрица поворота ч1 умножается на остаток цепи).
-          В терминах tinyik это соединение — 'z' в локальной цепочке
-          ['x','z','x'] (см. ниже).
+          В локальной цепочке это соединение — 'z' (цепь ['x','z','x'], см. ниже).
       ч6 : elbow_x     — ОСЬ X, тоже в локальной системе (следует за ч1, ч4).
 
     База правой руки:  X = +115 мм (вправо от центра туловища).
@@ -29,9 +28,8 @@
 
 ВАЖНО про порядок: в каналах чтобы ч4 был "как второй сустав", а не
 независимый — это серийная цепь x-z-x, а НЕ три независимые оси.
-tinyik-цепочка (внешние координаты, мм):
-    Actuator([[±115,0,0], 'x', 'z', [0,-330,0], 'x', [0,-220,0]])
-    углы tinyik (радианы) = (sx, sz, eb)  [порядок суставов цепи x,z,x].
+Цепь (внешние координаты, мм): база [±115,0,0] → 'x' → [0,-330,0] →
+'z' → [0,-220,0] → 'x'. Углы суставов цепи — (sx, sz, eb).
 
 ПРАВИЛО ЗЕРКАЛА (левая рука): база -115, а угол shoulder_z для левой
 берётся с противоположным знаком (R_z(a) при зеркале diag(-1,1,1)
@@ -42,7 +40,7 @@ tinyik-цепочка (внешние координаты, мм):
 =====================================================================
 
 theta = (t_sz, t_sx, t_eb) — физические углы звеньев, градусы, порядок
-ГЕОМЕТРИЧЕСКИЙ (sz, sx, eb), а в tinyik передаём как (sx, sz, eb).
+ГЕОМЕТРИЧЕСКИЙ (sz, sx, eb); цепь использует порядок (sx, sz, eb).
 
 Диапазоны команд каналов (из servo.DEFAULT_COMMAND_LIMITS):
     ч1/ч2/ч4/ч5        : 0..270° (0.102..0.540 мс пульс)
@@ -65,7 +63,7 @@ theta = (t_sz, t_sx, t_eb) — физические углы звеньев, г�
 по описанию выше), БЕЗ эмпирической калибровки под замеры. Она НЕ
 сходится с приведёнными ниже якорными замерами (расхождение до ~800 мм)
 из-за монтажных смещений осей серво на железе. Соответствие роботу
-достигается оффсетами каналов (set_servo_offset) после постановки руки.
+достигается оффсетами каналов после постановки руки.
 Реальные направления уточняются по arm_test.py.
 
 =====================================================================
@@ -96,20 +94,18 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from robov_core.servo import DEFAULT_COMMAND_LIMITS, DEFAULT_POSE, START_POSE
+from robov_core.servo import DEFAULT_COMMAND_LIMITS, REST_POSE, START_POSE
 
 
 BASE_X = 115.0
 L1 = 330.0
 L2 = 220.0
 
-TORSO = np.array([0.0, 0.0, 0.0])
 HEAD = np.array([0.0, 100.0, 0.0])
 TORSO_HW = 70.0
 TORSO_HD = 45.0
 TORSO_HH = 95.0
 HEAD_R = 45.0
-ARM_RADIUS = 30.0
 
 JOINT_NAMES = ("shoulder_z", "shoulder_x", "elbow_x")
 ARM_CHANNELS = {
@@ -119,8 +115,6 @@ ARM_CHANNELS = {
 
 IK_ERR_OK = 3.0
 IK_TOLERANCE_MM = 50.0
-IK_CLEARANCE_MARGIN = 0.0
-W_NAT = 0.3
 
 # Линейная калибровка оси X левой руки. Наблюдено на железе, что реальный x
 # связан с поданной в IK целью как  real_x = a*target_x + b  (a=-37/23, b=-300).
@@ -142,7 +136,6 @@ def _left_report_x(tx: float) -> float:
 GRID_STEPS = ((8.0, None), (2.0, 10.0), (0.4, 2.0), (0.08, 0.5))
 
 # Режим стола (поза старта; поиск по столу — вне скоупа, см. план).
-TABLE_ENABLED = True
 TABLE_TOP_Y = -300.0
 TABLE_X_HALF = 1000.0
 TABLE_Z0 = 0.0
@@ -155,8 +148,7 @@ TABLE_Z1 = 1500.0
 TABLE_MARGIN = 0.0
 TABLE_MIN_Y = TABLE_TOP_Y + TABLE_MARGIN
 TABLE_COLLISION_PENALTY = 1e6
-# Кран-предпочтение (работает, пока TABLE_ENABLED=True — ВСЕГДА в режиме
-# стола): среди поз, достающих одну и ту же цель, выбирается ветка с
+# Кран-предпочтение (всегда в режиме стола): среди поз, достающих одну и ту же цель, выбирается ветка с
 # высоким локтем (elbow_y заметно выше кисти), «кран-ветка», а не
 # провисшая натуральная («через низ»). Байас ДОМИНАНТНЫЙ
 # (TABLE_CRANE_BIAS_MAX = 1e6 > любой ошибки достижения): если кран-ветка
@@ -177,13 +169,8 @@ def _channels(left: bool) -> Dict[str, int]:
 
 
 def rest_angles(left: bool = False) -> Dict[int, int]:
-    """Логические серво-команды позы «рука вниз» (из DEFAULT_POSE)."""
-    return {ch: int(DEFAULT_POSE[ch]) for ch in _channels(left).values()}
-
-
-def start_pose() -> Dict[int, int]:
-    """Стартовая поза всех каналов — из servo.START_POSE (единый источник)."""
-    return dict(START_POSE)
+    """Логические серво-команды позы «рука вниз» (из REST_POSE)."""
+    return {ch: int(REST_POSE[ch]) for ch in _channels(left).values()}
 
 
 def servo_ranges(left: bool = False) -> Dict[int, Tuple[int, int]]:
@@ -191,13 +178,11 @@ def servo_ranges(left: bool = False) -> Dict[int, Tuple[int, int]]:
             for ch in _channels(left).values()}
 
 
-def limits(left: bool = False, ik_only: bool = False) -> Dict[str, Tuple[float, float]]:
+def limits(left: bool = False) -> Dict[str, Tuple[float, float]]:
     """Диапазоны theta (sz, sx, eb) для одной руки.
 
     Вычисляются из командных лимитов и правила маппинга theta↔команды:
     right sz→cmd=rest+θ, left sz→cmd=rest−θ, elbow→cmd=rest−θ, sx→cmd=rest+θ.
-    Для идеальной модели ik_only == полный диапазон (эмпирического сужения,
-    как в прежней двухзонной реализации, больше нет).
     """
     rest = rest_angles(left)
     ranges = servo_ranges(left)
@@ -304,8 +289,6 @@ def _fk_grid_positions(t_sz: Sequence[float], t_sx: Sequence[float],
 
 def _collides(theta: Sequence[float], left: bool) -> bool:
     """Попала ли какая-либо часть руки ниже плоскости стола."""
-    if not TABLE_ENABLED:
-        return False
     f = fk(theta, left)
     return bool(f["E"][1] < TABLE_MIN_Y or f["EE"][1] < TABLE_MIN_Y)
 
@@ -313,11 +296,9 @@ def _collides(theta: Sequence[float], left: bool) -> bool:
 def _crane_lift_bias(elbow_y, ee_y):
     """Добавочная стоимость за «низкий» локоть (кран-предпочтение).
 
-    Работает с массивами (сетки) и скалярами; 0, когда TABLE_ENABLED=False
-    или лифт elbow_y − ee_y уже достиг целевого TABLE_CRANE_LIFT.
+    Работает с массивами (сетки) и скалярами; 0, когда лифт
+    elbow_y − ee_y уже достиг целевого TABLE_CRANE_LIFT.
     """
-    if not TABLE_ENABLED:
-        return np.zeros_like(np.asarray(elbow_y, dtype=float))
     return np.minimum(TABLE_CRANE_BIAS_MAX, TABLE_CRANE_WEIGHT * np.maximum(
         0.0, TABLE_CRANE_LIFT - (np.asarray(elbow_y, dtype=float)
                                  - np.asarray(ee_y, dtype=float))))
@@ -326,7 +307,7 @@ def _crane_lift_bias(elbow_y, ee_y):
 def _ranges(left: bool, step: float, window: Optional[float],
             center: Optional[Sequence[float]] = None
             ) -> Tuple[np.ndarray, ...]:
-    lim = limits(left, ik_only=True)
+    lim = limits(left)
     out = []
     for name, current in zip(JOINT_NAMES, center or (None,) * 3):
         lo, hi = lim[name]
@@ -340,15 +321,12 @@ def _ranges(left: bool, step: float, window: Optional[float],
 
 
 def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
-                  left: bool, prefer_crane: bool = False
-                  ) -> Tuple[Tuple[float, float, float], float]:
+                  left: bool) -> Tuple[Tuple[float, float, float], float]:
     positions, elbow = _fk_grid_positions(*ranges, left)
     error = np.linalg.norm(positions - target, axis=-1)
-    if TABLE_ENABLED:
-        below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
-        error = error + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
-        if prefer_crane:
-            error = error + _crane_lift_bias(elbow[..., 1], positions[..., 1])
+    below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
+    error = error + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
+    error = error + _crane_lift_bias(elbow[..., 1], positions[..., 1])
     index = int(np.argmin(error))
     i1, i2, i3 = np.unravel_index(index, error.shape)
     theta = (float(ranges[0][i1]), float(ranges[1][i2]), float(ranges[2][i3]))
@@ -357,15 +335,11 @@ def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
 
 def _result(theta: Optional[Tuple[float, float, float]], status: str,
             message: str, left: bool, err_mm: Optional[float] = None,
-            wanted: Optional[Sequence[float]] = None,
-            clamped: Optional[Sequence[float]] = None,
-            reach_gap: float = 0.0) -> dict:
+            wanted: Optional[Sequence[float]] = None) -> dict:
     result = {"theta": theta, "status": status, "message": message,
               "err_mm": err_mm, "left": bool(left), "servo": None,
               "ee": None, "ok": False,
-              "wanted": [float(v) for v in wanted] if wanted is not None else None,
-              "clamped": [float(v) for v in clamped] if clamped is not None else None,
-              "reach_gap": float(reach_gap)}
+              "wanted": [float(v) for v in wanted] if wanted is not None else None}
     if theta is not None:
         result["servo"] = to_servo_commands(theta, left)
         ee = fk(theta, left)["EE"]
@@ -386,8 +360,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     |ee−цель|, при равенстве — по близости к start (непрерывность движения).
 
     Возвращает dict вида:
-        {theta, status, message, err_mm, left, servo, ee, ok,
-         wanted, clamped, reach_gap}
+        {theta, status, message, err_mm, left, servo, ee, ok, wanted}
     со всеми значениями в нативных типах Python (JSON-совместимо).
     status: "ok" (err<=IK_ERR_OK), "limits" (err<=IK_TOLERANCE_MM),
             "unreachable" (дальше лимита; servo всё равно указывает на
@@ -396,21 +369,16 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     z = -z
     tx = _left_target_x(x) if left else float(x)
     wanted = np.array([tx, float(y), float(z)], dtype=float)
-    prefer_crane = TABLE_ENABLED
     coarse = _ranges(left, *GRID_STEPS[0])
     positions, elbow = _fk_grid_positions(*coarse, left)
     errors = np.linalg.norm(positions - wanted, axis=-1)
-    if TABLE_ENABLED:
-        below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
-        errors = errors + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
+    below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
+    errors = errors + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
     # Стартовые бассейны сеются по ДВУМ ценам: чистой (коллайдер, без крана)
     # и кран-предпочтительной. Это гарантирует, что в старты попадут и
     # узкие натуральные бассейны, и кран-бассейны; ветку выбирает финальный
     # score ниже (кран-байас работает в каскаде и при выборе).
-    if prefer_crane:
-        errors_crane = errors + _crane_lift_bias(elbow[..., 1], positions[..., 1])
-    else:
-        errors_crane = errors
+    errors_crane = errors + _crane_lift_bias(elbow[..., 1], positions[..., 1])
 
     count = min(8, errors.size)
     starts = []
@@ -424,7 +392,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
                 starts.append(theta)
 
     if start is not None:
-        model = limits(left, ik_only=True)
+        model = limits(left)
         clamped_start = tuple(min(max(float(v), model[n][0]), model[n][1])
                               for n, v in zip(JOINT_NAMES, start))
         starts.append(clamped_start)
@@ -434,16 +402,15 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         current = theta
         for step, window in GRID_STEPS[1:]:
             current, _ = _best_on_grid(_ranges(left, step, window, current),
-                                       wanted, left, prefer_crane=prefer_crane)
+                                       wanted, left)
         ee = fk(current, left)["EE"]
         error = float(np.linalg.norm(ee - wanted))
         results.append((error, current))
 
     def score(error, theta):
         total = error
-        if prefer_crane:
-            f = fk(theta, left)
-            total += float(_crane_lift_bias(f["E"][1], f["EE"][1]))
+        f = fk(theta, left)
+        total += float(_crane_lift_bias(f["E"][1], f["EE"][1]))
         if start is not None:
             weights = (1.0, 0.5, 0.25)
             angle_cost = sum(w * (a - b) ** 2
@@ -460,15 +427,13 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     else:
         status = "unreachable"
     message = f"FK-поиск: |ee−цель|={best_error:.1f} мм"
-    if TABLE_ENABLED:
-        if wanted[1] < TABLE_MIN_Y:
-            message = ("Цель ниже стола — кисть зажата к его поверхности "
-                       f"(|ee−цель|={best_error:.1f} мм)")
-        elif _collides(best_theta, left):
-            message += " · рука у самой кромки стола"
+    if wanted[1] < TABLE_MIN_Y:
+        message = ("Цель ниже стола — кисть зажата к его поверхности "
+                   f"(|ee−цель|={best_error:.1f} мм)")
+    elif _collides(best_theta, left):
+        message += " · рука у самой кромки стола"
     return _result(best_theta, status, message, left, best_error,
-                   wanted=[float(v) for v in wanted],
-                   clamped=[float(v) for v in wanted])
+                   wanted=[float(v) for v in wanted])
 
 
 def browser_config() -> dict:
@@ -487,7 +452,7 @@ def browser_config() -> dict:
         "torso": {"half_width": TORSO_HW, "half_height": TORSO_HH,
                   "half_depth": TORSO_HD},
         "head": {"y": float(HEAD[1]), "radius": HEAD_R},
-        "start": {str(ch): value for ch, value in start_pose().items()},
+        "start": {str(ch): value for ch, value in START_POSE.items()},
     }
 
 
