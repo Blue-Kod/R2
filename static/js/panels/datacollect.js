@@ -97,7 +97,8 @@ export const datacollectPanel = {
     };
 
     el.appendChild(panelBody(
-      h('div', { class: 'flex items-center gap-2' }, icon('database', 'size-4 text-muted-foreground'), h('span', { class: 'text-[13px] font-medium', text: 'Сбор данных (LeRobot / parquet)' })),
+      h('div', { class: 'flex items-center gap-2' }, icon('database', 'size-4 text-muted-foreground'), h('span', { class: 'text-[13px] font-medium', text: 'Сбор данных (LeRobot / parquet)' }),
+        h('a', { href: '/studio', class: 'ml-auto rounded-md px-1.5 py-1 text-[12px] text-primary hover:bg-muted', title: 'Монтаж датасета', text: 'студия →' })),
       task, toggleBtn, statusLine,
       h('div', { class: 'text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80', text: 'Эпизоды' }),
       list));

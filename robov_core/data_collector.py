@@ -1,9 +1,9 @@
 """Сбор данных для VLA-обучения в формат LeRobot (parquet).
 
-Данные пишутся в ``ROOT_DIR/collected_data/<session>/episode_<N>.parquet``
+Данные пишутся в ``ROOT_DIR/library/<session>/episode_<N>.parquet``
 (один файл на эпизод; эпизод пишется row-group'ами по мере сбора, поэтому
 память не растёт с длиной эпизода). Сквозные счётчики ``episode_index`` /
-``index`` — в ``collected_data/meta.json`` (переживают перезапуск процесса).
+``index`` — в ``library/meta.json`` (переживают перезапуск процесса).
 
 Схема колонок (по договорённости для VLA):
 - observation.images.left/right — struct {bytes: binary, path: string}
@@ -34,18 +34,18 @@ import pyarrow.parquet as pq
 
 from robov_core.servo import REST_POSE as DEFAULT_ANGLES
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "collected_data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "library"
 META_FILE = DATA_DIR / "meta.json"
 
-SAMPLE_HZ = 20.0          # желаемая частота сэмплирования, Гц
+SAMPLE_HZ = 10.0          # желаемая частота сэмплирования, Гц
 BATCH_SIZE = 100          # строк в одном row-group (граница памяти эпизода)
-IMG_WH = (1280, 720)      # разрешение ректифицированных JPEG
-JPEG_QUALITY = 85         # качество JPEG с камер
-COMPRESSION = "zstd"      # сжатие parquet
-STATE_DIM = 10
+IMG_WH = (640, 360)       # разрешение ректифицированных JPEG
+JPEG_QUALITY = 75         # качество JPEG с камер
+COMPRESSION = None        # parquet без сжатия: JPEG уже сжат, zstd тратит CPU впустую
+STATE_DIM = 12
 
 # Порядок каналов в state/action: [neck, tilt, правая рука (sz,sx,eb),
-# левая рука (sz,sx,eb), гриппер правый, гриппер левый].
+# левая рука (sz,sx,eb), гриппер правый, гриппер левый, колёса (прав, лев)].
 STATE_CHANNELS: List[Tuple[int, str]] = [
     (0,  "neck"),                 # шея
     (3,  "tilt"),                 # наклон
@@ -57,6 +57,8 @@ STATE_CHANNELS: List[Tuple[int, str]] = [
     (7,  "left_elbow"),           # левый локоть
     (8,  "grip_right"),           # правый схват (0..1)
     (9,  "grip_left"),            # левый схват (0..1)
+    (10, "wheel_right"),          # правое колесо (0..180)
+    (11, "wheel_left"),           # левое колесо (0..180)
 ]
 # Каналы грипперов нормализуются 0..1; остальные хранятся в градусах.
 GRIPPER_CHANNELS = {8, 9}
@@ -241,14 +243,7 @@ class DataCollector:
                 vec.append(value)
         return vec
 
-    def _rectified_jpeg(self, left: bool) -> Dict[str, object]:
-        camera = self._camera_getter()
-        frame = None
-        if camera is not None:
-            try:
-                frame = camera.get_rectified_frame(left=left, size=IMG_WH)
-            except Exception:
-                frame = None
+    def _encode_jpeg(self, frame) -> Dict[str, object]:
         if frame is None:
             return {"bytes": b"", "path": ""}
         ok, jpeg = cv2.imencode(
@@ -319,8 +314,15 @@ class DataCollector:
     def _sample_once(self) -> None:
         """Сэмплировать кадр. action[t]=state[t+1], поэтому строку пишем с
         задержкой в один сэмпл (последнюю закрывает _finalize_episode)."""
-        left = self._rectified_jpeg(True)
-        right = self._rectified_jpeg(False)
+        left_frame = right_frame = None
+        camera = self._camera_getter()
+        if camera is not None:
+            try:
+                left_frame, right_frame = camera.get_rectified_pair(size=IMG_WH)
+            except Exception:
+                left_frame = right_frame = None
+        left = self._encode_jpeg(left_frame)
+        right = self._encode_jpeg(right_frame)
         state = self._state_vector()
         sample = {
             "img_left": left,

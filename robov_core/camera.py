@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import numpy as np
 
@@ -13,6 +13,11 @@ os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 
 MAX_FRAME_SIZE = 4 * 1024 * 1024
+
+# Watchdog камеры: если кадров нет дольше STALL_SEC, пробуем восстановить
+# захват (release+reinit), а затем — программный USB-сброс (см. usb_reset).
+WATCHDOG_PERIOD = 2.0
+STALL_SEC = 3.0
 
 
 class CameraInitError(Exception):
@@ -23,14 +28,14 @@ class StereoCamera:
     def __init__(
         self,
         camera_param_file: str = "cam_params.json",
-        source: int = 0,
+        source: Union[int, str] = 0,
         capture_width: int = 2560,
         capture_height: int = 720,
         backend: str = "ffmpeg",
         fps_target: int = 30,
     ):
         self.camera_param_file: str = camera_param_file
-        self.camera_source: int = source
+        self.camera_source: Union[int, str] = source
         self.cap: Optional[cv2.VideoCapture] = None
         self.lock: threading.Lock = threading.Lock()
 
@@ -65,6 +70,12 @@ class StereoCamera:
         self._stereo_consumers: int = 0
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
+        # Watchdog: время последнего кадра (monotonic), флаг восстановления
+        # и «желаемый» бэкенд, который восстанавливаем после USB-сброса.
+        self._last_frame_mono: float = time.monotonic()
+        self._recovering: bool = False
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._preferred_backend: str = backend
 
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
         self._pipe = None
@@ -77,7 +88,13 @@ class StereoCamera:
             self.capture_width = int(params.get("capture_width", self.capture_width))
             self.capture_height = int(params.get("capture_height", self.capture_height))
             self.backend = str(params.get("camera_backend", self.backend))
+            self._preferred_backend = self.backend
             self.fps_target = int(params.get("fps_target", self.fps_target))
+            src = params.get("camera_source")
+            if isinstance(src, str) and src:
+                self.camera_source = src
+            elif isinstance(src, int):
+                self.camera_source = src
             isize = params.get("img_size")
             if isinstance(isize, (list, tuple)) and len(isize) >= 2:
                 self.img_size = (int(isize[0]), int(isize[1]))
@@ -149,7 +166,10 @@ class StereoCamera:
     def _start_ffmpeg(self) -> bool:
         if shutil.which("ffmpeg") is None:
             return False
-        dev = f"/dev/video{self.camera_source}"
+        if isinstance(self.camera_source, str):
+            dev = self.camera_source
+        else:
+            dev = f"/dev/video{int(self.camera_source)}"
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-f", "v4l2", "-input_format", "mjpeg",
@@ -286,6 +306,26 @@ class StereoCamera:
             return None
         return self._process_frame(raw, left, size)
 
+    def get_rectified_pair(self, size=None):
+        """Оба глаза из одного декодированного stereo-кадра.
+
+        Один decode на пару вместо двух (сбор данных вызывает это 10 раз/с),
+        и оба глаза гарантированно из одного кадра.
+        """
+        if self.backend == "ffmpeg":
+            raw = self._decode_latest()
+            if raw is None:
+                return None, None
+        else:
+            if not self.cap or not self.cap.isOpened():
+                if not self.initialize_camera():
+                    return None, None
+            ret, raw = self.cap.read()
+            if not ret:
+                return None, None
+        return (self._process_frame(raw, True, size),
+                self._process_frame(raw, False, size))
+
     def get_frame(self, left: Optional[bool] = None) -> np.ndarray:
         if left is None:
             with self.lock:
@@ -356,6 +396,7 @@ class StereoCamera:
             self._stereo_seq += 1
             left = self.show_left
             need_eye = self._feed_consumers > 0
+            self._last_frame_mono = time.monotonic()
             self._frame_count += 1
             now = time.time()
             if now - self._last_frame_time >= 1.0:
@@ -419,6 +460,7 @@ class StereoCamera:
 
         with self.lock:
             self._latest_frame = frame
+            self._last_frame_mono = time.monotonic()
             if jpeg is not None:
                 self._latest_jpeg = jpeg
                 self._jpeg_seq += 1
@@ -436,8 +478,11 @@ class StereoCamera:
         if self._capture_running:
             return
         self._capture_running = True
+        self._last_frame_mono = time.monotonic()
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name="camera-capture-thread")
         self._capture_thread.start()
+        self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True, name="camera-watchdog")
+        self._watchdog_thread.start()
 
     def stop_continuous_capture(self) -> None:
         self._capture_running = False
@@ -445,6 +490,47 @@ class StereoCamera:
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=2.0)
         self._capture_thread = None
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            self._watchdog_thread.join(timeout=WATCHDOG_PERIOD + 0.5)
+        self._watchdog_thread = None
+
+    def _watchdog_loop(self) -> None:
+        """Если камера «отвалилась» — переподнять захват и USB-устройство."""
+        while self._capture_running:
+            time.sleep(WATCHDOG_PERIOD)
+            if not self._capture_running:
+                break
+            with self.lock:
+                stalled = time.monotonic() - self._last_frame_mono
+                recovering = self._recovering
+            if stalled < STALL_SEC or recovering:
+                continue
+            self._recovering = True
+            try:
+                print(f"[Camera] no frames for {stalled:.0f}s — recovering", flush=True)
+                # Сначала пробуем просто переинициализировать захват.
+                self.release_camera()
+                self._ffmpeg_failures = 0
+                self.backend = self._preferred_backend
+                self._stop_ffmpeg()
+                # Если устройство пропало с шины — программный «реплаг».
+                try:
+                    from robov_core import usb_reset
+                    if not self._device_present():
+                        usb_reset.reset(self.camera_source)
+                except Exception as exc:
+                    print(f"[Camera] usb_reset error: {exc}", flush=True)
+                # Дать захвату заново подняться и сбросить счётчик простоя.
+                with self.lock:
+                    self._last_frame_mono = time.monotonic()
+            finally:
+                self._recovering = False
+
+    def _device_present(self) -> bool:
+        src = self.camera_source
+        if isinstance(src, str):
+            return os.path.exists(src)
+        return os.path.exists(f"/dev/video{int(src)}")
 
     def get_latest_frame(self) -> np.ndarray:
         if self.backend == "ffmpeg":

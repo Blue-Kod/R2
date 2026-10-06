@@ -30,6 +30,7 @@ from robov_core.high_level import (
     reinit_servo_bus,
 )
 from robov_core.data_collector import DataCollector
+from robov_core import dataset_studio
 
 
 def _default_ssh_user() -> str:
@@ -162,7 +163,10 @@ def create_app() -> Flask:
             if not session.get("authenticated"):
                 if request.path.startswith("/api/"):
                     return jsonify({"error": "Unauthorized"}), 401
-                return redirect(url_for("login_page"))
+                # Сохраняем исходную страницу, чтобы вернуть её после логина
+                # (в т.ч. /webxr), и для ручного входа, и для авто-входа.
+                return redirect(url_for("login_page",
+                                        next=request.full_path.rstrip("?")))
             return f(*args, **kwargs)
         return wrapper
 
@@ -272,7 +276,7 @@ def create_app() -> Flask:
                 set_servo_command(channel, int(round(value)))
         return jsonify(result)
 
-    # --- Data collection (R2/collected_data) ---
+    # --- Data collection (R2/library) ---
 
     @app.route("/api/datacollect/status")
     @require_auth
@@ -342,6 +346,93 @@ def create_app() -> Flask:
             "last_state": state_col[-1] if state_col else [],
         }
         return jsonify({"episode": {**meta, "preview": preview}})
+
+    # --- Studio (монтаж датасета) ---
+
+    def _studio_store(default: str = dataset_studio.LIBRARY) -> str:
+        store = request.args.get("store", default)
+        return store if store in dataset_studio.STORES else default
+
+    @app.route("/studio")
+    @require_auth
+    def studio_page():
+        return render_template("studio.html")
+
+    @app.route("/api/studio/episodes")
+    @require_auth
+    def api_studio_episodes():
+        store = _studio_store()
+        return jsonify({"store": store,
+                        "datasets": dataset_studio.list_episodes(_collector, store)})
+
+    @app.route("/api/studio/episode")
+    @require_auth
+    def api_studio_episode():
+        try:
+            episode = int(request.args.get("episode", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "episode must be an integer"}), 400
+        meta = dataset_studio.episode_meta(_collector, _studio_store(), episode)
+        if meta is None:
+            return jsonify({"error": f"Episode {episode} not found"}), 404
+        return jsonify(meta)
+
+    @app.route("/api/studio/frame")
+    @require_auth
+    def api_studio_frame():
+        try:
+            episode = int(request.args.get("episode", ""))
+            frame = int(request.args.get("frame", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "episode and frame must be integers"}), 400
+        eye = "right" if request.args.get("eye") == "right" else "left"
+        try:
+            width = int(request.args.get("w", "0")) or None
+        except ValueError:
+            width = None
+        jpeg = dataset_studio.frame_jpeg(_collector, _studio_store(), episode,
+                                         frame, eye=eye, width=width)
+        if jpeg is None:
+            return jsonify({"error": "Frame not found"}), 404
+        return Response(jpeg, mimetype="image/jpeg")
+
+    @app.route("/api/studio/state")
+    @require_auth
+    def api_studio_state():
+        try:
+            episode = int(request.args.get("episode", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "episode must be an integer"}), 400
+        series = dataset_studio.state_series(_collector, _studio_store(), episode)
+        if series is None:
+            return jsonify({"error": f"Episode {episode} not found"}), 404
+        return jsonify(series)
+
+    @app.route("/api/studio/apply", methods=["POST"])
+    @require_auth
+    def api_studio_apply():
+        if _collector.status().get("collecting"):
+            return jsonify({"error": "Нельзя редактировать во время сбора"}), 409
+        data = request.get_json(silent=True) or {}
+        try:
+            episode = int(data.get("episode"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "episode must be an integer"}), 400
+        source = data.get("store", dataset_studio.LIBRARY)
+        if source not in dataset_studio.STORES:
+            return jsonify({"error": "unknown store"}), 400
+        target = data.get("target", dataset_studio.LIBRARY)
+        if target not in dataset_studio.STORES:
+            return jsonify({"error": "unknown target"}), 400
+        segments = data.get("segments")
+        if not isinstance(segments, list):
+            return jsonify({"error": "segments must be a list"}), 400
+        try:
+            records = dataset_studio.apply_segments(
+                _collector, source, episode, segments, target_store=target)
+        except (ValueError, OSError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"status": "ok", "target": target, "episodes": records})
 
     # --- API ---
 

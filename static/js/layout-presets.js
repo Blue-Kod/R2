@@ -10,7 +10,7 @@ export const PRESETS = {
     label: 'Пульт',
     root: col(
       row(
-        stack('25%', 'servos', 'ik'),
+        stack('25%', 'servos', 'ik', 'move'),
         stack('47%', 'video'),
         stack('28%', 'terminal', 'logs', 'python'),
       ),
@@ -45,7 +45,7 @@ export const PRESETS = {
     label: 'Мобильный',
     root: stack(
       null,
-      'video', 'servos', 'ik', 'terminal', 'logs',
+      'video', 'servos', 'ik', 'move', 'terminal', 'logs',
       'files', 'datacollect', 'python', 'system', 'calibration',
     ),
   },

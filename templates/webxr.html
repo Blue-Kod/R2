@@ -50,7 +50,7 @@
     <label><input type="checkbox" id="optScale"> Сжатие координат 1:0.5</label>
     <div class="desc">X/Y целей рук из шлема делятся на 2 (вбок/вверх); Z — полная.</div>
     <label><input type="checkbox" id="optCollect"> Сбор данных (VLA)</label>
-    <div class="desc">Тап A/X = новый эпизод в R2/collected_data (вместо FREEZE).</div>
+    <div class="desc">Тап A/X = новый эпизод в R2/library (вместо FREEZE).</div>
     <div class="dc-status" id="dcStatus">—</div>
 </div>
 
@@ -254,7 +254,7 @@ function updateHint() {
     if (collectMode && dcActive) {
         hint.innerHTML = `Сбор данных начат: <b class="ok">${fmtDT(dcStartText)}</b><br>Эпизод <b>${dcEpisode}</b> · кадров <b>${dcFrames}</b>`;
     } else if (collectMode) {
-        hint.innerHTML = 'Режим сбора <b>ВКЛ</b> — тап A/X = новый эпизод (данные в R2/collected_data)';
+        hint.innerHTML = 'Режим сбора <b>ВКЛ</b> — тап A/X = новый эпизод (данные в R2/library)';
     } else {
         hint.innerHTML = 'Шлем — голова (±45°). Контроллеры — цели рук. Курок — схват (зажат = 180). Тап A/X — FREEZE, удержание A/X — ресет центра/направления.';
     }
@@ -668,6 +668,10 @@ async function enterVR() {
         frozen = false;
         robotAnchorCaptured = false;
         smoothedTarget = { right: null, left: null };
+        // Захваты открываются на входе (0 = открыт); lastGrip=null заставит
+        // ближайший кадр отправить 0/0 на серво.
+        grip = { right: 0, left: 0 };
+        lastGrip = { right: null, left: null };
         freezeBadge.classList.remove('show');
         holdState.clear();
         recenterRequested = false;

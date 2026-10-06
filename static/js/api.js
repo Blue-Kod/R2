@@ -85,6 +85,14 @@ export const api = {
   dcView: (episode) => request('GET', `/api/datacollect/view?episode=${episode}`),
   dcDownloadUrl: (episode) => `/api/datacollect/download?episode=${episode}`,
 
+  studioEpisodes: (store) => request('GET', `/api/studio/episodes?store=${store}`),
+  studioEpisode: (store, episode) => request('GET', `/api/studio/episode?store=${store}&episode=${episode}`),
+  studioState: (store, episode) => request('GET', `/api/studio/state?store=${store}&episode=${episode}`),
+  studioFrameUrl: (store, episode, frame, eye = 'left', w) =>
+    `/api/studio/frame?store=${store}&episode=${episode}&frame=${frame}&eye=${eye}${w ? `&w=${w}` : ''}`,
+  studioApply: (store, episode, segments, target) =>
+    request('POST', '/api/studio/apply', { body: { store, episode, segments, target } }),
+
   cameraParams: () => request('GET', '/api/camera/params'),
   setCamera: (showLeft) => request('POST', '/api/camera/params', { body: { show_left: showLeft } }),
 

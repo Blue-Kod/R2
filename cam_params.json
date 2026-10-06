@@ -1,8 +1,9 @@
 {
     "camera_backend": "ffmpeg",
+    "camera_source": 0,
     "capture_width": 2560,
     "capture_height": 720,
-    "fps_target": 30,
+    "fps_target": 15,
     "imSize": [
         1280,
         720

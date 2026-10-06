@@ -47,6 +47,11 @@
 
     <script>
         const STORE_KEY = 'r2_pwd';
+        // Куда вернуть после входа: исходная страница из ?next=… (только свой
+        // путь — защита от open redirect), иначе корень.
+        const rawNext = new URLSearchParams(location.search).get('next');
+        const nextUrl = (rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//'))
+            ? rawNext : '/';
         const input = document.getElementById('passwordInput');
         const btn = document.getElementById('loginBtn');
         const err = document.getElementById('errorMsg');
@@ -78,7 +83,7 @@
             btn.disabled = true; showLoading(); err.textContent = '';
             if (await tryLogin(pwd)) {
                 localStorage.setItem(STORE_KEY, pwd);
-                window.location.href = '/';
+                window.location.href = nextUrl;
                 return;
             }
             showForm(); btn.disabled = false;
@@ -88,7 +93,7 @@
             const saved = localStorage.getItem(STORE_KEY);
             if (!saved) { showForm(); return; }
             showLoading();
-            if (await tryLogin(saved)) { window.location.href = '/'; return; }
+            if (await tryLogin(saved)) { window.location.href = nextUrl; return; }
             localStorage.removeItem(STORE_KEY);
             err.textContent = 'Сохранённый пароль не подошёл';
             showForm();

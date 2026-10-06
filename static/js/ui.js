@@ -38,6 +38,7 @@ const ICONS = {
   video: '<path d="M15 10l4.55-2.27a1 1 0 0 1 1.45.9v6.74a1 1 0 0 1-1.45.9L15 14"/><rect x="3" y="6" width="12" height="12" rx="2"/>',
   sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
   arm: '<path d="M12 3v4M9 7h6l1 6H8l1-6zM10 13l-.7 8M14 13l.7 8M7 21h10"/>',
+  move: '<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
   terminal: '<path d="M5 7l5 5-5 5M13 17h7"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
   code: '<path d="M7 8l-4 4 4 4M17 8l4 4-4 4M14 4l-4 16"/>',

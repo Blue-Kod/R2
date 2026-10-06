@@ -15,8 +15,9 @@ __pycache__/
 # Self-signed TLS certificates (generated at runtime)
 /certs/
 
-# Collected VLA training data (parquet + meta.json)
-/collected_data/
+# VLA training data (parquet + meta.json): library = raw recordings, dataset = curated
+/library/
+/dataset/
 
 # Per-device servo calibration (written by the browser calibration panel)
 /config.json
