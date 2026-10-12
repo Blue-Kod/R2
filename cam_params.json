@@ -3,7 +3,7 @@
     "camera_source": 0,
     "capture_width": 2560,
     "capture_height": 720,
-    "fps_target": 15,
+    "fps_target": 30,
     "imSize": [
         1280,
         720

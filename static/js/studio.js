@@ -20,7 +20,10 @@ let playTimer = null;
 let segments = [];                  // {start, end, task} — start/end inclusive
 let pending = { start: null, end: null };
 const selected = new Set();
-let eye = 'left';
+let eye = 'right';
+let bboxVal = null;                 // сохранённый bbox (нормированный)
+let bboxDraft = null;               // рисуемый сейчас
+let bboxMode = false;
 const hidden = new Set();
 let playhead = null;
 let drag = null;
@@ -45,14 +48,89 @@ const sidebar = h('aside', { class: 'flex w-56 shrink-0 flex-col gap-2 border-r 
   tabs, label('Эпизоды'), epList);
 
 // ---------- player ----------
-const previewImg = h('img', { class: 'max-h-full max-w-full object-contain', alt: '' });
+const previewImg = h('img', { class: 'max-h-full max-w-full select-none object-contain', alt: '', ondragstart: () => false });
+const bboxRect = h('div', { class: 'pointer-events-none absolute z-10 border-2', style: { display: 'none', borderColor: '#ff3b30' } });
+const previewWrap = h('div', { class: 'relative inline-block max-h-full max-w-full' }, previewImg, bboxRect);
 const eyeL = h('button', { class: 'rounded-md px-2 py-0.5 text-[11px]', text: 'L', onclick: () => setEye('left') });
 const eyeR = h('button', { class: 'rounded-md px-2 py-0.5 text-[11px]', text: 'R', onclick: () => setEye('right') });
 const tcChip = h('div', { class: 'font-mono text-[12px] tabular-nums text-foreground', text: '00:00.00' });
 const player = h('div', { class: 'relative flex min-h-0 flex-1 items-center justify-center bg-black' },
-  previewImg,
+  previewWrap,
   h('div', { class: 'absolute bottom-3 left-3 flex items-center gap-2 rounded-lg border border-border bg-popover/80 px-2 py-1 backdrop-blur' },
     eyeL, eyeR, h('span', { class: 'mx-1 h-3 w-px bg-border' }), tcChip));
+
+// ---------- bbox цели (рисуем на первом кадре) ----------
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const bboxBtn = button({ label: 'bbox', title: 'Нарисовать рамку цели', onClick: () => setBboxMode(!bboxMode) });
+const bboxSave = button({ label: '✓ bbox', title: 'Сохранить bbox (кадр 0)', onClick: () => saveBbox() });
+const bboxClear = button({ label: '✕', title: 'Стереть bbox', onClick: () => clearBbox() });
+
+function imgRect() { return previewImg.getBoundingClientRect(); }
+
+function renderBbox() {
+  const bb = bboxDraft || bboxVal;
+  const r = imgRect();
+  const wr = previewWrap.getBoundingClientRect();
+  if (!bb || !epMeta || !r.width) { bboxRect.style.display = 'none'; return; }
+  bboxRect.style.display = 'block';
+  bboxRect.style.left = `${r.left - wr.left + bb[0] * r.width}px`;
+  bboxRect.style.top = `${r.top - wr.top + bb[1] * r.height}px`;
+  bboxRect.style.width = `${Math.max(2, (bb[2] - bb[0]) * r.width)}px`;
+  bboxRect.style.height = `${Math.max(2, (bb[3] - bb[1]) * r.height)}px`;
+}
+
+function setBboxMode(on) {
+  bboxMode = on;
+  if (on && epMeta) seek(0);  // bbox хранится на кадре 0 — рисуем его там
+  previewWrap.style.cursor = on ? 'crosshair' : '';
+  const on_ = 'rounded-md px-2 py-0.5 text-[11px] bg-primary/30 text-foreground';
+  const off_ = 'rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground';
+  bboxBtn.className = on ? on_ : off_;
+}
+
+function relPt(e) {
+  const r = imgRect();
+  return [clamp01((e.clientX - r.left) / r.width),
+          clamp01((e.clientY - r.top) / r.height)];
+}
+
+previewWrap.addEventListener('pointerdown', (e) => {
+  if (!bboxMode || !epMeta) return;
+  const [x, y] = relPt(e);
+  bboxDraft = [x, y, x, y];
+  previewWrap.setPointerCapture(e.pointerId);
+});
+previewWrap.addEventListener('pointermove', (e) => {
+  if (!bboxDraft) return;
+  const [x, y] = relPt(e);
+  bboxDraft = [Math.min(bboxDraft[0], x), Math.min(bboxDraft[1], y),
+               Math.max(bboxDraft[0], x), Math.max(bboxDraft[1], y)];
+  renderBbox();
+});
+previewWrap.addEventListener('pointerup', () => {
+  if (bboxDraft) { bboxVal = bboxDraft; bboxDraft = null; renderBbox(); }
+});
+
+async function saveBbox() {
+  if (!epMeta || !bboxVal) { toast('Сначала нарисуй рамку (кнопка bbox)', 'error'); return; }
+  try {
+    const d = await api.studioSetBbox(store, epMeta.episode_index, bboxVal);
+    epMeta.bbox = d.bbox;
+    toast('bbox сохранён', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+async function clearBbox() {
+  if (!epMeta) return;
+  try {
+    await api.studioSetBbox(store, epMeta.episode_index, null);
+    epMeta.bbox = null;
+    bboxVal = null;
+    bboxDraft = null;
+    renderBbox();
+    toast('bbox стёрт', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+}
 
 // ---------- toolbar ----------
 const scrub = h('input', {
@@ -80,6 +158,8 @@ const toolbar = h('div', { class: 'flex shrink-0 flex-wrap items-center gap-2 bo
   button({ label: '+ Сегмент', iconName: 'folderPlus', onClick: () => addSegment() }),
   button({ label: '✂', title: 'Разделить в playhead', onClick: () => splitAtPlayhead() }),
   button({ label: '🗑', title: 'Удалить выделенные (Del)', onClick: () => deleteSelected() }),
+  h('span', { class: 'mx-1 h-4 w-px bg-border' }),
+  bboxBtn, bboxSave, bboxClear,
   h('div', { class: 'min-w-[140px] flex-[2]' }, taskInput),
   pendingInfo);
 
@@ -176,6 +256,9 @@ async function selectEpisode(ep) {
   selected.clear();
   pending = { start: null, end: null };
   taskInput.value = '';
+  bboxVal = epMeta.bbox || null;
+  bboxDraft = null;
+  setBboxMode(false);
   scrub.max = String(Math.max(0, epMeta.rows - 1));
   stateData = null;
   hidden.clear();
@@ -215,13 +298,18 @@ function seek(f) {
   previewImg.src = api.studioFrameUrl(store, epMeta.episode_index, frame, eye);
   tcChip.textContent = formatTC(epMeta.fps ? frame / epMeta.fps : 0);
   updatePlayhead();
+  renderBbox();
 }
+
+previewImg.addEventListener('load', () => renderBbox());
+window.addEventListener('resize', () => renderBbox());
 
 function setEye(e) {
   eye = e;
   eyeL.className = `rounded-md px-2 py-0.5 text-[11px] ${eye === 'left' ? 'bg-primary/30 text-foreground' : 'text-muted-foreground'}`;
   eyeR.className = `rounded-md px-2 py-0.5 text-[11px] ${eye === 'right' ? 'bg-primary/30 text-foreground' : 'text-muted-foreground'}`;
   if (epMeta) previewImg.src = api.studioFrameUrl(store, epMeta.episode_index, frame, eye);
+  renderBbox();
 }
 
 function togglePlay() { playing ? pause() : play(); }
@@ -270,7 +358,7 @@ function renderFrames() {
   const step = Math.max(1, Math.ceil(rows / 70));
   for (let f = 0; f < rows; f += step) {
     frameLane.appendChild(h('img', {
-      src: api.studioFrameUrl(store, epMeta.episode_index, f, 'left', 96),
+      src: api.studioFrameUrl(store, epMeta.episode_index, f, 'right', 96),
       class: 'absolute top-0 h-full min-w-0 object-cover',
       style: { left: pct(f), width: `${Math.min(100, (step / rows) * 100)}%` },
       draggable: 'false', loading: 'lazy', alt: '',
@@ -577,7 +665,7 @@ window.addEventListener('keydown', (e) => {
 if (window.ResizeObserver) new ResizeObserver(() => renderServo()).observe(servoLane);
 
 syncTabs();
-setEye('left');
+setEye('right');
 renderTask();
 renderLegend();
 loadEpisodes();

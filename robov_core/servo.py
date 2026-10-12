@@ -170,16 +170,28 @@ class ServoError(Exception):
     pass
 
 
+class _SimPCA9685:
+    """Заглушка PCA9685 для режима симуляции: команды принимаются, никуда не идут."""
+
+    def set_pwm(self, channel: int, on: int, off: int) -> None:
+        pass
+
+    def set_pwm_freq(self, freq: int) -> None:
+        pass
+
+
 class ServoController:
     def __init__(
         self,
         bus: int = 0,
         address: int = 0x40,
         freq: int = 50,
+        simulation: bool = False,
     ) -> None:
         self.bus: int = bus
         self.address: int = address
         self.freq: int = freq
+        self.simulation: bool = simulation
         self.pwm = None
         self.initialized: bool = False
 
@@ -249,6 +261,11 @@ class ServoController:
             return False
 
     def _open_pwm(self) -> bool:
+        if self.simulation:
+            self.pwm = _SimPCA9685()
+            self.initialized = True
+            print("[Servo] SIMULATION: команды применяются в память, шина I2C не трогается")
+            return True
         try:
             from PCA9685_smbus2 import PCA9685
             self.pwm = PCA9685.PCA9685(interface=self.bus, address=self.address)
@@ -462,7 +479,7 @@ class ServoController:
     # ------------------------------------------------------------------
     # Управление сервоприводом
     # ------------------------------------------------------------------
-    def set_servo(self, channel: int, angle: int, smooth: bool = True, step_delay: float = 0.01, step_angle: int = 2) -> bool:
+    def set_servo(self, channel: int, angle: int, smooth: bool = True) -> bool:
         """Move a servo using a logical command angle.
 
         ``current_angles`` deliberately stores the logical command from

@@ -63,6 +63,14 @@ STATE_CHANNELS: List[Tuple[int, str]] = [
 # Каналы грипперов нормализуются 0..1; остальные хранятся в градусах.
 GRIPPER_CHANNELS = {8, 9}
 
+# bbox цели (x1,y1,x2,y2) нормированный, ставится в студии; по умолчанию NaN.
+NAN4 = [float("nan")] * 4
+_NAN4 = NAN4
+
+# Цвет метки символа (BGR): A красный, B синий, C зелёный, D жёлтый, E пурпурный.
+SYMBOL_COLORS = {"A": (0, 0, 255), "B": (255, 0, 0), "C": (0, 255, 0),
+                 "D": (0, 255, 255), "E": (255, 0, 255)}
+
 
 def _schema() -> pa.Schema:
     """Схема parquet-таблицы (см. docstring модуля)."""
@@ -72,6 +80,7 @@ def _schema() -> pa.Schema:
         ("observation.images.left", image),
         ("observation.images.right", image),
         ("observation.state", vector),
+        ("observation.target_bbox", pa.list_(pa.float32(), 4)),
         ("action", vector),
         ("task", pa.string()),
         ("timestamp", pa.float32()),
@@ -203,18 +212,26 @@ class DataCollector:
             return {**self.status(), "episode": result}
 
     def close(self) -> None:
-        """Остановить сбор (если шёл) и отбросить незавершённый эпизод."""
+        """Остановить сбор (если шёл) и дописать эпизод на диск — как stop().
+
+        Раньше незавершённый эпизод отбрасывался: рестарт/выключение робота
+        во время сбора молча теряли все уже записанные кадры.
+        """
         with self._lock:
-            if self._collecting:
-                self._collecting = False
+            self._collecting = False
         if self._thread is not None:
             try:
                 self._thread.join(timeout=2.0)
             except Exception:
                 pass
         with self._lock:
-            self._discard_episode()
-        self._collecting = False
+            if self._episode_index is not None:
+                try:
+                    self._finalize_episode()
+                except Exception:
+                    # Пустой эпизод уже удалён внутри _finalize; при неожиданной
+                    # ошибке убираем битый файл, чтобы не оставить мусор в library/.
+                    self._discard_episode()
         self._thread = None
 
     # --- внутренняя механика ---
@@ -279,6 +296,8 @@ class DataCollector:
             pa.array([r["img_left"] for r in rows], type=image),
             pa.array([r["img_right"] for r in rows], type=image),
             pa.array([r["state"] for r in rows], type=vector),
+            pa.array([r.get("target_bbox", _NAN4) for r in rows],
+                     type=pa.list_(pa.float32(), 4)),
             pa.array([r["action"] for r in rows], type=vector),
             pa.array([self._task] * len(rows), type=pa.string()),
             pa.array([r["timestamp"] for r in rows], type=pa.float32()),
@@ -421,12 +440,24 @@ class DataCollector:
                     return path
         return None
 
-    def dataset_parquet(self, episode_index: int) -> Optional[pa.Table]:
-        """Прочитать эпизод из его parquet-файла."""
+    def dataset_preview(self, episode_index: int) -> Optional[Dict]:
+        """Лёгкий превью эпизода: только state + схема из футера parquet.
+
+        Полный read_table тянул бы и обе JPEG-колонки (сотни МБ на длинном
+        эпизоде) — для превью нужны лишь первый/последний state.
+        """
         path = self.dataset_file(episode_index)
         if path is None:
             return None
         try:
-            return pq.read_table(str(path))
+            table = pq.read_table(str(path), columns=["observation.state"])
+            state_col = table.column("observation.state").to_pylist()
+            schema = [str(field.type) for field in pq.read_schema(str(path))]
         except Exception:
             return None
+        return {
+            "rows": table.num_rows,
+            "schema": schema,
+            "first_state": state_col[0] if state_col else [],
+            "last_state": state_col[-1] if state_col else [],
+        }

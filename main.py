@@ -13,6 +13,8 @@ from robov_core.high_level import start_background, APP_VERSION
 def parse_args():
     parser = argparse.ArgumentParser(description="R2 by Loginov.")
     parser.add_argument("--version", action="store_true", help="Show version")
+    parser.add_argument("--simulation", action="store_true",
+                        help="Симуляция: фейк-камера, серво в память, порты 8080/8443")
     return parser.parse_args()
 
 
@@ -30,7 +32,7 @@ if __name__ == "__main__":
         print(f"R2 Robot v{APP_VERSION}")
     else:
         signal.signal(signal.SIGTERM, _handle_termination)
-        start_background()
+        start_background(simulation=args.simulation)
         try:
             while True:
                 time.sleep(1)

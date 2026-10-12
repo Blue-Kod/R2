@@ -26,6 +26,11 @@ APP_PASSWORD = "orangepi"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
+# Режим симуляции: железа нет — фейк-камера с надписью SIMULATION, серво
+# только в память, порты 8080/8443 (80/443 не открыть без root),
+# выключение/перезагрузка/обновление из панели отключены.
+SIMULATION: bool = False
+
 # --- Проверка пароля входа: пароль root ОС (Orange Pi — "orangepi") ---
 
 def _root_shadow_hash() -> Optional[str]:
@@ -148,8 +153,6 @@ def speak(text: str) -> None:
         )
         raw_audio = espeak.stdout.read()
         espeak.wait()
-        import audioop
-        amplified = audioop.mul(raw_audio, 2, 1.0)
         aplay = subprocess.Popen(
             ["aplay", "-D", "plughw:1,0", "-t", "raw",
              "-f", "S16_LE", "-r", "22050", "-c", "1"],
@@ -157,7 +160,7 @@ def speak(text: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        aplay.stdin.write(amplified)
+        aplay.stdin.write(raw_audio)
         aplay.stdin.close()
         aplay.wait()
     except Exception as e:
@@ -174,7 +177,8 @@ def _init_hardware() -> None:
     cam_path = ROOT_DIR / CAMERA_PARAMS_FILE
     if cam_path.exists():
         try:
-            _camera = StereoCamera(str(cam_path), source=CAMERA_SOURCE)
+            _camera = StereoCamera(str(cam_path), source=CAMERA_SOURCE,
+                                   simulation=SIMULATION)
             if _camera.initialize_camera():
                 _camera.start_continuous_capture()
                 log(f"Camera initialized on {platform.system()}")
@@ -185,7 +189,16 @@ def _init_hardware() -> None:
     else:
         log("Camera config not found - continuing with mock camera")
 
-    if platform.system() == "Windows":
+    if SIMULATION:
+        try:
+            _servo = ServoController(simulation=True)
+            log("Servo controller: SIMULATION (углы в память, без I2C/PWM)")
+            for channel, angle in _servo.current_angles.items():
+                if channel in _servo.channel_configs:
+                    _servo.set_servo(channel, angle, smooth=False)
+        except Exception as exc:
+            log(f"Servo init error: {exc}")
+    elif platform.system() == "Windows":
         log("Mock servo mode on Windows")
     else:
         try:
@@ -246,13 +259,18 @@ def health_snapshot() -> dict:
     }
 
 
-def start_background() -> None:
-    global _hardware_initialized, _all_threads
+def start_background(simulation: bool = False) -> None:
+    global _hardware_initialized, _all_threads, SIMULATION, HTTP_PORT, HTTPS_PORT
 
     if _hardware_initialized:
         return
 
-    log(f"R2 v{APP_VERSION} - Starting...")
+    SIMULATION = simulation
+    if simulation:
+        # 80/443 непривилегированному процессу не открыть (не-root машина).
+        HTTP_PORT, HTTPS_PORT = 8080, 8443
+
+    log(f"R2 v{APP_VERSION} - Starting..." + (" [SIMULATION]" if simulation else ""))
 
     _init_hardware()
 
@@ -284,6 +302,9 @@ def start_background() -> None:
     except Exception as e:
         log(f"HTTPS disabled: {e}")
 
+    if simulation:
+        log(f"SIMULATION: панель http://<ip>:{HTTP_PORT} -> https://<ip>:{HTTPS_PORT}")
+
     # Initialize TTS early so it's ready when needed
     try:
         _init_tts()
@@ -291,8 +312,9 @@ def start_background() -> None:
         log(f"TTS init error: {e}")
 
     # WiFi QR setup — if no internet, scan for WiFi QR codes via camera
+    # (в симуляции не запускаем: не трогаем сетевые настройки машины)
     from robov_core.qr_wifi import check_internet, start_wifi_setup
-    if not check_internet():
+    if not simulation and not check_internet():
         wifi_thread = threading.Thread(
             target=start_wifi_setup,
             args=(speak, log),
@@ -356,26 +378,6 @@ def cleanup() -> None:
 
 def get_stereo_camera() -> Optional[StereoCamera]:
     return _camera
-
-
-def get_camera(left: bool) -> Optional:
-    camera = get_stereo_camera()
-    if camera is None:
-        return None
-    return camera.get_frame(left=left)
-
-
-def get_raw_frame(left: bool = True):
-    camera = get_stereo_camera()
-    if camera is not None:
-        return camera.get_rectified_frame(left)
-    return None
-
-
-def angle(servo: int, angle_value: int) -> bool:
-    if _servo is None:
-        return False
-    return _servo.set_servo(servo, angle_value, smooth=True, step_delay=0.01, step_angle=2)
 
 
 def robot_config() -> dict:

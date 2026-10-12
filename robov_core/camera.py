@@ -33,16 +33,21 @@ class StereoCamera:
         capture_height: int = 720,
         backend: str = "ffmpeg",
         fps_target: int = 30,
+        simulation: bool = False,
     ):
         self.camera_param_file: str = camera_param_file
         self.camera_source: Union[int, str] = source
         self.cap: Optional[cv2.VideoCapture] = None
         self.lock: threading.Lock = threading.Lock()
+        # Симуляция: если настоящей камеры нет — синтетический кадр SIMULATION.
+        self.simulation: bool = simulation
+        self._sim_active: bool = False
+        self._sim_tick: int = 0
 
         self.img_size: Tuple[int, int] = (640, 360)
         self.eye_w: int = 1280
         self.eye_h: int = 720
-        self.show_left: bool = True
+        self.show_left: bool = False      # по умолчанию — ПРАВЫЙ глаз
         self.fps: float = 30.0
         self._last_frame_time: float = time.time()
         self._frame_count: int = 0
@@ -69,6 +74,7 @@ class StereoCamera:
         self._feed_consumers: int = 0
         self._stereo_consumers: int = 0
         self._capture_thread: Optional[threading.Thread] = None
+        self._eye_thread: Optional[threading.Thread] = None
         self._capture_running: bool = False
         # Watchdog: время последнего кадра (monotonic), флаг восстановления
         # и «желаемый» бэкенд, который восстанавливаем после USB-сброса.
@@ -127,6 +133,8 @@ class StereoCamera:
             pass
 
     def initialize_camera(self) -> bool:
+        if self._sim_active:
+            return True
         if self.backend == "ffmpeg" and platform.system() != "Windows":
             try:
                 if self._start_ffmpeg():
@@ -137,7 +145,28 @@ class StereoCamera:
             except Exception as e:
                 print(f"[Camera] FFmpeg backend error: {e}", flush=True)
         self.backend = "opencv"
-        return self._init_opencv()
+        try:
+            ok = self._init_opencv()
+        except CameraInitError as exc:
+            print(f"[Camera] OpenCV init error: {exc}", flush=True)
+            ok = False
+        if not ok and self.simulation:
+            self._start_simulation()
+            return True
+        return ok
+
+    def _start_simulation(self) -> None:
+        """Настоящей камеры нет — синтетические кадры с надписью SIMULATION.
+
+        backend выставляем в ffmpeg-путь: sim-луп публикует _raw_jpeg,
+        а читатели (get_rectified_pair и др.) идут через _decode_latest.
+        """
+        self._sim_active = True
+        self.backend = "ffmpeg"
+        self.actual_width = self.capture_width
+        self.actual_height = self.capture_height
+        print(f"[Camera] SIMULATION: камеры нет — синтетический кадр "
+              f"{self.capture_width}x{self.capture_height}", flush=True)
 
     def _init_opencv(self) -> bool:
         try:
@@ -275,11 +304,6 @@ class StereoCamera:
             side = cv2.resize(side, target)
         return side
 
-    def _no_camera_frame(self) -> np.ndarray:
-        frame = np.zeros((*self.img_size[::-1], 3), dtype=np.uint8)
-        cv2.putText(frame, "CAMERA ERROR", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
-        return frame
-
     def _decode_latest(self) -> Optional[np.ndarray]:
         with self.lock:
             raw = self._raw_jpeg
@@ -291,20 +315,6 @@ class StereoCamera:
         except Exception:
             img = None
         return img
-
-    def get_rectified_frame(self, left: bool = True, size=None) -> Optional[np.ndarray]:
-        if self.backend == "ffmpeg":
-            raw = self._decode_latest()
-            if raw is None:
-                return None
-            return self._process_frame(raw, left, size)
-        if not self.cap or not self.cap.isOpened():
-            if not self.initialize_camera():
-                return None
-        ret, raw = self.cap.read()
-        if not ret:
-            return None
-        return self._process_frame(raw, left, size)
 
     def get_rectified_pair(self, size=None):
         """Оба глаза из одного декодированного stereo-кадра.
@@ -326,36 +336,6 @@ class StereoCamera:
         return (self._process_frame(raw, True, size),
                 self._process_frame(raw, False, size))
 
-    def get_frame(self, left: Optional[bool] = None) -> np.ndarray:
-        if left is None:
-            with self.lock:
-                left = self.show_left
-        if self.backend == "ffmpeg":
-            raw = self._decode_latest()
-            if raw is None:
-                return self._no_camera_frame()
-            return self._process_frame(raw, left)
-        if not self.cap or not self.cap.isOpened():
-            if not self.initialize_camera():
-                return self._no_camera_frame()
-        ret, raw = self.cap.read()
-        if not ret:
-            self.cap.release()
-            self.cap = None
-            return self._no_camera_frame()
-
-        frame = self._process_frame(raw, left)
-
-        with self.lock:
-            self._frame_count += 1
-            now = time.time()
-            if now - self._last_frame_time >= 1.0:
-                self.fps = self._frame_count / (now - self._last_frame_time)
-                self._frame_count = 0
-                self._last_frame_time = now
-
-        return frame
-
     def update_params(self, **kwargs) -> None:
         with self.lock:
             for key, value in kwargs.items():
@@ -365,7 +345,9 @@ class StereoCamera:
     def _capture_loop(self) -> None:
         while self._capture_running:
             try:
-                if self.backend == "ffmpeg":
+                if self._sim_active:
+                    self._capture_loop_sim()
+                elif self.backend == "ffmpeg":
                     self._capture_loop_ffmpeg()
                 else:
                     self._capture_loop_opencv()
@@ -390,12 +372,35 @@ class StereoCamera:
             self._stop_ffmpeg()
             return
 
+        self._publish_raw(raw)
+
+    def _capture_loop_sim(self) -> None:
+        time.sleep(1.0 / max(1, self.fps_target))
+        self._publish_raw(self._sim_jpeg())
+
+    def _sim_jpeg(self) -> bytes:
+        """Синтетический stereo-кадр: надпись SIMULATION в каждом глазу."""
+        w, h = self.capture_width, self.capture_height
+        frame = np.zeros((h, w, 3), dtype=np.uint8)
+        self._sim_tick += 1
+        for cx in (w // 4, 3 * w // 4):
+            cv2.putText(frame, "SIMULATION", (cx - 250, h // 2 - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.2, (255, 255, 255), 6)
+            cv2.putText(frame, f"frame {self._sim_tick}", (cx - 150, h // 2 + 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (170, 170, 170), 3)
+        ok, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        return jpeg.tobytes() if ok else b""
+
+    def _publish_raw(self, raw: bytes) -> None:
+        """Опубликовать полный stereo-JPEG (VR и декод-пути).
+
+        Только байты, без декода: поток чтения камеры не должен
+        затягиваться тяжёлой работой, иначе пайп ffmpeg переполняется.
+        """
         with self.lock:
             self._raw_jpeg = raw
             self._latest_stereo_jpeg = raw
             self._stereo_seq += 1
-            left = self.show_left
-            need_eye = self._feed_consumers > 0
             self._last_frame_mono = time.monotonic()
             self._frame_count += 1
             now = time.time()
@@ -404,27 +409,54 @@ class StereoCamera:
                 self._frame_count = 0
                 self._last_frame_time = now
 
-        # Стрим/бразузер/VR должны видеть один глаз (левый/правый), а не
-        # склейку stereo-кадра. raw_jpeg хранит полный кадр для декод-путей,
-        # а latest_jpeg — обрезанную до выбранного глаза JPEG (как в opencv).
-        # Декод+encode делаем только когда есть зритель /video_feed.
-        if not need_eye:
-            return
+    def _eye_publisher_loop(self) -> None:
+        """Глаз для /video_feed кодируется отдельным потоком, не в потоке чтения.
+
+        Декод 2560x720 + resize + encode занимают десятки мс; если делать это
+        в потоке чтения, пайп ffmpeg переполняется и задержка стрима растёт
+        со временем. Здесь кодируем всегда СВЕЖИЙ кадр: не успеваем за
+        камерой — пропускаем кадры, но задержка остаётся постоянной.
+        """
+        last_seq = -1
+        while self._capture_running:
+            try:
+                with self.lock:
+                    raw = self._raw_jpeg
+                    seq = self._stereo_seq
+                    left = self.show_left
+                    have_consumer = self._feed_consumers > 0
+                # глаз из raw-JPEG есть только у ffmpeg/sim-путей; opencv-путь
+                # кодирует глаз сам в своём лупе.
+                if not have_consumer or raw is None or self.backend != "ffmpeg":
+                    last_seq = -1
+                    time.sleep(0.05)
+                    continue
+                if seq == last_seq:
+                    time.sleep(0.005)
+                    continue
+                last_seq = seq
+                self._encode_eye(raw, left)
+            except Exception:
+                time.sleep(0.01)
+
+    def _encode_eye(self, raw: bytes, left: bool) -> None:
+        """Декод stereo-кадра -> кроп выбранного глаза -> JPEG для /video_feed."""
         try:
             img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-            if img is not None:
-                if img.shape[1] != self.actual_width or img.shape[0] != self.actual_height:
-                    self.actual_width = img.shape[1]
-                    self.actual_height = img.shape[0]
-                    print(f"[Camera] delivered frame {self.actual_width}x{self.actual_height} "
-                          f"(requested {self.capture_width}x{self.capture_height}), eye {self.eye_w}x{self.eye_h}",
-                          flush=True)
-                frame = self._process_frame(img, left)
-                jpeg = cv2.imencode(".jpg", frame,
-                                    [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
-                with self.lock:
-                    self._latest_jpeg = jpeg
-                    self._jpeg_seq += 1
+            if img is None:
+                return
+            if img.shape[1] != self.actual_width or img.shape[0] != self.actual_height:
+                self.actual_width = img.shape[1]
+                self.actual_height = img.shape[0]
+                print(f"[Camera] delivered frame {self.actual_width}x{self.actual_height} "
+                      f"(requested {self.capture_width}x{self.capture_height}), eye {self.eye_w}x{self.eye_h}",
+                      flush=True)
+            frame = self._process_frame(img, left)
+            jpeg = cv2.imencode(".jpg", frame,
+                                [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
+            with self.lock:
+                self._latest_jpeg = jpeg
+                self._jpeg_seq += 1
         except Exception:
             pass
 
@@ -481,6 +513,8 @@ class StereoCamera:
         self._last_frame_mono = time.monotonic()
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name="camera-capture-thread")
         self._capture_thread.start()
+        self._eye_thread = threading.Thread(target=self._eye_publisher_loop, daemon=True, name="camera-eye-thread")
+        self._eye_thread.start()
         self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True, name="camera-watchdog")
         self._watchdog_thread.start()
 
@@ -490,6 +524,9 @@ class StereoCamera:
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=2.0)
         self._capture_thread = None
+        if self._eye_thread and self._eye_thread.is_alive():
+            self._eye_thread.join(timeout=1.0)
+        self._eye_thread = None
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             self._watchdog_thread.join(timeout=WATCHDOG_PERIOD + 0.5)
         self._watchdog_thread = None

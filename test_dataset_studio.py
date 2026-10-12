@@ -28,6 +28,8 @@ def _build_source(path: Path) -> None:
         pa.array(imgs, type=SCHEMA.field("observation.images.left").type),
         pa.array(imgs, type=SCHEMA.field("observation.images.right").type),
         pa.array(state, type=SCHEMA.field("observation.state").type),
+        pa.array([list(ds.NAN4)] * N,
+                 type=SCHEMA.field("observation.target_bbox").type),
         pa.array(action, type=SCHEMA.field("action").type),
         pa.array(["orig"] * N, type=pa.string()),
         pa.array([i * 0.1 for i in range(N)], type=pa.float32()),
@@ -121,6 +123,25 @@ def _test_dataset(fc, tmp: Path) -> None:
     assert fc._meta["next_episode"] == 3
 
 
+def _test_bbox(fc) -> None:
+    val = [0.1, 0.2, 0.3, 0.4]
+    assert ds.set_bbox(fc, ds.LIBRARY, 0, val) == val
+    got = ds.frame_bbox(fc, ds.LIBRARY, 0, 0)
+    # parquet хранит float32, поэтому сравниваем с допуском
+    assert got and all(abs(a - b) < 1e-6 for a, b in zip(got, val)), got
+    # слишком маленькая рамка отклоняется
+    try:
+        ds.set_bbox(fc, ds.LIBRARY, 0, [0.1, 0.1, 0.101, 0.2])
+        raise AssertionError("маленький bbox должен быть отклонён")
+    except ValueError:
+        pass
+    # стирание возвращает JSON-совместимый None, а не [NaN]*4
+    assert ds.set_bbox(fc, ds.LIBRARY, 0, None) is None
+    assert ds.frame_bbox(fc, ds.LIBRARY, 0, 0) is None
+    # эпизод цел после перезаписей (tmp + replace)
+    assert pq.read_table(str(fc._path)).num_rows == N
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -139,6 +160,7 @@ def main() -> None:
         assert len(series["values"]) == N
         assert series["values"][2][0] == 2.0
 
+        _test_bbox(fc)
         _test_dataset(fc, tmp)
 
     print("dataset_studio self-check OK")

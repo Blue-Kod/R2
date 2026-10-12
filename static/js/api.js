@@ -88,8 +88,10 @@ export const api = {
   studioEpisodes: (store) => request('GET', `/api/studio/episodes?store=${store}`),
   studioEpisode: (store, episode) => request('GET', `/api/studio/episode?store=${store}&episode=${episode}`),
   studioState: (store, episode) => request('GET', `/api/studio/state?store=${store}&episode=${episode}`),
-  studioFrameUrl: (store, episode, frame, eye = 'left', w) =>
+  studioFrameUrl: (store, episode, frame, eye = 'right', w) =>
     `/api/studio/frame?store=${store}&episode=${episode}&frame=${frame}&eye=${eye}${w ? `&w=${w}` : ''}`,
+  studioSetBbox: (store, episode, bbox) =>
+    request('POST', '/api/studio/bbox', { body: { store, episode, bbox } }),
   studioApply: (store, episode, segments, target) =>
     request('POST', '/api/studio/apply', { body: { store, episode, segments, target } }),
 

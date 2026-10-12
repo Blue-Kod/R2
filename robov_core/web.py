@@ -31,6 +31,7 @@ from robov_core.high_level import (
 )
 from robov_core.data_collector import DataCollector
 from robov_core import dataset_studio
+from robov_core import high_level  # SIMULATION/HTTPS_PORT читаем в рантайме
 
 
 def _default_ssh_user() -> str:
@@ -106,6 +107,10 @@ def _mjpeg_fps_worker() -> None:
 
 threading.Thread(target=_mjpeg_fps_worker, daemon=True, name="mjpeg-fps").start()
 
+# Лимит текстового просмотра в панели «Файлы»: целый большой файл в RAM
+# кладёт Orange Pi (OOM/swap), поэтому тяжёлые файлы — только через download.
+MAX_PREVIEW_BYTES = 5 * 1024 * 1024
+
 
 def _load_secret_key() -> str:
     """Стабильный ключ сессий: переживает перезапуск процесса.
@@ -149,7 +154,9 @@ def create_app() -> Flask:
         if request.is_secure:
             return None
         host = request.host.split(":")[0]
-        return redirect(f"https://{host}{request.full_path}", code=308)
+        # В симуляции https слушает 8443 — порт нужно сохранить в редиректе.
+        port = f":{high_level.HTTPS_PORT}" if high_level.HTTPS_PORT != 443 else ""
+        return redirect(f"https://{host}{port}{request.full_path}", code=308)
 
     @app.route("/favicon.ico")
     def favicon():
@@ -172,15 +179,9 @@ def create_app() -> Flask:
 
     # --- Login ---
 
-    @app.route("/login", methods=["GET", "POST"])
+    @app.route("/login", methods=["GET"])
     def login_page():
-        if request.method == "POST":
-            data = request.get_json(silent=True) or {}
-            password = str(data.get("password", ""))
-            if check_root_password(password):
-                session["authenticated"] = True
-                return jsonify({"status": "ok"})
-            return jsonify({"error": "Wrong password"}), 403
+        # Проверка пароля — только в /api/login (одна копия логики входа).
         return render_template("login.html")
 
     @app.route("/api/login", methods=["POST"])
@@ -329,22 +330,14 @@ def create_app() -> Flask:
             episode = int(request.args.get("episode", ""))
         except (TypeError, ValueError):
             return jsonify({"error": "episode must be an integer"}), 400
-        table = _collector.dataset_parquet(episode)
-        if table is None:
+        preview = _collector.dataset_preview(episode)
+        if preview is None:
             return jsonify({"error": f"Episode {episode} not found"}), 404
         meta = {}
         for record in _collector.list_datasets():
             if record.get("episode_index") == episode:
                 meta = record
                 break
-        state_col = table.column("observation.state").to_pylist()
-        preview = {
-            "episode_index": episode,
-            "rows": table.num_rows,
-            "schema": [str(field.type) for field in table.schema],
-            "first_state": state_col[0] if state_col else [],
-            "last_state": state_col[-1] if state_col else [],
-        }
         return jsonify({"episode": {**meta, "preview": preview}})
 
     # --- Studio (монтаж датасета) ---
@@ -390,8 +383,10 @@ def create_app() -> Flask:
             width = int(request.args.get("w", "0")) or None
         except ValueError:
             width = None
-        jpeg = dataset_studio.frame_jpeg(_collector, _studio_store(), episode,
-                                         frame, eye=eye, width=width)
+        jpeg = dataset_studio.frame_jpeg(
+            _collector, _studio_store(), episode, frame, eye=eye, width=width,
+            bbox=request.args.get("bbox") not in (None, "0", ""),
+            symbol=request.args.get("symbol", "A"))
         if jpeg is None:
             return jsonify({"error": "Frame not found"}), 404
         return Response(jpeg, mimetype="image/jpeg")
@@ -434,6 +429,27 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"status": "ok", "target": target, "episodes": records})
 
+    @app.route("/api/studio/bbox", methods=["POST"])
+    @require_auth
+    def api_studio_bbox():
+        if _collector.status().get("collecting"):
+            return jsonify({"error": "Нельзя редактировать во время сбора"}), 409
+        data = request.get_json(silent=True) or {}
+        try:
+            episode = int(data.get("episode"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "episode must be an integer"}), 400
+        store = data.get("store", dataset_studio.LIBRARY)
+        if store not in dataset_studio.STORES:
+            return jsonify({"error": "unknown store"}), 400
+        try:
+            val = dataset_studio.set_bbox(_collector, store, episode,
+                                          data.get("bbox"))
+        except (ValueError, OSError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"status": "ok", "store": store, "episode": episode,
+                        "bbox": val})
+
     # --- API ---
 
     @app.route("/api/data")
@@ -461,6 +477,8 @@ def create_app() -> Flask:
     @app.route("/api/update", methods=["POST"])
     @require_auth
     def api_update():
+        if high_level.SIMULATION:
+            return jsonify({"error": "Недоступно в режиме симуляции"}), 409
         launcher_path = ROOT_DIR / "launcher.py"
         if not launcher_path.exists():
             return jsonify({"status": "error", "message": "launcher.py not found"}), 404
@@ -491,6 +509,8 @@ def create_app() -> Flask:
     @app.route("/api/shutdown", methods=["POST"])
     @require_auth
     def api_shutdown():
+        if high_level.SIMULATION:
+            return jsonify({"error": "Недоступно в режиме симуляции"}), 409
         log("Shutdown command received")
         def _shutdown():
             servo_toggle(False)
@@ -503,6 +523,8 @@ def create_app() -> Flask:
     @app.route("/api/reboot", methods=["POST"])
     @require_auth
     def api_reboot():
+        if high_level.SIMULATION:
+            return jsonify({"error": "Недоступно в режиме симуляции"}), 409
         log("Reboot command received")
         def _reboot():
             servo_toggle(False)
@@ -651,7 +673,7 @@ def create_app() -> Flask:
         if not camera:
             # No camera: keep the endpoints usable for the UI (empty layout).
             if request.method == "GET":
-                return jsonify({"show_left": True, "layout": None})
+                return jsonify({"show_left": False, "layout": None})
             return jsonify({"status": "ok"})
         if request.method == "GET":
             return jsonify({
@@ -845,6 +867,10 @@ def create_app() -> Flask:
         if not path.exists() or not path.is_file():
             return jsonify({"error": "File not found"}), 404
         try:
+            size = path.stat().st_size
+            if size > MAX_PREVIEW_BYTES:
+                return jsonify({"error": f"File too large to open ({size} bytes, "
+                                          f"limit {MAX_PREVIEW_BYTES}); use download"}), 413
             content = None
             encodings = ['utf-8', 'utf-8-sig', 'cp1251', 'latin1']
             for encoding in encodings:
@@ -858,7 +884,7 @@ def create_app() -> Flask:
                 with open(path, 'rb') as f:
                     content = f.read().decode('latin1', errors='replace')
             return jsonify({"content": content, "encoding": encoding if content else "binary",
-                            "size": path.stat().st_size})
+                            "size": size})
         except PermissionError:
             return jsonify({"error": "Permission denied"}), 403
         except Exception as e:

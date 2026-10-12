@@ -28,7 +28,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from robov_core.data_collector import (
-    BATCH_SIZE, COMPRESSION, DATA_DIR, SAMPLE_HZ, STATE_CHANNELS, _schema,
+    BATCH_SIZE, COMPRESSION, DATA_DIR, NAN4, SAMPLE_HZ, STATE_CHANNELS,
+    SYMBOL_COLORS, _schema,
 )
 
 LIBRARY = "library"
@@ -118,7 +119,76 @@ def episode_meta(collector, store: str, episode: int) -> Optional[Dict]:
         "fps": round(fps, 3),
         "session": rec.get("session"),
         "file": rec.get("file"),
+        "bbox": frame_bbox(collector, store, episode, 0),
     }
+
+
+def frame_bbox(collector, store: str, episode: int, frame: int = 0
+               ) -> Optional[List[float]]:
+    """Нормированный bbox цели на кадре (или None)."""
+    path = episode_path(collector, store, episode)
+    if path is None:
+        return None
+    try:
+        table = pq.read_table(str(path), columns=["observation.target_bbox"],
+                              filters=[("frame_index", "=", int(frame))])
+    except Exception:
+        return None
+    if table.num_rows == 0:
+        return None
+    bb = table.column("observation.target_bbox")[0].as_py()
+    if not bb or any(x != x for x in bb):          # пусто или NaN
+        return None
+    return [float(x) for x in bb]
+
+
+def set_bbox(collector, store: str, episode: int,
+             bbox: Optional[List[float]]) -> List[float]:
+    """Записать bbox цели (на кадре 0); перезаписывает parquet эпизода.
+
+    bbox — нормированный [x1,y1,x2,y2] или None (стереть). Возвращает записанное.
+    """
+    path = episode_path(collector, store, episode)
+    if path is None:
+        raise ValueError(f"Эпизод {episode} не найден в {store}")
+    if bbox is not None:
+        if len(bbox) != 4:
+            raise ValueError("bbox: нужно 4 числа")
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+        x1, x2 = sorted((max(0.0, min(1.0, x1)), max(0.0, min(1.0, x2))))
+        y1, y2 = sorted((max(0.0, min(1.0, y1)), max(0.0, min(1.0, y2))))
+        if x2 - x1 < 0.005 or y2 - y1 < 0.005:
+            raise ValueError("bbox слишком маленький")
+        val = [x1, y1, x2, y2]
+    else:
+        val = None
+    table = pq.read_table(str(path))
+    n = table.num_rows
+    vals = [list(NAN4) for _ in range(n)]
+    if val is not None and n:
+        vals[0] = val
+    col = pa.array(vals, type=pa.list_(pa.float32(), 4))
+    idx = table.schema.get_field_index("observation.target_bbox")
+    table = (table.append_column("observation.target_bbox", col) if idx < 0
+             else table.set_column(idx, "observation.target_bbox", col))
+    # Пишем во временный файл и атомарно переименовываем: обрыв питания
+    # посреди записи не должен оставлять битый единственный экземпляр эпизода.
+    tmp = path.with_suffix(".parquet.tmp")
+    pq.write_table(table, str(tmp), compression=COMPRESSION)
+    tmp.replace(path)
+    _frame_cached.cache_clear()
+    # в meta — для списка/студии
+    rec = _record(collector, store, episode)
+    if rec is not None:
+        rec["bbox0"] = val
+        if store == DATASET:
+            with _dataset_lock:
+                _dataset_save(_dataset_meta())
+        else:
+            with collector._lock:
+                collector._save_meta()
+    # None при стирании: [NaN]*4 — не валидный JSON, браузер не парсит NaN.
+    return val
 
 
 # --- чтение кадров/ряда state ---
@@ -151,15 +221,33 @@ def _frame_cached(path: str, frame: int, eye: str, width: int) -> bytes:
 
 
 def frame_jpeg(collector, store: str, episode: int, frame: int,
-               eye: str = "left", width: Optional[int] = None) -> Optional[bytes]:
-    """JPEG одного кадра. ``width`` — даунскейл для превью (иначе как есть)."""
+               eye: str = "left", width: Optional[int] = None,
+               bbox: bool = False, symbol: str = "A") -> Optional[bytes]:
+    """JPEG кадра. ``width`` — даунскейл, ``bbox`` — нарисовать метку цели."""
     path = episode_path(collector, store, episode)
     if path is None:
         return None
     jpeg = _frame_cached(str(path), int(frame),
                          "right" if eye == "right" else "left",
                          int(width) if width else 0)
-    return jpeg or None
+    if not jpeg or not bbox:
+        return jpeg or None
+    bb = frame_bbox(collector, store, episode, frame)
+    if bb is None:
+        return jpeg
+    try:
+        img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            return jpeg
+        h, w = img.shape[:2]
+        x1, y1 = int(round(bb[0] * w)), int(round(bb[1] * h))
+        x2, y2 = int(round(bb[2] * w)), int(round(bb[3] * h))
+        cv2.rectangle(img, (x1, y1), (x2, y2),
+                      SYMBOL_COLORS.get(symbol, (0, 0, 255)), 2)
+        return cv2.imencode(".jpg", img,
+                            [cv2.IMWRITE_JPEG_QUALITY, 78])[1].tobytes()
+    except Exception:
+        return jpeg
 
 
 def state_series(collector, store: str, episode: int,
@@ -220,10 +308,14 @@ def _write_segment(pf: pq.ParquetFile, names, out_path: Path, seg: Dict,
 
             new_ts = [float(t) - float(ts_offset) for t in ts]
             last_ts = new_ts[-1]
+            bb = (tb.column("observation.target_bbox")
+                  if "observation.target_bbox" in tb.schema.names
+                  else pa.array([list(NAN4)] * n, type=pa.list_(pa.float32(), 4)))
             table = pa.Table.from_arrays([
                 tb.column("observation.images.left"),
                 tb.column("observation.images.right"),
                 tb.column("observation.state"),
+                bb,
                 action,
                 pa.array([task] * n, type=pa.string()),
                 pa.array(new_ts, type=pa.float32()),

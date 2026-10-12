@@ -162,16 +162,30 @@ class TerminalShell:
                     if self._pid:
                         try:
                             os.kill(self._pid, signal.SIGHUP)
-                        except Exception:
-                            pass
-                        try:
                             os.kill(self._pid, signal.SIGTERM)
                         except Exception:
                             pass
-                        try:
-                            os.waitpid(self._pid, 0)
-                        except Exception:
-                            pass
+                        # Ребёнок может игнорировать TERM (trap в скрипте):
+                        # ждём недолго и без блокировки, потом SIGKILL — иначе
+                        # поток Flask повисает на waitpid навсегда.
+                        deadline = _time.monotonic() + 1.0
+                        reaped = False
+                        while _time.monotonic() < deadline:
+                            try:
+                                pid, _ = os.waitpid(self._pid, os.WNOHANG)
+                                if pid:
+                                    reaped = True
+                                    break
+                            except Exception:
+                                reaped = True  # уже завершился / собран ранее
+                                break
+                            _time.sleep(0.05)
+                        if not reaped:
+                            try:
+                                os.kill(self._pid, signal.SIGKILL)
+                                os.waitpid(self._pid, 0)
+                            except Exception:
+                                pass
                     if self._master_fd is not None:
                         try:
                             os.close(self._master_fd)

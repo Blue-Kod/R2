@@ -22,14 +22,27 @@ def check_internet(host="8.8.8.8", port=53, timeout=3) -> bool:
         return False
 
 
+_QR_FIELD = re.compile(r"(?:^|;)([TSPH]):((?:\\.|[^;])*)(?=;|$)")
+
+
+def _wifi_unescape(value: str) -> str:
+    r"""Снять экранирование WIFI:-QR: \; \, \: \\ -> ; , : \."""
+    return re.sub(r"\\([;:,\\])", r"\1", value)
+
+
 def parse_wifi_qr(data: str) -> dict | None:
-    m = re.match(
-        r"WIFI:T:(?P<auth>[^;]*);S:(?P<ssid>[^;]*);P:(?P<password>[^;]*);;",
-        data.strip(),
-    )
-    if not m:
+    """Разобрать WIFI:-QR независимо от порядка полей (телефоны шлют S:T:P:)."""
+    text = data.strip()
+    if not text.startswith("WIFI:"):
         return None
-    return {"auth": m.group("auth"), "ssid": m.group("ssid"), "password": m.group("password")}
+    fields = dict(_QR_FIELD.findall(text[5:]))
+    if "S" not in fields:
+        return None
+    return {
+        "auth": fields.get("T", ""),
+        "ssid": _wifi_unescape(fields["S"]),
+        "password": _wifi_unescape(fields.get("P", "")),
+    }
 
 
 def connect_via_nmcli(ssid: str, password: str) -> bool:
@@ -51,12 +64,25 @@ def connect_via_wpasupplicant(ssid: str, password: str) -> bool:
         )
         if wpa.returncode != 0:
             return False
-        config = wpa.stdout.replace(
+        # wpa_passphrase кладёт пароль открытым текстом в комментарий #psk= —
+        # выкидываем его, чтобы пароли не оседали в /etc в читаемом виде.
+        config = "\n".join(
+            line for line in wpa.stdout.splitlines()
+            if not line.strip().startswith("#psk"))
+        config = config.replace(
             "\tssid=\"" + ssid + "\"",
             "\tssid=\"" + ssid + "\"\n\tscan_ssid=1",
         )
-        with open("/etc/wpa_supplicant/wpa_supplicant.conf", "a") as f:
-            f.write(config)
+        conf_path = "/etc/wpa_supplicant/wpa_supplicant.conf"
+        try:
+            with open(conf_path, "r", encoding="utf-8", errors="replace") as f:
+                existing = f.read()
+        except OSError:
+            existing = ""
+        # Повторные попытки той же сети не должны раздувать конфиг бесконечно.
+        if f'ssid="{ssid}"' not in existing:
+            with open(conf_path, "a") as f:
+                f.write(config + "\n")
         subprocess.run(
             ["wpa_cli", "-i", "wlan0", "reconfigure"],
             capture_output=True, timeout=10,

@@ -34,11 +34,11 @@ from pathlib import Path
 ARCHIVE_URL = "https://github.com/Blue-Kod/R2/archive/refs/heads/main.zip"
 REQUIREMENTS_FILE = "requirements.txt"
 
-# Complete APT dependencies for Orange Pi 4 Pro / Debian Bullseye
+# Complete APT dependencies for Orange Pi 4 Pro / Debian Bullseye.
+# OpenCV ставится только pip'ом (requirements.txt): apt-версия — другая
+# версия cv2, две копии на борту дают конфликты импорта.
 REQUIREMENTS_APT = [
     "python3-pip",
-    "libopencv-dev",
-    "python3-opencv",
     "ffmpeg",
     "i2c-tools",
     "espeak-ng"
@@ -755,7 +755,7 @@ def remove_autostart_linux(target_user):
 def is_autostart_installed(target_user):
     return os.path.exists(SERVICE_FILE)
 
-def start_main():
+def start_main(extra_args=None) -> bool:
     """Launch main.py and wait for it to finish."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     main_path = os.path.join(script_dir, MAIN_SCRIPT)
@@ -768,8 +768,9 @@ def start_main():
         env = os.environ.copy()
         if system_name == "Linux":
             env["PYTHONPATH"] = script_dir
+        cmd = [sys.executable or "python3", main_path] + list(extra_args or [])
         result = subprocess.run(
-            [sys.executable or "python3", main_path],
+            cmd,
             cwd=script_dir, env=env,
         )
         return result.returncode == 0
@@ -778,14 +779,27 @@ def start_main():
         return False
 
 def main():
-    check_root()
-
     parser = argparse.ArgumentParser(description="Launcher for R2 project", add_help=False)
     parser.add_argument("--install-autostart", action="store_true")
     parser.add_argument("--remove-autostart", action="store_true")
     parser.add_argument("--no-start", action="store_true")
     parser.add_argument("--dont-install-autostart", action="store_true")
+    parser.add_argument("--simulation", action="store_true",
+                        help="Симуляция: без root, обновлений, автозагрузки и установки пакетов")
     args, unknown = parser.parse_known_args()
+
+    # Симуляция: только запуск main.py --simulation, система не меняется
+    # (никаких apt/pip/sudoers/systemd/GitHub) — работает на любой машине.
+    if args.simulation:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        os.chdir(script_dir)
+        log_message(f"[L] SIMULATION: {script_dir}")
+        if not args.no_start:
+            start_main(["--simulation"])
+        log_message("[L] SIMULATION finished.")
+        return
+
+    check_root()
 
     target_user = get_display_user()
     log_message(f"[L] Target user: {target_user}")
