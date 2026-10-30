@@ -76,9 +76,7 @@ export const movePanel = {
         h('span', { class: 'text-[13px] font-medium', text: 'Перемещение' }),
         h('div', { class: 'grow' }),
         status),
-      h('p', { class: 'text-[11px] leading-relaxed text-muted-foreground/70',
-        text: 'W/S — вперёд/назад, A/D — поворот. Клавиши ловятся, пока окно открыто (кроме ввода в полях).' }),
-      cross));
+    ));
 
     const onKey = (e, pressed) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return; // не глотаем Ctrl+W и пр.
