@@ -735,6 +735,25 @@ def _approach(point: Vector3, left: bool = False) -> dict:
     return result
 
 
+def tool_offsets() -> Dict[str, List[float]]:
+    """Текущие смещения губок от EE по рукам, мм (система корпуса)."""
+    return {side: [round(float(v), 1) for v in vector]
+            for side, vector in arm_kinematics.TOOL_MM.items()}
+
+
+def calibrate_tool_offset(dx: float, dy: float, dz: float,
+                          left: bool = False) -> dict:
+    """Задать смещение губок от EE для руки, мм в СИСТЕМЕ КОРПУСА.
+
+    Это и есть калибровка обеих рук: IK всегда ведёт EE на `точка − смещение`,
+    поэтому губки приходят в заданную точку. Значение пишется в config.json
+    ("tool_mm") и подхватывается при старте.
+    """
+    arm_kinematics.set_tool_offset(float(dx), float(dy), float(dz), left=left)
+    return {"ok": True, "left": bool(left), "saved": _save_tool_offset(),
+            "offsets": tool_offsets()}
+
+
 def measure_tool_offset(x: float, y: float, left: bool = False) -> dict:
     """Замерить смещение губок от конца цепи по видимой точке.
 
@@ -793,7 +812,7 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
     with _motion_lock, _arm_slow(MOVE_SPEED_DEG):
-        result = _move_to(point, left)
+        result = _move_to(_ee_target(point, left), left)
         result["point"] = point
         result["arrived"] = bool(result.get("moved")) and _wait_motion()
     return result
