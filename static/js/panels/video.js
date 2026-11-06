@@ -35,6 +35,30 @@ export const videoPanel = {
       },
     });
 
+    // Координаты под кадром: X1 Y1 — доли 0..1 (как у depth/coords в high_level),
+    // X Y — пиксели самого кадра.
+    const xyTag = h('span', {
+      class: 'font-mono text-[11px] tabular-nums text-muted-foreground',
+      text: 'X1 — Y1 —   ·   X — Y — px',
+    });
+    const readout = h('div', { class: 'flex items-center px-1 pt-1' }, xyTag);
+    const onMove = (e) => {
+      const r = img.getBoundingClientRect();
+      const nw = img.naturalWidth || 0, nh = img.naturalHeight || 0;
+      if (!nw || !nh) return;
+      // object-contain: кадр вписан и отцентрован, края — поля
+      const sc = Math.min(r.width / nw, r.height / nh);
+      const dw = nw * sc, dh = nh * sc;
+      const ox = r.left + (r.width - dw) / 2, oy = r.top + (r.height - dh) / 2;
+      const x1 = (e.clientX - ox) / dw, y1 = (e.clientY - oy) / dh;
+      if (x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1) return;
+      xyTag.textContent = `X1 ${x1.toFixed(3)}  Y1 ${y1.toFixed(3)}   ·   `
+        + `X ${Math.round(x1 * nw)}  Y ${Math.round(y1 * nh)} px`;
+    };
+    const onLeave = () => { xyTag.textContent = 'X1 — Y1 —   ·   X — Y — px'; };
+    img.addEventListener('mousemove', onMove);
+    img.addEventListener('mouseleave', onLeave);
+
     const bar = h('div', { class: 'flex flex-wrap items-center gap-3' },
       h('div', { class: 'flex items-center gap-3' }, eyeRadio('Левый', true), eyeRadio('Правый', false)),
       h('div', { class: 'grow' }),
@@ -44,6 +68,7 @@ export const videoPanel = {
       h('div', { class: 'flex items-center gap-2' }, icon('video', 'size-4 text-muted-foreground'), h('span', { class: 'text-[13px] font-medium', text: 'Камера' }), h('div', { class: 'grow' }), layoutTag),
       stage,
       bar,
+      readout,
     ));
 
     let alive = true;
@@ -66,6 +91,11 @@ export const videoPanel = {
     const timer = setInterval(tick, 2000);
     tick();
 
-    return () => { alive = false; clearInterval(timer); };
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      img.removeEventListener('mousemove', onMove);
+      img.removeEventListener('mouseleave', onLeave);
+    };
   },
 };

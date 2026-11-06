@@ -10,8 +10,12 @@ from typing import Optional, Dict, List, Sequence, Tuple
 
 import psutil
 
+import cv2
+import numpy as np
+
 from robov_core.camera import StereoCamera
 from robov_core.servo import ServoController
+from robov_core.stereo_depth import StereoDepth, Vector3
 from robov_core import arm_kinematics
 
 # --- Configuration ---
@@ -378,6 +382,187 @@ def cleanup() -> None:
 
 def get_stereo_camera() -> Optional[StereoCamera]:
     return _camera
+
+
+# --- Глубина по стереопаре -------------------------------------------------
+DEPTH_CALIB = ROOT_DIR / "dev" / "calib" / "calib.json"
+
+_depth_engine: Optional[StereoDepth] = None
+_depth_cache: Tuple[Optional[int], Optional[np.ndarray], float] = (None, None, 0.0)
+_depth_lock: threading.Lock = threading.Lock()
+
+DEPTH_TTL = 0.15     # с: столько отдаём одну карту нескольким запросам подряд
+DEPTH_WAIT = 1.0     # с: сколько ждём свежий стерео-кадр
+
+
+def _stereo_depth() -> StereoDepth:
+    """Движок глубины; создаётся при первом обращении из calib.json."""
+    global _depth_engine
+    if _depth_engine is None:
+        _depth_engine = StereoDepth(DEPTH_CALIB)
+    return _depth_engine
+
+
+def _depth_map() -> Optional[np.ndarray]:
+    """Карта глубины по свежему стерео-кадру — только по запросу.
+
+    Камера не держит стерео-поток постоянно: на время запроса подписываемся,
+    забираем один кадр и сразу отписываемся (иначе ffmpeg/OpenCV кодирует
+    2560x720 в JPEG каждый кадр без нужды). DEPTH_TTL позволяет нескольким
+    запросам подряд обойтись одной картой.
+    """
+    global _depth_cache
+    cam = _camera
+    if cam is None:
+        return None
+    with _depth_lock:
+        seq0, z0, t0 = _depth_cache
+        if z0 is not None and time.monotonic() - t0 < DEPTH_TTL:
+            return z0
+    cam.add_consumer(stereo=True)
+    try:
+        jpeg, seq = cam.get_stereo_jpeg()
+        deadline = time.monotonic() + DEPTH_WAIT
+        while (jpeg is None or seq == seq0) and time.monotonic() < deadline:
+            time.sleep(0.01)
+            jpeg, seq = cam.get_stereo_jpeg()
+    finally:
+        cam.remove_consumer(stereo=True)
+    if jpeg is None:
+        return None
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    z, _ = _stereo_depth().depth(img)
+    with _depth_lock:
+        _depth_cache = (seq, z, time.monotonic())
+    return z
+
+
+def _depth_input(x: float, y: float):
+    """(движок, карта, x, y) с переводом долей кадра 0..1 в пиксели калибровки."""
+    z = _depth_map()
+    if z is None:
+        return None, None, None, None
+    eng = _stereo_depth()
+    w, h = eng.size or (1280, 720)
+    return eng, z, x * w, y * h
+
+
+def _shown_eye() -> str:
+    return "left" if _camera is not None and _camera.show_left else "right"
+
+
+def depth(x: float, y: float, window: int = 2) -> float:
+    """Расстояние до точки кадра, метры. NaN — если данных нет.
+
+    x, y — доли кадра от 0 до 1: 0 — начало картинки, 1 — конец
+    (x вправо, y вниз, как пиксели). Берётся медиана окна (2*window+1)²:
+    одиночный пиксель на краю объекта или на блике врёт.
+    """
+    eng, z, xx, yy = _depth_input(x, y)
+    if z is None:
+        return float("nan")
+    return eng.depth_at(z, xx, yy, eye=_shown_eye(), window=window)
+
+
+def coords(x: float, y: float, window: int = 2) -> Vector3:
+    """3D-точка кадра (x, y от 0 до 1) в системе КОРПУСА: X вправо, Y вверх,
+    Z вперёд, мм.
+
+    Сначала точка считается в системе камеры, затем поворачивается на текущие
+    углы шеи (канал 0) и наклона (канал 3) — те команды, что отправлены сервам.
+    Та же система и единицы, что у ik_detail/move_ik_detail: результат можно
+    сразу отдавать в IK. Начало — центр корпуса, ноль по глубине — ось рук.
+    """
+    eng, z, xx, yy = _depth_input(x, y)
+    if z is None:
+        return Vector3(float("nan"), float("nan"), float("nan"))
+    p = eng.point(z, xx, yy, eye=_shown_eye(), window=window)
+    # левый глаз -> середина стереобазы: там проходит ось головы
+    pc = (p.x + 1000.0 * eng.baseline / 2.0, p.y, p.z)
+    neck = tilt = arm_kinematics.HEAD_REST
+    servo = _servo
+    if servo is not None:
+        neck = float(servo.current_angles.get(arm_kinematics.NECK_CHANNEL, neck))
+        tilt = float(servo.current_angles.get(arm_kinematics.TILT_CHANNEL, tilt))
+    q = arm_kinematics.camera_to_body(pc, neck, tilt)
+    return Vector3(float(q[0]), float(q[1]), float(q[2]))
+
+
+# --- Захват и движение в точку кадра ---------------------------------------
+GRIP_CLOSE = 180            # сомкнут (как GRIP_CLOSE в templates/webxr.html)
+GRIP_OPEN = 0
+GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
+GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
+MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
+
+
+def _wait_motion(timeout: float = MOVE_TIMEOUT) -> bool:
+    servo = _servo
+    return False if servo is None else servo.wait_idle(timeout)
+
+
+def grab(left: bool = False) -> bool:
+    """Сжать захват (180°) соответствующей руки. True — команда ушла."""
+    return set_servo_command(GRIP_CHANNEL[bool(left)], GRIP_CLOSE)
+
+
+def release(left: bool = False) -> bool:
+    """Разжать захват (0°) соответствующей руки. True — команда ушла."""
+    return set_servo_command(GRIP_CHANNEL[bool(left)], GRIP_OPEN)
+
+
+def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
+    """Вести руку в точку кадра (x, y от 0 до 1) и дождаться приезда.
+
+    Точка берётся через coords() — та же система, что у ik_detail. Если
+    глубины в этом пикселе нет, рука не двигается.
+    """
+    point = coords(x, y)
+    if not np.isfinite(point.x):
+        return {"ok": False, "moved": False, "arrived": False,
+                "message": "нет глубины в этой точке кадра",
+                "point": point}
+    result = move_ik_detail(point.x, point.y, point.z, left=left)
+    result["point"] = point
+    result["arrived"] = bool(result.get("moved")) and _wait_motion()
+    return result
+
+
+def pick_point(x: float, y: float, left: bool = False) -> dict:
+    """Взять объект в точке кадра: захват открыть -> подъехать -> сжать.
+
+    Открываем до движения, чтобы клешня не цепляла по дороге; сжимаем
+    только после приезда.
+    """
+    return _point_action(x, y, GRIP_OPEN, GRIP_CLOSE, left=left)
+
+
+def place_point(x: float, y: float, left: bool = False) -> dict:
+    """Положить в точку кадра: захват сжать -> подъехать -> разжать."""
+    return _point_action(x, y, GRIP_CLOSE, GRIP_OPEN, left=left)
+
+
+def _point_action(x: float, y: float, grip_before: int, grip_after: int,
+                  left: bool = False) -> dict:
+    channel = GRIP_CHANNEL[bool(left)]
+    set_servo_command(channel, grip_before)   # сначала клешня, потом движение
+    time.sleep(GRIP_SETTLE)                   # и кадр для цели — уже без неё
+    point = coords(x, y)
+    if not np.isfinite(point.x):
+        return {"ok": False, "moved": False, "arrived": False,
+                "message": "нет глубины в этой точке кадра",
+                "point": point}
+    result = move_ik_detail(point.x, point.y, point.z, left=left)
+    result["point"] = point
+    result["arrived"] = bool(result.get("moved")) and _wait_motion()
+    result["grip"] = grip_before
+    if result["arrived"]:
+        set_servo_command(channel, grip_after)
+        result["grip"] = grip_after
+        time.sleep(GRIP_SETTLE)
+    return result
 
 
 def robot_config() -> dict:

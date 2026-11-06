@@ -103,6 +103,10 @@ L1 = 330.0
 L2 = 220.0
 
 HEAD = np.array([0.0, 100.0, 0.0])
+HEAD_LENS_Z = 45.0     # объектив впереди центра головы, мм (обе оси через центр)
+NECK_CHANNEL = 0       # «Шея»: +команда — влево (см. templates/webxr.html)
+TILT_CHANNEL = 3       # «Наклон»: меньше 90 — вверх
+HEAD_REST = 90.0       # команда «смотрит прямо»
 TORSO_HW = 70.0
 TORSO_HD = 45.0
 TORSO_HH = 95.0
@@ -127,6 +131,27 @@ LEFT_X_B = -6900.0 / 37.0        # ≈ -186.486
 
 def _left_target_x(x: float) -> float:
     return LEFT_X_A * float(x) + LEFT_X_B
+
+
+def camera_to_body(p_mm: Sequence[float], neck: float = HEAD_REST,
+                   tilt: float = HEAD_REST) -> np.ndarray:
+    """Точка в системе камеры (X вправо, Y вверх, Z вперёд, мм) -> система корпуса.
+
+    Шея поворачивает всю голову вокруг вертикальной оси, наклон — вокруг
+    горизонтальной; обе оси проходят через центр головы HEAD, объектив — на
+    HEAD_LENS_Z впереди него. Углы — те команды, что отправлены сервам
+    (датчиков нет, других углов не бывает).
+
+    Проверка на железе: навести камеру на неподвижный предмет, покрутить шею
+    на ±20° — координаты точки в системе корпуса должны остаться на месте.
+    """
+    a = np.radians(float(neck) - HEAD_REST)
+    f = np.radians(float(tilt) - HEAD_REST)
+    ca, sa, cf, sf = np.cos(a), np.sin(a), np.cos(f), np.sin(f)
+    ry = np.array([[ca, 0.0, -sa], [0.0, 1.0, 0.0], [sa, 0.0, ca]])   # R_y(-a)
+    rx = np.array([[1.0, 0.0, 0.0], [0.0, cf, -sf], [0.0, sf, cf]])   # R_x(f)
+    local = np.asarray(p_mm, dtype=float) + np.array([0.0, 0.0, HEAD_LENS_Z])
+    return HEAD + (ry @ rx) @ local
 
 
 def _left_report_x(tx: float) -> float:
@@ -161,11 +186,11 @@ TABLE_CRANE_WEIGHT = 5.0
 TABLE_CRANE_BIAS_MAX = 1e6
 
 
-def _side(left: bool) -> str:
+def _side(left: bool = False) -> str:
     return "left" if left else "right"
 
 
-def _channels(left: bool) -> Dict[str, int]:
+def _channels(left: bool = False) -> Dict[str, int]:
     return ARM_CHANNELS[_side(left)]
 
 
@@ -260,7 +285,7 @@ def fk(theta: Sequence[float], left: bool = False) -> Dict[str, np.ndarray]:
 
 
 def _fk_grid_positions(t_sz: Sequence[float], t_sx: Sequence[float],
-                       t_eb: Sequence[float], left: bool
+                       t_eb: Sequence[float], left: bool = False
                        ) -> Tuple[np.ndarray, np.ndarray]:
     """Векторизованная FK по декартовой сетке углов.
 
@@ -288,7 +313,7 @@ def _fk_grid_positions(t_sz: Sequence[float], t_sx: Sequence[float],
     return ee, elbow
 
 
-def _collides(theta: Sequence[float], left: bool) -> bool:
+def _collides(theta: Sequence[float], left: bool = False) -> bool:
     """Попала ли какая-либо часть руки ниже плоскости стола."""
     f = fk(theta, left)
     return bool(f["E"][1] < TABLE_MIN_Y or f["EE"][1] < TABLE_MIN_Y)
@@ -305,7 +330,7 @@ def _crane_lift_bias(elbow_y, ee_y):
                                  - np.asarray(ee_y, dtype=float))))
 
 
-def _ranges(left: bool, step: float, window: Optional[float],
+def _ranges(step: float, window: Optional[float], left: bool = False,
             center: Optional[Sequence[float]] = None
             ) -> Tuple[np.ndarray, ...]:
     lim = limits(left)
@@ -322,16 +347,16 @@ def _ranges(left: bool, step: float, window: Optional[float],
 
 
 @lru_cache(maxsize=2)
-def _coarse(left: bool):
+def _coarse(left: bool = False):
     """Грубая решётка IK (8°) и её FK. Не зависит от цели — считаем один раз
     на сторону и переиспользуем (экономит ~3 мс на каждом вызове ik_solve)."""
-    rng = _ranges(left, *GRID_STEPS[0])
+    rng = _ranges(*GRID_STEPS[0], left)
     pos, elbow = _fk_grid_positions(*rng, left)
     return rng, pos, elbow
 
 
 def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
-                  left: bool) -> Tuple[Tuple[float, float, float], float]:
+                  left: bool = False) -> Tuple[Tuple[float, float, float], float]:
     positions, elbow = _fk_grid_positions(*ranges, left)
     error = np.linalg.norm(positions - target, axis=-1)
     below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
@@ -344,7 +369,7 @@ def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
 
 
 def _result(theta: Optional[Tuple[float, float, float]], status: str,
-            message: str, left: bool, err_mm: Optional[float] = None,
+            message: str, left: bool = False, err_mm: Optional[float] = None,
             wanted: Optional[Sequence[float]] = None) -> dict:
     result = {"theta": theta, "status": status, "message": message,
               "err_mm": err_mm, "left": bool(left), "servo": None,
@@ -410,7 +435,7 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     for theta in starts:
         current = theta
         for step, window in GRID_STEPS[1:]:
-            current, _ = _best_on_grid(_ranges(left, step, window, current),
+            current, _ = _best_on_grid(_ranges(step, window, left, current),
                                        wanted, left)
         ee = fk(current, left)["EE"]
         error = float(np.linalg.norm(ee - wanted))

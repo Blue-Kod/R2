@@ -527,6 +527,20 @@ class ServoController:
             self._mover_cond.notify_all()
         return True
 
+    def wait_idle(self, timeout: float = 10.0) -> bool:
+        """Дождаться, пока mover доведёт все каналы до целей.
+
+        Захваты и колёса (NO_SMOOTH_CHANNELS) ставятся мгновенно и в целях не
+        висят, поэтому на ожидание не влияют. True — все доехали.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._mover_cond:
+                if not self._move_targets:
+                    return True
+            time.sleep(0.02)
+        return False
+
     def _ensure_mover(self) -> None:
         # Если сервы расслаблены — не создаём/оживляем mover (закр. гонку с
         # relax_all: MOVE-поток не должен снова запитать канал).
