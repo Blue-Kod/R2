@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 
 from robov_core.camera import StereoCamera
-from robov_core.servo import ServoController
+from robov_core.servo import START_POSE, ServoController
 from robov_core.stereo_depth import StereoDepth, Vector3
 from robov_core import arm_kinematics
 
@@ -511,6 +511,38 @@ def grab(left: bool = False) -> bool:
 def release(left: bool = False) -> bool:
     """Разжать захват (0°) соответствующей руки. True — команда ушла."""
     return set_servo_command(GRIP_CHANNEL[bool(left)], GRIP_OPEN)
+
+
+# Именованные позы. Только голова (0, 3) и обе руки (1, 2, 4, 5, 6, 7):
+# захваты ставятся grab/release, колёс поза не касается.
+POSES: Dict[str, Dict[int, int]] = {
+    # поза включения робота — единый источник servo.START_POSE
+    "rest": {ch: int(START_POSE[ch]) for ch in (0, 1, 2, 3, 4, 5, 6, 7)},
+    # READY_POSE из симуляции (R2SIM/sim/sim_env.py): плечи подняты (175°
+    # модели), локти почти выпрямлены (170°) — руки сверху, как в симе
+    "ready_to_grab": {
+        0: 90, 3: 90,
+        **arm_kinematics.to_servo_commands((175.0, 0.0, 170.0), left=False),
+        **arm_kinematics.to_servo_commands((-175.0, 0.0, 170.0), left=True),
+    },
+}
+
+
+def pose(name: str) -> dict:
+    """Поставить робота в именованную позу и дождаться приезда.
+
+    "rest" — как при старте робота; "ready_to_grab" — как READY_POSE в симе
+    (руки подняты сверху). Захваты не трогаются: их ставят grab/release.
+    """
+    commands = POSES.get(name)
+    if commands is None:
+        raise ValueError(f"нет позы {name!r}; есть: {', '.join(POSES)}")
+    sent = {}
+    for channel, angle in commands.items():
+        if set_servo_command(channel, int(angle)):
+            sent[channel] = int(angle)
+    return {"ok": bool(sent), "pose": name, "servo": sent,
+            "arrived": _wait_motion()}
 
 
 def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
