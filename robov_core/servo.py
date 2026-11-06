@@ -596,7 +596,14 @@ class ServoController:
                         continue
                 channels = list(self._move_targets.keys())
             for channel in channels:
-                self._step_channel(channel, tick)
+                # Сбой одного канала не должен убивать поток mover'а: иначе все
+                # сервы замирают молча (робот перестаёт двигаться совсем).
+                try:
+                    self._step_channel(channel, tick)
+                except Exception as exc:               # noqa: BLE001
+                    print(f"[Servo] mover: канал {channel}: {exc}", flush=True)
+                    with self._mover_cond:
+                        self._move_targets.pop(channel, None)
             time.sleep(tick)
 
     def _step_channel(self, channel: int, tick: float) -> None:
