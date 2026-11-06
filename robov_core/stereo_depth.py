@@ -44,6 +44,14 @@ class Vector3(NamedTuple):
 DS = 1.0
 ROI_HALF = 20     # полуразмер квадрата в центре кадра для чтения дистанции
 
+# Быстрый путь: считаем SGBM только в полосе строк вокруг запрошенной точки.
+# Параметры SGBM при этом НЕ меняются: сужение numDisparities до 128 проверено —
+# на периодической текстуре (одеяло) даёт ошибки до 10 px, то есть врёт; полоса
+# строк с теми же параметрами даёт те же значения (Δd медиана 0.125 px).
+# По ширине кропать нельзя: SGBM при ненулевом x0 теряет соответствие
+# (проверено: отдаёт 64 px вместо 34).
+FAST_BAND = 160                      # полувысота полосы строк вокруг точки
+
 SGBM_PARAMS = dict(
     minDisparity=0, numDisparities=256, blockSize=5,
     P1=8 * 3 * 25, P2=32 * 3 * 25, disp12MaxDiff=2, uniquenessRatio=5,
@@ -150,6 +158,81 @@ class StereoDepth:
         r1 = cv2.remap(left, self._maps[0][0], self._maps[0][1], cv2.INTER_LINEAR)
         r2 = cv2.remap(right, self._maps[1][0], self._maps[1][1], cv2.INTER_LINEAR)
         return r1, r2
+
+    def rectify_crop(self, left, right, x0, y0, x1, y1):
+        """Ректификация только окна (x0:y1, y0:y1), без remap всего кадра."""
+        h, w = left.shape[:2]
+        if self._maps is None or self._size != (w, h):
+            self._prepare((w, h))
+        m1 = (np.ascontiguousarray(self._maps[0][0][y0:y1, x0:x1]),
+              np.ascontiguousarray(self._maps[0][1][y0:y1, x0:x1]))
+        m2 = (np.ascontiguousarray(self._maps[1][0][y0:y1, x0:x1]),
+              np.ascontiguousarray(self._maps[1][1][y0:y1, x0:x1]))
+        return (cv2.remap(left, m1[0], m1[1], cv2.INTER_LINEAR),
+                cv2.remap(right, m2[0], m2[1], cv2.INTER_LINEAR))
+
+    def disp_point(self, left, right, x, y, eye="left", window=2):
+        """Диспаратность в одной точке (быстро): полоса строк + узкий диапазон."""
+        u, v = self._pixel(x, y, eye)
+        if not (np.isfinite(u) and np.isfinite(v)):
+            return float("nan")
+        h, w = left.shape[:2]
+        y0 = int(max(0, min(v - FAST_BAND, h - 2 * FAST_BAND)))
+        y1 = int(min(h, y0 + 2 * FAST_BAND))
+        r1, r2 = self.rectify_crop(left, right, 0, y0, w, y1)
+        d = self.sgbm.compute(cv2.cvtColor(r1, cv2.COLOR_BGR2GRAY),
+                              cv2.cvtColor(r2, cv2.COLOR_BGR2GRAY))
+        d = d.astype(np.float32) / 16.0
+        tx, ty = int(round(u)), int(round(v)) - y0
+        value = self._median_at(d, tx, ty, window)
+        if eye != "left" and np.isfinite(value):
+            # карта индексируется левой сеткой: для правого глаза берём пиксель,
+            # отстоящий на его собственную диспаратность
+            shifted = self._median_at(d, tx + value / DS, ty, window)
+            if np.isfinite(shifted):
+                value = shifted
+        return value
+
+    @staticmethod
+    def _median_at(d: np.ndarray, tx: float, ty: int, window: int) -> float:
+        """Медиана валидных диспаратностей вокруг (tx, ty), окно расширяется.
+
+        Так же закрывает дыры, как fill() на полной карте, но только вокруг
+        точки: distanceTransform на весь кадр в запросе не нужен.
+        """
+        ah, aw = d.shape
+        ix = int(round(tx))
+        for half in (max(2, 2 * window), 10, 20, max(ah, aw)):
+            p = d[max(0, ty - half):ty + half + 1, max(0, ix - half):ix + half + 1]
+            p = p[p > 0.5]
+            if p.size:
+                return float(np.median(p))
+        return float("nan")
+
+    def depth_point(self, left, right, x, y, eye="left", window=2) -> float:
+        """Глубина в точке кадра, м. Считается локально — в разы быстрее карты."""
+        d = self.disp_point(left, right, x, y, eye, window)
+        if not np.isfinite(d):
+            return float("nan")
+        dref = d * (self.f_ref / self.f if self.f_ref > 0 else 1.0)
+        if self.K_emp is not None:
+            return float(float(self.K_emp) / max(dref + self.c_emp, 1e-3))
+        return float(self.f * self.baseline / max(dref, 1e-3))
+
+    def point_at(self, left, right, x, y, eye="left", window=2) -> Vector3:
+        """Точка пикселя в системе ЛЕВОЙ камеры (мм), по локальному замеру."""
+        z = self.depth_point(left, right, x, y, eye, window)
+        if not np.isfinite(z):
+            return Vector3(float("nan"), float("nan"), float("nan"))
+        u, v = self._pixel(x, y, eye)
+        i = 0 if eye == "left" else 1
+        P = self._P[i]
+        p = np.array([(u - P[0, 2]) / P[0, 0] * z,
+                      (v - P[1, 2]) / P[1, 1] * z, z])
+        p = self._Rrect[i].T @ p
+        if eye != "left":
+            p = self.R.T @ (p - self.T.ravel())
+        return Vector3(float(p[0] * 1000), float(-p[1] * 1000), float(p[2] * 1000))
 
     # -- диспаратность и глубина --------------------------------------------
     def disparity(self, left, right) -> np.ndarray:

@@ -388,11 +388,10 @@ def get_stereo_camera() -> Optional[StereoCamera]:
 DEPTH_CALIB = ROOT_DIR / "calib.json"
 
 _depth_engine: Optional[StereoDepth] = None
-_depth_cache: Tuple[Optional[int], Optional[np.ndarray], float] = (None, None, 0.0)
+_depth_frame: Tuple[Optional[int], Optional[np.ndarray]] = (None, None)
 _depth_lock: threading.Lock = threading.Lock()
 
-DEPTH_TTL = 0.15     # с: столько отдаём одну карту нескольким запросам подряд
-DEPTH_WAIT = 1.0     # с: сколько ждём свежий стерео-кадр
+DEPTH_WAIT = 0.5     # с: ждём кадр, только если камера ещё ничего не отдала
 
 
 def _stereo_depth() -> StereoDepth:
@@ -403,50 +402,47 @@ def _stereo_depth() -> StereoDepth:
     return _depth_engine
 
 
-def _depth_map() -> Optional[np.ndarray]:
-    """Карта глубины по свежему стерео-кадру — только по запросу.
+def _stereo_frame() -> Optional[np.ndarray]:
+    """Последний стерео-кадр (BGR 2560x720), декодированный с кэшем по номеру.
 
-    Камера не держит стерео-поток постоянно: на время запроса подписываемся,
-    забираем один кадр и сразу отписываемся (иначе ffmpeg/OpenCV кодирует
-    2560x720 в JPEG каждый кадр без нужды). DEPTH_TTL позволяет нескольким
-    запросам подряд обойтись одной картой.
+    Свежий кадр не ждём: ffmpeg публикует его каждый кадр, самый старый здесь
+    отстаёт на 1/13 с. Подписка на стерео нужна только OpenCV-бэкенду, где
+    кадр кодируется лишь при наличии потребителя.
     """
-    global _depth_cache
+    global _depth_frame
     cam = _camera
     if cam is None:
         return None
-    with _depth_lock:
-        seq0, z0, t0 = _depth_cache
-        if z0 is not None and time.monotonic() - t0 < DEPTH_TTL:
-            return z0
     cam.add_consumer(stereo=True)
     try:
         jpeg, seq = cam.get_stereo_jpeg()
         deadline = time.monotonic() + DEPTH_WAIT
-        while (jpeg is None or seq == seq0) and time.monotonic() < deadline:
+        while jpeg is None and time.monotonic() < deadline:
             time.sleep(0.01)
             jpeg, seq = cam.get_stereo_jpeg()
     finally:
         cam.remove_consumer(stereo=True)
     if jpeg is None:
         return None
+    with _depth_lock:
+        if _depth_frame[0] == seq and _depth_frame[1] is not None:
+            return _depth_frame[1]
     img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return None
-    z, _ = _stereo_depth().depth(img)
     with _depth_lock:
-        _depth_cache = (seq, z, time.monotonic())
-    return z
+        _depth_frame = (seq, img)
+    return img
 
 
-def _depth_input(x: float, y: float):
-    """(движок, карта, x, y) с переводом долей кадра 0..1 в пиксели калибровки."""
-    z = _depth_map()
-    if z is None:
+def _depth_sample(x: float, y: float):
+    """(движок, кадр, px, py) с переводом долей кадра 0..1 в пиксели калибровки."""
+    img = _stereo_frame()
+    if img is None:
         return None, None, None, None
     eng = _stereo_depth()
     w, h = eng.size or (1280, 720)
-    return eng, z, x * w, y * h
+    return eng, img, x * w, y * h
 
 
 def _shown_eye() -> str:
@@ -456,14 +452,15 @@ def _shown_eye() -> str:
 def depth(x: float, y: float, window: int = 2) -> float:
     """Расстояние до точки кадра, метры. NaN — если данных нет.
 
-    x, y — доли кадра от 0 до 1: 0 — начало картинки, 1 — конец
-    (x вправо, y вниз, как пиксели). Берётся медиана окна (2*window+1)²:
-    одиночный пиксель на краю объекта или на блике врёт.
+    x, y — доли кадра от 0 до 1 (x вправо, y вниз, как пиксели). Считается
+    локально вокруг точки (кроп + узкий диапазон диспаратности), поэтому
+    запрос стоит ~0.2 с вместо ~1.3 с. Глубина — медиана окна (2*window+1)²,
+    окно расширяется, если в нём нет валидных пикселей (гладкая поверхность).
     """
-    eng, z, xx, yy = _depth_input(x, y)
-    if z is None:
+    eng, img, px, py = _depth_sample(x, y)
+    if img is None:
         return float("nan")
-    return eng.depth_at(z, xx, yy, eye=_shown_eye(), window=window)
+    return eng.depth_point(img, px, py, eye=_shown_eye(), window=window)
 
 
 def coords(x: float, y: float, window: int = 2) -> Vector3:
@@ -475,10 +472,12 @@ def coords(x: float, y: float, window: int = 2) -> Vector3:
     Та же система и единицы, что у ik_detail/move_ik_detail: результат можно
     сразу отдавать в IK. Начало — центр корпуса, ноль по глубине — ось рук.
     """
-    eng, z, xx, yy = _depth_input(x, y)
-    if z is None:
+    eng, img, px, py = _depth_sample(x, y)
+    if img is None:
         return Vector3(float("nan"), float("nan"), float("nan"))
-    p = eng.point(z, xx, yy, eye=_shown_eye(), window=window)
+    p = eng.point_at(img, px, py, eye=_shown_eye(), window=window)
+    if not np.isfinite(p.x):
+        return p
     # левый глаз -> середина стереобазы: там проходит ось головы
     pc = (p.x + 1000.0 * eng.baseline / 2.0, p.y, p.z)
     neck = tilt = arm_kinematics.HEAD_REST
