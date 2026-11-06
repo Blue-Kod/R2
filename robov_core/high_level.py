@@ -385,7 +385,7 @@ def get_stereo_camera() -> Optional[StereoCamera]:
 
 
 # --- Глубина по стереопаре -------------------------------------------------
-DEPTH_CALIB = ROOT_DIR / "dev" / "calib" / "calib.json"
+DEPTH_CALIB = ROOT_DIR / "calib.json"
 
 _depth_engine: Optional[StereoDepth] = None
 _depth_cache: Tuple[Optional[int], Optional[np.ndarray], float] = (None, None, 0.0)

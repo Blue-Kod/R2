@@ -86,7 +86,9 @@ def fit_depth(samples):
 class StereoDepth:
     """Ректификация + SGBM + перевод диспаратности в метры."""
 
-    def __init__(self, calib="dev/calib/calib.json"):
+    def __init__(self, calib=None):
+        if calib is None:                      # по умолчанию — корень проекта
+            calib = Path(__file__).resolve().parent.parent / "calib.json"
         self.path = None if isinstance(calib, dict) else Path(calib)
         d = (calib if isinstance(calib, dict)
              else json.loads(Path(calib).read_text(encoding="utf-8")))
