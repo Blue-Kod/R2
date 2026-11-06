@@ -507,6 +507,9 @@ GRIP_OPEN = 0
 GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
 GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
+APPROACH_UP = 0.20          # м: над объектом, откуда начинается заход
+DESCENT_STEP = 0.01         # м: шаг спуска к объекту
+DESCENT_DT = 0.08           # с: пауза между шагами (медленный заход сверху)
 
 
 def _wait_motion(timeout: float = MOVE_TIMEOUT) -> bool:
@@ -524,16 +527,14 @@ def release(left: bool = False) -> bool:
     return set_servo_command(GRIP_CHANNEL[bool(left)], GRIP_OPEN)
 
 
-# Именованные позы. Только голова (0, 3) и обе руки (1, 2, 4, 5, 6, 7):
-# захваты ставятся grab/release, колёс поза не касается.
+# Именованные позы меняют ТОЛЬКО руки (1, 2, 4, 5, 6, 7). Голова (0, 3),
+# захваты (8, 9) и колёса (10, 11) позой не трогаются: захваты — grab/release,
+# голову — set_servo_command.
 POSES: Dict[str, Dict[int, int]] = {
-    # руки вниз, локти выпрямлены: нулевая поза модели (servo.REST_POSE),
-    # она же поза включения робота (servo.START_POSE равен ей)
-    "rest": {ch: int(REST_POSE[ch]) for ch in (0, 1, 2, 3, 4, 5, 6, 7)},
-    # «руки сверху» с живого робота (значения из панели серво): плечи
-    # подняты, локти согнуты.
+    # руки вниз, локти выпрямлены: нулевая поза модели (servo.REST_POSE)
+    "rest": {ch: int(REST_POSE[ch]) for ch in (1, 2, 4, 5, 6, 7)},
+    # «руки сверху» с живого робота: плечи подняты, локти согнуты
     "ready_to_grab": {
-        0: 90, 3: 90,          # шея, наклон — прямо
         1: 100, 2: 100,        # плечи
         4: 220, 5: 220,        # поворот плеч
         6: 50, 7: 50,          # локти
@@ -542,6 +543,9 @@ POSES: Dict[str, Dict[int, int]] = {
 
 
 POSE_DEFAULT = "rest"
+# Порядок от кисти к телу: сначала полностью локти, потом плечи. Так кисть не
+# протаскивает локоть через корпус и не цепляет стол на промежуточной позе.
+POSE_ORDER = ((6, 7), (4, 5), (1, 2))
 
 
 def pose(name: str = POSE_DEFAULT) -> dict:
@@ -549,18 +553,49 @@ def pose(name: str = POSE_DEFAULT) -> dict:
 
     "rest" (по умолчанию) — руки вниз, локти выпрямлены (servo.REST_POSE,
     нулевая поза модели); "ready_to_grab" — руки сверху (плечи подняты,
-    локти согнуты) — значения сняты с робота.
+    локти согнуты) — значения сняты с робота. Меняются только каналы рук:
+    голова, захваты и колёса остаются как были.
     Захваты не трогаются: их ставят grab/release.
     """
     commands = POSES.get(name)
     if commands is None:
         raise ValueError(f"нет позы {name!r}; есть: {', '.join(POSES)}")
     sent = {}
-    for channel, angle in commands.items():
-        if set_servo_command(channel, int(angle)):
-            sent[channel] = int(angle)
-    return {"ok": bool(sent), "pose": name, "servo": sent,
-            "arrived": _wait_motion()}
+    arrived = True
+    for group in POSE_ORDER:                 # локоть -> плечо -> плечо к корпусу
+        for channel in group:
+            if channel in commands and set_servo_command(channel, int(commands[channel])):
+                sent[channel] = int(commands[channel])
+        arrived = _wait_motion() and arrived  # доводим группу до конца
+    return {"ok": bool(sent), "pose": name, "servo": sent, "arrived": arrived}
+
+
+def _move_to(point: Vector3, left: bool = False) -> dict:
+    """Команда IK в точку (coords в метрах, IK в миллиметрах)."""
+    return move_ik_detail(point.x * 1000.0, point.y * 1000.0,
+                          point.z * 1000.0, left=left)
+
+
+def _approach(point: Vector3, left: bool = False) -> dict:
+    """Заход сверху: переезд на APPROACH_UP выше точки, затем медленный спуск.
+
+    Спуск — шагами по DESCENT_STEP с паузой: цель переставляется чаще, чем
+    mover успевает её отработать, поэтому движение получается ровным и медленным
+    (~12 см/с) без рывка в объект.
+    """
+    above = Vector3(point.x, point.y + APPROACH_UP, point.z)
+    result = _move_to(above, left)
+    _wait_motion()
+    steps = max(1, int(round(APPROACH_UP / DESCENT_STEP)))
+    for i in range(1, steps + 1):
+        k = i / steps
+        mid = Vector3(point.x,
+                      above.y + (point.y - above.y) * k,
+                      point.z + (point.z - above.z) * k)
+        result = _move_to(mid, left)
+        time.sleep(DESCENT_DT)
+    result["arrived"] = _wait_motion()
+    return result
 
 
 def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
@@ -582,21 +617,21 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
 
 
 def pick_point(x: float, y: float, left: bool = False) -> dict:
-    """Взять объект в точке кадра: захват открыть -> подъехать -> сжать.
-
-    Открываем до движения, чтобы клешня не цепляла по дороге; сжимаем
-    только после приезда.
+    """Взять объект: раскрыть захват -> зайти на 20 см выше -> медленно спуститься
+    -> сжать захват. Сжатие — в самом конце, после всех движений.
     """
     return _point_action(x, y, GRIP_OPEN, GRIP_CLOSE, left=left)
 
 
 def place_point(x: float, y: float, left: bool = False) -> dict:
-    """Положить в точку кадра: захват сжать -> подъехать -> разжать."""
-    return _point_action(x, y, GRIP_CLOSE, GRIP_OPEN, left=left)
+    """Положить: сжать захват -> зайти выше -> медленно спуститься -> разжать
+    -> подняться на 20 см.
+    """
+    return _point_action(x, y, GRIP_CLOSE, GRIP_OPEN, left=left, lift_after=True)
 
 
 def _point_action(x: float, y: float, grip_before: int, grip_after: int,
-                  left: bool = False) -> dict:
+                  left: bool = False, lift_after: bool = False) -> dict:
     channel = GRIP_CHANNEL[bool(left)]
     set_servo_command(channel, grip_before)   # сначала клешня, потом движение
     time.sleep(GRIP_SETTLE)                   # и кадр для цели — уже без неё
@@ -605,15 +640,16 @@ def _point_action(x: float, y: float, grip_before: int, grip_after: int,
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
-    result = move_ik_detail(point.x * 1000.0, point.y * 1000.0,
-                            point.z * 1000.0, left=left)
+    result = _approach(point, left)
+    # Захват переключаем после всех движений и независимо от того, дошла ли рука
+    # до цели: оставить клешню в прежнем состоянии хуже, чем сжать/разжать.
+    set_servo_command(channel, grip_after)
+    time.sleep(GRIP_SETTLE)
+    if lift_after:
+        _move_to(Vector3(point.x, point.y + APPROACH_UP, point.z), left)
+        result["arrived"] = _wait_motion()
     result["point"] = point
-    result["arrived"] = bool(result.get("moved")) and _wait_motion()
-    result["grip"] = grip_before
-    if result["arrived"]:
-        set_servo_command(channel, grip_after)
-        result["grip"] = grip_after
-        time.sleep(GRIP_SETTLE)
+    result["grip"] = grip_after
     return result
 
 
