@@ -51,6 +51,13 @@ ROI_HALF = 20     # полуразмер квадрата в центре кад
 # По ширине кропать нельзя: SGBM при ненулевом x0 теряет соответствие
 # (проверено: отдаёт 64 px вместо 34).
 FAST_BAND = 128                      # полувысота полосы строк вокруг точки
+# Основной путь для одной точки: сопоставление патча (ZNCC), ~0.3 мс.
+# 25x25 с люфтом ±3 px по вертикали: по доске медиана 0 мм, 90% 2 мм.
+# Неуверенный матч (низкий пик / второй максимум рядом) уходит в SGBM.
+FAST_PATCH = 12                      # полуразмер патча
+FAST_DY = 3                          # допуск по вертикали (остаточная невязка)
+FAST_PEAK = 0.5                      # минимальный пик ZNCC
+FAST_PEAK_MARGIN = 0.05              # минимум отрыва от второго максимума
 
 SGBM_PARAMS = dict(
     minDisparity=0, numDisparities=256, blockSize=5,
@@ -89,6 +96,43 @@ def fit_depth(samples):
         print("  ВНИМАНИЕ: точки не ложатся на модель — перемеряйте, "
               "сдвиг диспаратности не постоянный")
     return K, c
+
+
+def _zncc_shift(gl: np.ndarray, gr: np.ndarray, ui: int, vi: int,
+                half: int = FAST_PATCH, dy: int = FAST_DY,
+                nd: int = 256):
+    """Смещение патча вокруг (ui, vi) из левого кадра в правый + уверенность.
+
+    Возвращает (d, peak, second) или None, если патч не влезает в окно.
+    """
+    if vi - half < 0 or vi + half + 1 > gl.shape[0]:
+        return None
+    if ui - half < 0 or ui + half + 1 > gl.shape[1]:
+        return None
+    tmpl = gl[vi - half:vi + half + 1, ui - half:ui + half + 1].astype(np.float32)
+    y0 = max(0, vi - half - dy)
+    y1 = min(gr.shape[0], vi + half + dy + 1)
+    xs = max(0, ui - nd - half)
+    xe = min(gr.shape[1], ui + half + 1)
+    strip = gr[y0:y1, xs:xe].astype(np.float32)
+    if strip.shape[0] <= tmpl.shape[0] or strip.shape[1] <= tmpl.shape[1]:
+        return None
+    r = cv2.matchTemplate(strip, tmpl, cv2.TM_CCOEFF_NORMED)
+    iy, ix = np.unravel_index(int(np.argmax(r)), r.shape)
+    peak = float(r[iy, ix])
+    off = 0.0                       # субпиксель: парабола по горизонтали
+    if 0 < ix < r.shape[1] - 1:
+        a, b, c = float(r[iy, ix - 1]), float(r[iy, ix]), float(r[iy, ix + 1])
+        den = a - 2 * b + c
+        if abs(den) > 1e-6:
+            off = float(np.clip(0.5 * (a - c) / den, -0.5, 0.5))
+    d = ui - (xs + ix + half + off)
+    # второй максимум вне ±half от пика — мера неоднозначности (периодика)
+    row = r[max(0, iy - 1):iy + 2].max(axis=0).copy()
+    lo, hi = max(0, ix - half), min(row.size, ix + half + 1)
+    row[lo:hi] = -9.0
+    second = float(row.max()) if row.size else -9.0
+    return d, peak, second
 
 
 class StereoDepth:
@@ -176,8 +220,35 @@ class StereoDepth:
         return (cv2.remap(left, m1[0], m1[1], cv2.INTER_LINEAR),
                 cv2.remap(right, m2[0], m2[1], cv2.INTER_LINEAR))
 
+    def patch_disp(self, left, right, x, y, eye="left") -> float:
+        """Диспаратность одной точки сопоставлением патча, ~0.3 мс. NaN — неуверенно."""
+        u, v = self._pixel(x, y, eye)
+        if not (np.isfinite(u) and np.isfinite(v)):
+            return float("nan")
+        h, w = left.shape[:2]
+        half, dy = FAST_PATCH, FAST_DY
+        nd = int(SGBM_PARAMS["numDisparities"])
+        x0 = int(max(0, u - nd - half - 2))
+        x1 = int(min(w, u + half + 3))
+        y0 = int(max(0, v - half - dy - 2))
+        y1 = int(min(h, v + half + dy + 3))
+        r1, r2 = self.rectify_crop(left, right, x0, y0, x1, y1)
+        res = _zncc_shift(self._gray(r1), self._gray(r2),
+                          int(round(u)) - x0, int(round(v)) - y0, half, dy, nd)
+        if res is None:
+            return float("nan")
+        d, peak, second = res
+        if peak < FAST_PEAK or peak - second < FAST_PEAK_MARGIN:
+            return float("nan")     # гладкая поверхность или периодика — в SGBM
+        if d < 1.0 or d >= nd:
+            return float("nan")
+        return d
+
     def disp_point(self, left, right, x, y, eye="left", window=2):
-        """Диспаратность в одной точке (быстро): полоса строк + узкий диапазон."""
+        """Диспаратность точки: сначала патч (0.3 мс), иначе SGBM в полосе строк."""
+        d = self.patch_disp(left, right, x, y, eye)
+        if np.isfinite(d):
+            return d
         u, v = self._pixel(x, y, eye)
         if not (np.isfinite(u) and np.isfinite(v)):
             return float("nan")
