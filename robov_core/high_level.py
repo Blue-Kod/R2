@@ -509,6 +509,8 @@ GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
 GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
 APPROACH_UP = 0.20          # м: над объектом, откуда начинается заход
+GRASP_DOWN = 0.015          # м: целимся чуть ниже точки (кисть чуть завышала захват)
+LIFT_AFTER_UP = 0.25        # м: на сколько поднять руку после захвата/укладки
 UP_MARGIN = 0.02            # м: если объект не ниже кисти на этот запас — сначала вверх
 ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захватов и колёс)
 # Высокоуровневые команды движения выполняются строго по одной: второй вызов
@@ -746,9 +748,12 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
 
 def pick_point(x: float, y: float, left: bool = False) -> dict:
     """Взять объект: раскрыть захват -> зайти на 20 см выше -> медленно спуститься
-    -> сжать захват. Сжатие — в самом конце, после всех движений.
+    -> сжать захват -> поднять руку на LIFT_AFTER_UP (25 см).
+
+    Сжатие — в самом конце, после всех движений; подъём — уже с объектом.
+    Целимся на GRASP_DOWN ниже точки: кисть на замерах чуть завышала захват.
     """
-    return _point_action(x, y, GRIP_OPEN, GRIP_CLOSE, left=left)
+    return _point_action(x, y, GRIP_OPEN, GRIP_CLOSE, left=left, lift_after=True)
 
 
 def place_point(x: float, y: float, left: bool = False) -> dict:
@@ -775,6 +780,8 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
+    # кисть на замерах чуть завышала точку захвата — целимся ниже
+    point = Vector3(point.x, point.y - GRASP_DOWN, point.z)
     base, ik = _reachable(point, left)
     if base is None:
         return {"ok": False, "moved": False, "arrived": False,
@@ -793,7 +800,7 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
     time.sleep(GRIP_SETTLE)
     if lift_after:
         with _arm_slow(MOVE_SPEED_DEG):
-            _move_to(Vector3(base.x, base.y + APPROACH_UP, base.z), left)
+            _move_to(Vector3(base.x, base.y + LIFT_AFTER_UP, base.z), left)
             result["arrived"] = _wait_motion()
     result["point"] = point
     result["reachable"] = base
