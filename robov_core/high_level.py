@@ -19,6 +19,7 @@ from robov_core.camera import StereoCamera
 from robov_core.servo import REST_POSE, ServoController
 from robov_core.stereo_depth import StereoDepth, Vector3, split_stereo
 from robov_core import arm_kinematics
+from robov_core import gripper_marker
 
 arm_kinematics.load_tool_offsets()
 
@@ -513,6 +514,8 @@ GRIP_SETTLE = 0.3           # с: даём серве захвата доеха�
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
 APPROACH_UP = 0.20          # м: над объектом, откуда начинается заход
 GRASP_DOWN = 0.0            # м: ручная поправка "чуть ниже"; её роль теперь у TOOL_MM
+ALIGN_ITERS = 3             # итераций выравнивания по маркеру
+ALIGN_TOL_M = 0.004         # м: ближе этого считаем, что губки над объектом
 LIFT_AFTER_UP = 0.25        # м: на сколько поднять руку после захвата/укладки
 UP_MARGIN = 0.02            # м: если объект не ниже кисти на этот запас — сначала вверх
 ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захватов и колёс)
@@ -681,6 +684,104 @@ def _current_point(left: bool = False) -> Optional[Vector3]:
         return None
 
 
+def _marker_grasp(left: bool = False) -> Optional[Vector3]:
+    """Точка захвата по ArUco-маркеру этой руки, м в системе корпуса.
+
+    Маркер ищется в ЛЕВОМ глазу (он опорный в калибровке), поэтому пересчёт в
+    корпус — та же цепочка, что у coords(): +полубаза, поворот головы, монтаж.
+    """
+    frame = _stereo_frame()
+    if frame is None:
+        return None
+    left_img, _ = split_stereo(frame)
+    if left_img is None:
+        return None
+    eng = _stereo_depth()
+    marker_id = gripper_marker.MARKER_ID[bool(left)]
+    found = gripper_marker.detect(left_img, eng.K[0], eng.D[0],
+                                  eng._Rrect[0], eng._P[0], ids=(marker_id,))
+    marker = found.get(marker_id)
+    if marker is None:
+        return None
+    grasp, _center = gripper_marker.grasp_from_marker(marker)
+    neck = tilt = arm_kinematics.HEAD_REST
+    servo = _servo
+    if servo is not None:
+        neck = float(servo.current_angles.get(arm_kinematics.NECK_CHANNEL, neck))
+        tilt = float(servo.current_angles.get(arm_kinematics.TILT_CHANNEL, tilt))
+    pc = ((grasp[0] + eng.baseline / 2.0) * 1000.0,
+          grasp[1] * 1000.0, grasp[2] * 1000.0)
+    q = arm_kinematics.camera_to_body(pc, neck, tilt)
+    return Vector3(float(q[0]) / 1000.0, float(q[1]) / 1000.0, float(q[2]) / 1000.0)
+
+
+def _align_by_marker(target: Vector3, left: bool = False,
+                     iters: int = ALIGN_ITERS,
+                     tol: float = ALIGN_TOL_M) -> dict:
+    """Подвести губки в XY к target по маркеру. Высоту не трогаем.
+
+    Ошибка = (фактическая точка захвата из маркера) − target. Компенсируем её
+    сдвигом команды на ту же величину (ошибка модели почти постоянна), 2-3
+    итерации. Возвращает уточнённую точку команды.
+    """
+    base = Vector3(target.x, target.y, target.z)
+    cmd = Vector3(target.x, target.y, target.z)
+    error = None
+    for _ in range(max(1, iters)):
+        _move_to(_ee_target(cmd, left), left)
+        _wait_motion()
+        grasp = _marker_grasp(left)
+        if grasp is None:
+            return {"ok": False, "reason": "маркер не виден",
+                    "point": cmd, "error_mm": None}
+        ex, ez = grasp.x - base.x, grasp.z - base.z
+        error = float(np.hypot(ex, ez))
+        if error <= tol:
+            return {"ok": True, "point": cmd, "error_mm": error * 1000.0}
+        cmd = Vector3(cmd.x - ex, cmd.y, cmd.z - ez)
+    return {"ok": bool(error is not None and error <= tol), "point": cmd,
+            "error_mm": None if error is None else error * 1000.0}
+
+
+def align_xy(x: float, y: float, left: bool = False) -> dict:
+    """Выровнять губки по видимой точке кадра (X/Z) с помощью маркера.
+
+    Рука остаётся на текущей высоте; правится только XY. Если маркера не видно
+    — возвращает ok=False, ничего не двигая.
+    """
+    with _motion_lock:
+        point = coords(x, y)
+        if not np.isfinite(point.x):
+            return {"ok": False, "reason": "нет глубины в этой точке кадра"}
+        current = _current_point(left)
+        height = current.y if current is not None else point.y + APPROACH_UP
+        with _arm_slow(MOVE_SPEED_DEG):
+            return _align_by_marker(Vector3(point.x, height, point.z), left)
+
+
+def marker_check(left: bool = False) -> dict:
+    """Сравнить точку захвата из маркера с моделью (FK + TOOL_MM).
+
+    Возвращает ошибку модели по осям и готовое значение TOOL_MM: если рука
+    уходит от объекта на E, то TOOL_MM += E.
+    """
+    grasp = _marker_grasp(left)
+    if grasp is None:
+        return {"ok": False, "reason": "маркер не виден"}
+    current = _current_point(left)
+    if current is None:
+        return {"ok": False, "reason": "нет сервоприводов"}
+    offset = arm_kinematics.tool_offset(left) / 1000.0
+    model = Vector3(current.x + offset[0], current.y + offset[1],
+                    current.z + offset[2])
+    delta = [grasp.x - model.x, grasp.y - model.y, grasp.z - model.z]
+    suggest = [arm_kinematics.TOOL_MM['left' if left else 'right'][i] + delta[i] * 1000.0
+               for i in range(3)]
+    return {"ok": True, "left": bool(left), "marker": grasp, "model": model,
+            "delta_mm": [round(v * 1000.0, 1) for v in delta],
+            "suggest_tool_mm": [round(float(v), 1) for v in suggest]}
+
+
 def _lift_if_needed(target: Vector3, left: bool = False) -> None:
     """Поднять руку строго вверх, если объект на уровне кисти или выше.
 
@@ -721,84 +822,31 @@ def _reachable(point: Vector3, left: bool = False):
                    -float(ee[2]) / 1000.0), result
 
 
-def _approach(point: Vector3, left: bool = False) -> dict:
-    """Заход сверху: переезд на APPROACH_UP выше точки, затем медленный спуск.
+def _approach(point: Vector3, left: bool = False,
+              align: bool = True) -> dict:
+    """Заход сверху: 20 см выше точки, выравнивание по маркеру, медленный спуск.
 
-    point — уже достижимая точка (см. _reachable).
+    point — точка ЗАХВАТА (м, корпус); EE считается через _ee_target.
+    На высоте захода губки видны камерой — там и правим XY по маркеру.
+    Возвращает результат спуска; result["target"] — уточнённая точка захвата.
     """
     above = Vector3(point.x, point.y + APPROACH_UP, point.z)
     with _arm_slow(MOVE_SPEED_DEG):
-        result = _move_to(above, left)
+        result = _move_to(_ee_target(above, left), left)
         _wait_motion()
-    with _arm_slow(DESCENT_SPEED_DEG):          # заход сверху — медленно
-        result = _move_to(point, left)
+    target = point
+    align_info = {"ok": False, "reason": "выравнивание выключено"}
+    if align:
+        with _arm_slow(MOVE_SPEED_DEG):
+            align_info = _align_by_marker(above, left)
+        corrected = align_info.get("point") or above
+        target = Vector3(corrected.x, point.y, corrected.z)
+    with _arm_slow(DESCENT_SPEED_DEG):       # заход сверху — медленно
+        result = _move_to(_ee_target(target, left), left)
         result["arrived"] = _wait_motion()
+    result["target"] = target
+    result["align"] = align_info
     return result
-
-
-def tool_offsets() -> Dict[str, List[float]]:
-    """Текущие смещения губок от EE по рукам, мм (система корпуса)."""
-    return {side: [round(float(v), 1) for v in vector]
-            for side, vector in arm_kinematics.TOOL_MM.items()}
-
-
-def calibrate_tool_offset(dx: float, dy: float, dz: float,
-                          left: bool = False) -> dict:
-    """Задать смещение губок от EE для руки, мм в СИСТЕМЕ КОРПУСА.
-
-    Это и есть калибровка обеих рук: IK всегда ведёт EE на `точка − смещение`,
-    поэтому губки приходят в заданную точку. Значение пишется в config.json
-    ("tool_mm") и подхватывается при старте.
-    """
-    arm_kinematics.set_tool_offset(float(dx), float(dy), float(dz), left=left)
-    return {"ok": True, "left": bool(left), "saved": _save_tool_offset(),
-            "offsets": tool_offsets()}
-
-
-def measure_tool_offset(x: float, y: float, left: bool = False) -> dict:
-    """Замерить смещение губок от конца цепи по видимой точке.
-
-    Процедура: подвести КОНЧИКИ губок ровно к видимой реперной точке (угол
-    доски/метка), взять её пиксель из панели камеры и вызвать эту функцию.
-    Точка берётся по стерео, EE — по последним командам; разница и есть
-    смещение кисти (мм, система корпуса). Пишется в config.json.
-    """
-    point = coords(x, y)
-    if not np.isfinite(point.x):
-        return {"ok": False, "message": "нет глубины в этой точке кадра"}
-    servo = _servo
-    if servo is None:
-        return {"ok": False, "message": "нет сервоприводов"}
-    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
-    theta = arm_kinematics.theta_from_commands(
-        {ch: float(servo.current_angles.get(ch, 90)) for ch in channels.values()},
-        left=left)
-    ee = arm_kinematics.fk(theta, left)["EE"]
-    offset = (np.array([point.x, point.y, point.z]) * 1000.0) - ee
-    arm_kinematics.set_tool_offset(offset[0], offset[1], offset[2], left=left)
-    saved = _save_tool_offset()
-    return {"ok": True, "offset_mm": [round(float(v), 1) for v in offset],
-            "ee_mm": [round(float(v), 1) for v in ee],
-            "grasp_point": point, "saved": saved}
-
-
-def _save_tool_offset() -> bool:
-    """Записать tool_mm в config.json рядом с калибровкой серв."""
-    path = ROOT_DIR / "config.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    except Exception:                                   # noqa: BLE001
-        data = {}
-    data["tool_mm"] = {
-        "right": [round(float(v), 1) for v in arm_kinematics.TOOL_MM["right"]],
-        "left": [round(float(v), 1) for v in arm_kinematics.TOOL_MM["left"]],
-    }
-    try:
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=1),
-                        encoding="utf-8")
-        return True
-    except Exception:                                   # noqa: BLE001
-        return False
 
 
 def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
@@ -866,15 +914,17 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
                 "message": "объект вплотную к корпусу (z < 5 см) — не тянемся",
                 "point": point, "reachable": base}
     with _arm_slow(MOVE_SPEED_DEG):
-        _lift_if_needed(base, left)      # объект выше/на уровне кисти — сначала вверх
-    result = _approach(base, left)
+        _lift_if_needed(point, left)     # объект выше/на уровне кисти — сначала вверх
+    result = _approach(point, left)
     # Захват переключаем после всех движений и независимо от того, дошла ли рука
     # до цели: оставить клешню в прежнем состоянии хуже, чем сжать/разжать.
     set_servo_command(channel, grip_after)
     time.sleep(GRIP_SETTLE)
+    grasp = result.get("target", point)
     if lift_after:
         with _arm_slow(MOVE_SPEED_DEG):
-            _move_to(Vector3(base.x, base.y + LIFT_AFTER_UP, base.z), left)
+            _move_to(_ee_target(Vector3(grasp.x, grasp.y + LIFT_AFTER_UP,
+                                        grasp.z), left), left)
             result["arrived"] = _wait_motion()
     result["point"] = point
     result["reachable"] = base
