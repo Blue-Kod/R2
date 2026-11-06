@@ -786,6 +786,24 @@ def create_app() -> Flask:
 
     # --- Python exec ---
 
+    @app.route("/api/python/names")
+    @require_auth
+    def python_names():
+        """Имена для автодополнения в панели Python.
+
+        Панель выполняет код с ``from robov_core.high_level import *``, поэтому
+        подсказываем ровно то, что будет доступно: публичные имена high_level
+        плюс встроенные функции и ключевые слова.
+        """
+        import builtins
+        import keyword
+        import robov_core.high_level as hl
+
+        names = {n for n in dir(hl) if not n.startswith("_")}
+        names |= {n for n in dir(builtins) if not n.startswith("_")}
+        names |= set(keyword.kwlist)
+        return jsonify({"names": sorted(names)})
+
     @app.route("/api/python/exec", methods=["POST"])
     @require_auth
     def python_exec():

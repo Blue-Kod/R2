@@ -59,6 +59,7 @@ export const api = {
   ikMove: (x, y, z, left) => request('POST', '/api/ik/move', { body: { x, y, z, left } }),
 
   pythonExec: (code) => request('POST', '/api/python/exec', { body: { code } }),
+  pythonNames: () => request('GET', '/api/python/names'),
 
   filesList: (path) => request('GET', `/api/files?path=${encodeURIComponent(path || '')}`),
   fileRead: (path) => request('GET', `/api/files/read?path=${encodeURIComponent(path)}`),
