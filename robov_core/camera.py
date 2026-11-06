@@ -358,13 +358,15 @@ class StereoCamera:
         if self._ffmpeg_proc is None:
             if not self._start_ffmpeg():
                 self._ffmpeg_failures += 1
-                if self._ffmpeg_failures >= 3:
-                    print("[Camera] Giving up on ffmpeg, switching to OpenCV backend", flush=True)
-                    self.backend = "opencv"
-                    if not self._init_opencv():
-                        time.sleep(0.5)
-                else:
-                    time.sleep(1.0)
+                # НЕ переключаемся на OpenCV: на «залипшем» V4L2-устройстве
+                # cv2.VideoCapture роняет процесс SIGSEGV (проверено: rc=139,
+                # панель умирала вместе с камерой). Лучше бесконечно ретраить
+                # ffmpeg — панель и остальное железо остаются живыми.
+                wait = 1.0 if self._ffmpeg_failures < 3 else 5.0
+                if self._ffmpeg_failures == 3:
+                    print("[Camera] камера не открывается — ретраю ffmpeg, "
+                          "панель работает без видео", flush=True)
+                time.sleep(wait)
             return
 
         raw = self._read_frame()
