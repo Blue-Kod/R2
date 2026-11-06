@@ -233,6 +233,8 @@ class ServoController:
 
         self.offsets: Dict[int, float] = {}
         self.inverted_channels: Set[int] = set(INVERTED_CHANNELS)
+        # Временные лимиты скорости по каналам (град/с). Пусто — обычная скорость.
+        self.speed_limits: Dict[int, float] = {}
 
         self.channel_configs: Dict[int, ChannelConfig] = \
             dict(DEFAULT_CHANNEL_CONFIGS)
@@ -531,6 +533,19 @@ class ServoController:
             self._mover_cond.notify_all()
         return True
 
+    def set_speed_limit(self, channels, deg_per_s) -> None:
+        """Ограничить крейсерскую скорость каналов, град/с. None — вернуть обычную.
+
+        Нужно для медленных безопасных движений руки: mover остаётся плавным
+        (трапеция), просто едет медленнее, без шагов и остановок между ними.
+        """
+        with self.lock:
+            for channel in channels:
+                if deg_per_s is None:
+                    self.speed_limits.pop(channel, None)
+                else:
+                    self.speed_limits[channel] = float(deg_per_s)
+
     def wait_idle(self, timeout: float = 10.0) -> bool:
         """Дождаться, пока mover доведёт все каналы до целей.
 
@@ -607,13 +622,16 @@ class ServoController:
             return
 
         # Максимально допустимая скорость, чтобы успеть затормозить.
-        v_brake = math.sqrt(2.0 * MOVE_ACCEL * abs(distance))
-        v_target = min(MOVE_MAX_SPEED, v_brake)
+        limit = self.speed_limits.get(channel)
+        v_max = limit if limit else MOVE_MAX_SPEED
+        accel = MOVE_ACCEL if not limit else min(MOVE_ACCEL, max(4.0 * limit, 60.0))
+        v_brake = math.sqrt(2.0 * accel * abs(distance))
+        v_target = min(v_max, v_brake)
         v_desired = v_target if distance > 0 else -v_target
 
         # Разгон/торможение с ограничением accel за один тик.
         dv = v_desired - velocity
-        dv = max(-MOVE_ACCEL * tick, min(MOVE_ACCEL * tick, dv))
+        dv = max(-accel * tick, min(accel * tick, dv))
         velocity += dv
         step = velocity * tick
 
