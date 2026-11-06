@@ -18,6 +18,7 @@ export const videoPanel = {
         class: 'accent-primary',
         onchange: async () => {
           showLeft = left;
+          onEye();
           try { await api.setCamera(left); } catch (err) { toast(err.message, 'error'); }
         },
       }), label);
@@ -37,9 +38,13 @@ export const videoPanel = {
 
     // Координаты под кадром: X1 Y1 — доли 0..1 (как у depth/coords в high_level),
     // X Y — пиксели самого кадра.
+    const eyeName = () => (showLeft ? 'левый' : 'правый');
     const xyTag = h('span', {
       class: 'font-mono text-[11px] tabular-nums text-muted-foreground',
       text: 'X1 — Y1 —   ·   X — Y — px',
+      title: 'X1 Y1 — доли кадра 0..1: ровно их принимают depth(), coords(), '
+        + 'hand_go_to_point(), pick_point(), place_point(). Отсчёт — в том глазу, '
+        + 'который сейчас показывается.',
     });
     const readout = h('div', { class: 'flex items-center px-1 pt-1' }, xyTag);
     const onMove = (e) => {
@@ -53,9 +58,13 @@ export const videoPanel = {
       const x1 = (e.clientX - ox) / dw, y1 = (e.clientY - oy) / dh;
       if (x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1) return;
       xyTag.textContent = `X1 ${x1.toFixed(3)}  Y1 ${y1.toFixed(3)}   ·   `
-        + `X ${Math.round(x1 * nw)}  Y ${Math.round(y1 * nh)} px`;
+        + `X ${Math.round(x1 * nw)}  Y ${Math.round(y1 * nh)} px   ·   ${eyeName()} глаз`;
     };
     const onLeave = () => { xyTag.textContent = 'X1 — Y1 —   ·   X — Y — px'; };
+    const onEye = () => {
+      if (!xyTag.textContent.includes('·')) return;
+      xyTag.textContent = xyTag.textContent.replace(/(левый|правый) глаз/, `${eyeName()} глаз`);
+    };
     img.addEventListener('mousemove', onMove);
     img.addEventListener('mouseleave', onLeave);
 
