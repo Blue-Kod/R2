@@ -712,11 +712,12 @@ def place_point(x: float, y: float, left: bool = False) -> dict:
 def _point_action(x: float, y: float, grip_before: int, grip_after: int,
                   left: bool = False, lift_after: bool = False) -> dict:
     with _motion_lock:
-        return _point_action_locked(x, y, grip_before, grip_after, left, lift_after)
+        return _point_action_locked(x, y, grip_before, grip_after,
+                                    lift_after=lift_after, left=left)
 
 
 def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
-                         left: bool, lift_after: bool) -> dict:
+                         lift_after: bool = False, left: bool = False) -> dict:
     channel = GRIP_CHANNEL[bool(left)]
     set_servo_command(channel, grip_before)   # сначала клешня, потом движение
     time.sleep(GRIP_SETTLE)                   # и кадр для цели — уже без неё
