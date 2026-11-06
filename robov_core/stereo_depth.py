@@ -90,6 +90,11 @@ class StereoDepth:
         if calib is None:                      # по умолчанию — корень проекта
             calib = Path(__file__).resolve().parent.parent / "calib.json"
         self.path = None if isinstance(calib, dict) else Path(calib)
+        if self.path is not None and not self.path.exists():
+            raise FileNotFoundError(
+                f"калибровка не найдена: {self.path}. Снимите доску "
+                f"(dev/charuco_calib.py --shoot) — calib.json кладётся в корень "
+                f"проекта и коммитится; на роботе должен быть после git pull")
         d = (calib if isinstance(calib, dict)
              else json.loads(Path(calib).read_text(encoding="utf-8")))
         if d.get("mode") != "stereo":
