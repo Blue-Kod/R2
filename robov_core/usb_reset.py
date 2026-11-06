@@ -122,6 +122,57 @@ def _try_ioctl(dev: Path) -> bool:
         fd.close()
 
 
+def find_video_node(hint: str = "usb camera") -> Optional[str]:
+    """Найти существующий capture-узел камеры по имени в sysfs (например /dev/video2).
+
+    Нужен, когда после «реплага» устройство поднялось под другим номером:
+    приложение не должно оставаться на пропавшем /dev/video0.
+    """
+    for node in sorted(_SYS_VIDEO.glob("video*")):
+        try:
+            name = (node / "name").read_text(errors="replace").strip().lower()
+            index = node / "index"
+            if index.exists() and index.read_text().strip() != "0":
+                continue                      # metadata-узел камеры
+            if hint in name:
+                return f"/dev/{node.name}"
+        except Exception:                     # noqa: BLE001
+            continue
+    return None
+
+
+def _uvc_usb_devices() -> list:
+    """USB-устройства с UVC-интерфейсом (класс 0x0e), даже если video-узла нет."""
+    out = []
+    for dev in Path("/sys/bus/usb/devices").glob("*"):
+        try:
+            if not (dev / "idVendor").exists():
+                continue
+            for iface in dev.glob("*:*"):
+                cls = iface / "bInterfaceClass"
+                if cls.exists() and int(cls.read_text().strip(), 16) == 0x0E:
+                    out.append(dev)
+                    break
+        except Exception:                     # noqa: BLE001
+            continue
+    return out
+
+
+def reset_any() -> bool:
+    """Реплаг любой UVC-камеры на шине: когда video-узел пропал совсем."""
+    devices = _uvc_usb_devices()
+    if not devices:
+        print("[USB] UVC-камер на шине нет", flush=True)
+        return False
+    ok = False
+    for dev in devices:
+        try:
+            ok = _try_authorized(dev) or _try_bind(dev) or ok
+        except Exception as exc:              # noqa: BLE001
+            print(f"[USB] reset {dev.name} failed: {exc}", flush=True)
+    return ok
+
+
 def reset(source=0) -> bool:
     """Попытаться переподключить USB-камеру. True, если что-то сработало."""
     dev = _usb_device(source)

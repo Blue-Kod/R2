@@ -18,6 +18,7 @@ MAX_FRAME_SIZE = 4 * 1024 * 1024
 # захват (release+reinit), а затем — программный USB-сброс (см. usb_reset).
 WATCHDOG_PERIOD = 2.0
 STALL_SEC = 3.0
+USB_RETRY_SEC = 15.0      # не чаще раза в 15 с дёргать USB-«реплаг»
 
 
 class CameraInitError(Exception):
@@ -80,6 +81,7 @@ class StereoCamera:
         # и «желаемый» бэкенд, который восстанавливаем после USB-сброса.
         self._last_frame_mono: float = time.monotonic()
         self._recovering: bool = False
+        self._last_usb_reset: float = 0.0
         self._watchdog_thread: Optional[threading.Thread] = None
         self._preferred_backend: str = backend
 
@@ -552,11 +554,24 @@ class StereoCamera:
                 self._ffmpeg_failures = 0
                 self.backend = self._preferred_backend
                 self._stop_ffmpeg()
-                # Если устройство пропало с шины — программный «реплаг».
+                # «Реплаг» USB: и когда узла нет, и когда он есть, но поток
+                # не поднимается (VIDIOC_STREAMON: I/O error). Повторяем не
+                # чаще USB_RETRY_SEC, чтобы не дёргать шину каждый цикл.
                 try:
                     from robov_core import usb_reset
-                    if not self._device_present():
-                        usb_reset.reset(self.camera_source)
+                    now = time.monotonic()
+                    if now - self._last_usb_reset >= USB_RETRY_SEC:
+                        self._last_usb_reset = now
+                        if self._device_present():
+                            usb_reset.reset(self.camera_source)
+                        else:
+                            node = usb_reset.find_video_node()
+                            if node:
+                                print(f"[Camera] камера нашлась как {node}",
+                                      flush=True)
+                                self.camera_source = node
+                            else:
+                                usb_reset.reset_any()
                 except Exception as exc:
                     print(f"[Camera] usb_reset error: {exc}", flush=True)
                 # Дать захвату заново подняться и сбросить счётчик простоя.
