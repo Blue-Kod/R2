@@ -15,7 +15,7 @@ import numpy as np
 
 from robov_core.camera import StereoCamera
 from robov_core.servo import REST_POSE, ServoController
-from robov_core.stereo_depth import StereoDepth, Vector3
+from robov_core.stereo_depth import StereoDepth, Vector3, split_stereo
 from robov_core import arm_kinematics
 
 # --- Configuration ---
@@ -436,13 +436,16 @@ def _stereo_frame() -> Optional[np.ndarray]:
 
 
 def _depth_sample(x: float, y: float):
-    """(движок, кадр, px, py) с переводом долей кадра 0..1 в пиксели калибровки."""
+    """(движок, левый, правый, px, py) — доли кадра 0..1 переводятся в пиксели."""
     img = _stereo_frame()
     if img is None:
-        return None, None, None, None
+        return None, None, None, None, None
+    left, right = split_stereo(img)
+    if right is None:
+        return None, None, None, None, None
     eng = _stereo_depth()
-    w, h = eng.size or (1280, 720)
-    return eng, img, x * w, y * h
+    w, h = eng.size or (left.shape[1], left.shape[0])
+    return eng, left, right, x * w, y * h
 
 
 def _shown_eye() -> str:
@@ -457,10 +460,10 @@ def depth(x: float, y: float, window: int = 2) -> float:
     запрос стоит ~0.2 с вместо ~1.3 с. Глубина — медиана окна (2*window+1)²,
     окно расширяется, если в нём нет валидных пикселей (гладкая поверхность).
     """
-    eng, img, px, py = _depth_sample(x, y)
-    if img is None:
+    eng, left, right, px, py = _depth_sample(x, y)
+    if left is None:
         return float("nan")
-    return eng.depth_point(img, px, py, eye=_shown_eye(), window=window)
+    return eng.depth_point(left, right, px, py, eye=_shown_eye(), window=window)
 
 
 def coords(x: float, y: float, window: int = 2) -> Vector3:
@@ -472,10 +475,10 @@ def coords(x: float, y: float, window: int = 2) -> Vector3:
     Та же система и единицы, что у ik_detail/move_ik_detail: результат можно
     сразу отдавать в IK. Начало — центр корпуса, ноль по глубине — ось рук.
     """
-    eng, img, px, py = _depth_sample(x, y)
-    if img is None:
+    eng, left, right, px, py = _depth_sample(x, y)
+    if left is None:
         return Vector3(float("nan"), float("nan"), float("nan"))
-    p = eng.point_at(img, px, py, eye=_shown_eye(), window=window)
+    p = eng.point_at(left, right, px, py, eye=_shown_eye(), window=window)
     if not np.isfinite(p.x):
         return p
     # левый глаз -> середина стереобазы: там проходит ось головы
