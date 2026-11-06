@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 
 from robov_core.camera import StereoCamera
-from robov_core.servo import START_POSE, ServoController
+from robov_core.servo import REST_POSE, ServoController
 from robov_core.stereo_depth import StereoDepth, Vector3
 from robov_core import arm_kinematics
 
@@ -516,8 +516,8 @@ def release(left: bool = False) -> bool:
 # Именованные позы. Только голова (0, 3) и обе руки (1, 2, 4, 5, 6, 7):
 # захваты ставятся grab/release, колёс поза не касается.
 POSES: Dict[str, Dict[int, int]] = {
-    # поза включения робота — единый источник servo.START_POSE
-    "rest": {ch: int(START_POSE[ch]) for ch in (0, 1, 2, 3, 4, 5, 6, 7)},
+    # руки вниз, локти выпрямлены — нулевая поза модели (servo.REST_POSE)
+    "rest": {ch: int(REST_POSE[ch]) for ch in (0, 1, 2, 3, 4, 5, 6, 7)},
     # READY_POSE из симуляции (R2SIM/sim/sim_env.py): плечи подняты (175°
     # модели), локти почти выпрямлены (170°) — руки сверху, как в симе
     "ready_to_grab": {
@@ -528,11 +528,15 @@ POSES: Dict[str, Dict[int, int]] = {
 }
 
 
-def pose(name: str) -> dict:
+POSE_DEFAULT = "rest"
+
+
+def pose(name: str = POSE_DEFAULT) -> dict:
     """Поставить робота в именованную позу и дождаться приезда.
 
-    "rest" — как при старте робота; "ready_to_grab" — как READY_POSE в симе
-    (руки подняты сверху). Захваты не трогаются: их ставят grab/release.
+    "rest" (по умолчанию) — руки вниз, локти выпрямлены (servo.REST_POSE,
+    нулевая поза модели); "ready_to_grab" — как READY_POSE в симе, руки сверху.
+    Захваты не трогаются: их ставят grab/release.
     """
     commands = POSES.get(name)
     if commands is None:
