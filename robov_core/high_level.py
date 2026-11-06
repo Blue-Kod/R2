@@ -555,16 +555,8 @@ POSE_DEFAULT = "rest"
 ELBOW_CLEAR = 100
 # Поджать локти перед опусканием плеч (тесное пространство).
 ELBOW_TUCK = 20
-
-
-def _pose_name_of(state: Dict[int, int]) -> Optional[str]:
-    """Какая из именованных поз это (по углам рук), иначе None."""
-    if not state:
-        return None
-    for name, commands in POSES.items():
-        if all(abs(state.get(ch, -9999) - value) <= 2 for ch, value in commands.items()):
-            return name
-    return None
+# ниже этого угла локтя считаем, что рука в «согнутом» состоянии (ready-подобном)
+FOLDED_THRESHOLD = 115
 
 
 def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
@@ -582,7 +574,6 @@ def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
     """
     dst = POSES[dst_name]
     state = dict(state or {})                   # что считаем текущим
-    src_name = _pose_name_of(state)
     steps = []
 
     def emit(updates: Dict[int, int]) -> None:
@@ -591,15 +582,21 @@ def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
             state.update(delta)
             steps.append(delta)
 
-    if any(state.get(ch) != dst[ch] for ch in (6, 7)):
-        emit({1: ELBOW_CLEAR, 2: ELBOW_CLEAR})
-        if src_name == "ready_to_grab" and dst_name == "rest":
-            emit({6: ELBOW_TUCK, 7: ELBOW_TUCK})     # поджать перед опусканием
-        else:
+    folded = state.get(6, 999) < FOLDED_THRESHOLD    # локти сейчас согнуты
+    if dst_name == "rest" and folded:
+        # из согнутого состояния (ready или «изменённая ready») в rest:
+        emit({6: ELBOW_TUCK, 7: ELBOW_TUCK})         # поджать в тесноте
+        emit({4: dst[4], 5: dst[5]})                 # плечи вниз
+        emit({1: ELBOW_CLEAR, 2: ELBOW_CLEAR})       # плечо под движение локтя
+        emit({6: dst[6], 7: dst[7]})                 # разгиб ПОСЛЕДНИМ
+        emit({1: dst[1], 2: dst[2]})                 # плечо в требуемое
+    else:
+        if any(state.get(ch) != dst[ch] for ch in (6, 7)):
+            emit({1: ELBOW_CLEAR, 2: ELBOW_CLEAR})   # только перед движением локтей
             emit({6: dst[6], 7: dst[7]})
-    emit({4: dst[4], 5: dst[5]})
-    emit({6: dst[6], 7: dst[7]})                     # ready->rest: разгиб в конце
-    emit({1: dst[1], 2: dst[2]})                     # плечо в требуемое
+        emit({4: dst[4], 5: dst[5]})
+        emit({6: dst[6], 7: dst[7]})
+        emit({1: dst[1], 2: dst[2]})                 # плечо в требуемое
     return steps
 
 
