@@ -549,6 +549,7 @@ POSES: Dict[str, Dict[int, int]] = {
 
 
 POSE_DEFAULT = "rest"
+_last_pose: Optional[str] = None      # в какой позе стоим (для спец-переходов)
 # Порядок групп каналов для каждой позы:
 #   rest          — сначала плечи (1,2 и 4,5), потом локти;
 #   ready_to_grab — сначала локти, потом плечи.
@@ -556,6 +557,27 @@ POSE_DEFAULT = "rest"
 POSE_ORDER = {
     "rest": ((1, 2), (4, 5), (6, 7)),
     "ready_to_grab": ((6, 7), (4, 5), (1, 2)),
+}
+# Спец-переходы «откуда -> куда»: каждая ступень — {канал: угол}, между
+# ступенями ждём доводки. Нужны для работы в тесных местах.
+#   rest -> ready: сначала увести локти НАЗАД (ch1 155 = 20° назад по FK,
+#   локоть уходит на ~11 см за линию плеч) — иначе нечем сгибать локоть.
+#   ready -> rest: поджать локти, опустить плечи, и только потом разогнуть.
+ELBOW_BACK = 155            # ch1/ch2: локти назад, место для сгиба
+ELBOW_TUCK = 20             # ch6/ch7: поджать (180 - 20 = 160° модели)
+TRANSITIONS = {
+    ("rest", "ready_to_grab"): (
+        {1: ELBOW_BACK, 2: ELBOW_BACK},
+        {6: 50, 7: 50},
+        {4: 220, 5: 220},
+        {1: 100, 2: 100},
+    ),
+    ("ready_to_grab", "rest"): (
+        {6: ELBOW_TUCK, 7: ELBOW_TUCK},
+        {4: 45, 5: 45},
+        {1: 135, 2: 135},
+        {6: 180, 7: 180},
+    ),
 }
 
 
@@ -576,14 +598,20 @@ def pose(name: str = POSE_DEFAULT) -> dict:
 
 
 def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
+    global _last_pose
+    steps = TRANSITIONS.get((_last_pose, name))
+    if steps is None:                        # обычный порядок групп
+        steps = tuple({ch: commands[ch] for ch in group if ch in commands}
+                      for group in POSE_ORDER.get(name, ()))
     sent = {}
     arrived = True
     with _arm_slow(MOVE_SPEED_DEG):          # поза ставится медленно, без рывка
-        for group in POSE_ORDER.get(name, ()):
-            for channel in group:
-                if channel in commands and set_servo_command(channel, int(commands[channel])):
-                    sent[channel] = int(commands[channel])
-            arrived = _wait_motion() and arrived   # доводим группу до конца
+        for step in steps:
+            for channel, angle in step.items():
+                if set_servo_command(channel, int(angle)):
+                    sent[channel] = int(angle)
+            arrived = _wait_motion() and arrived   # доводим ступень до конца
+    _last_pose = name
     return {"ok": bool(sent), "pose": name, "servo": sent, "arrived": arrived}
 
 
@@ -683,11 +711,13 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
     Точка берётся через coords() — та же система, что у ik_detail. Если
     глубины в этом пикселе нет, рука не двигается.
     """
+    global _last_pose
     point = coords(x, y)
     if not np.isfinite(point.x):
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
+    _last_pose = None                        # поза больше не известна
     with _motion_lock, _arm_slow(MOVE_SPEED_DEG):
         result = _move_to(point, left)
         result["point"] = point
@@ -718,6 +748,8 @@ def _point_action(x: float, y: float, grip_before: int, grip_after: int,
 
 def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
                          lift_after: bool = False, left: bool = False) -> dict:
+    global _last_pose
+    _last_pose = None                        # рука уедет в произвольную позу
     channel = GRIP_CHANNEL[bool(left)]
     set_servo_command(channel, grip_before)   # сначала клешня, потом движение
     time.sleep(GRIP_SETTLE)                   # и кадр для цели — уже без неё
