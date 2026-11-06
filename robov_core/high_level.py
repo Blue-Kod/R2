@@ -512,7 +512,7 @@ GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
 GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
 APPROACH_UP = 0.20          # м: над объектом, откуда начинается заход
-GRASP_DOWN = 0.015          # м: целимся чуть ниже точки (кисть чуть завышала захват)
+GRASP_DOWN = 0.0            # м: ручная поправка "чуть ниже"; её роль теперь у TOOL_MM
 LIFT_AFTER_UP = 0.25        # м: на сколько поднять руку после захвата/укладки
 UP_MARGIN = 0.02            # м: если объект не ниже кисти на этот запас — сначала вверх
 ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захватов и колёс)
@@ -833,8 +833,8 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
-    # кисть на замерах чуть завышала точку захвата — целимся ниже
-    point = Vector3(point.x, point.y - GRASP_DOWN, point.z)
+    if GRASP_DOWN:                     # ручная поправка (обычно 0 — см. TOOL_MM)
+        point = Vector3(point.x, point.y - GRASP_DOWN, point.z)
     # IK двигает конец цепи: пересчитываем в EE с учётом смещения губок
     base, ik = _reachable(_ee_target(point, left), left)
     if base is None:
