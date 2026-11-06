@@ -509,7 +509,11 @@ GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
 GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
 APPROACH_UP = 0.20          # м: над объектом, откуда начинается заход
+UP_MARGIN = 0.02            # м: если объект не ниже кисти на этот запас — сначала вверх
 ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захватов и колёс)
+# Высокоуровневые команды движения выполняются строго по одной: второй вызов
+# ждёт, пока первый доведёт руку до конца (иначе IK-цели перебивают друг друга).
+_motion_lock = threading.RLock()
 MOVE_SPEED_DEG = 60.0       # град/с: переезды руки в задачах захвата
 DESCENT_SPEED_DEG = 30.0    # град/с: заход к объекту сверху — вдвое медленнее
 
@@ -567,6 +571,11 @@ def pose(name: str = POSE_DEFAULT) -> dict:
     commands = POSES.get(name)
     if commands is None:
         raise ValueError(f"нет позы {name!r}; есть: {', '.join(POSES)}")
+    with _motion_lock:
+        return _pose_locked(name, commands)
+
+
+def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
     sent = {}
     arrived = True
     with _arm_slow(MOVE_SPEED_DEG):          # поза ставится медленно, без рывка
@@ -601,6 +610,40 @@ def _arm_slow(deg_per_s: float = MOVE_SPEED_DEG):
         yield
     finally:
         servo.set_speed_limit(ARM_CHANNELS_POSE, None)
+
+
+def _current_point(left: bool = False) -> Optional[Vector3]:
+    """Где кисть по последним командам, м в системе IK (для «сначала вверх»)."""
+    servo = _servo
+    if servo is None:
+        return None
+    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
+    try:
+        theta = arm_kinematics.theta_from_commands(
+            {ch: float(servo.current_angles.get(ch, 90)) for ch in channels.values()},
+            left=left)
+        ee = arm_kinematics.fk(theta, left)["EE"]
+        return Vector3(float(ee[0]) / 1000.0, float(ee[1]) / 1000.0,
+                       -float(ee[2]) / 1000.0)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _lift_if_needed(target: Vector3, left: bool = False) -> None:
+    """Поднять руку строго вверх, если объект на уровне кисти или выше.
+
+    Заход сбоку на такой высоте тащит кисть через стол и корпус, поэтому сначала
+    уходим вверх (не смещаясь к объекту), и только потом едем к нему обычной
+    программой. Робот перед такими функциями стоит в ready_to_grab, кисть уже
+    поднята — оттуда подъём короткий.
+    """
+    current = _current_point(left)
+    if current is None:
+        return
+    above_y = target.y + APPROACH_UP
+    if above_y > current.y - UP_MARGIN:      # объект рядом или выше кисти
+        _move_to(Vector3(current.x, above_y, current.z), left)
+        _wait_motion()
 
 
 def _reachable(point: Vector3, left: bool = False):
@@ -645,7 +688,7 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
-    with _arm_slow(MOVE_SPEED_DEG):
+    with _motion_lock, _arm_slow(MOVE_SPEED_DEG):
         result = _move_to(point, left)
         result["point"] = point
         result["arrived"] = bool(result.get("moved")) and _wait_motion()
@@ -668,6 +711,12 @@ def place_point(x: float, y: float, left: bool = False) -> dict:
 
 def _point_action(x: float, y: float, grip_before: int, grip_after: int,
                   left: bool = False, lift_after: bool = False) -> dict:
+    with _motion_lock:
+        return _point_action_locked(x, y, grip_before, grip_after, left, lift_after)
+
+
+def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
+                         left: bool, lift_after: bool) -> dict:
     channel = GRIP_CHANNEL[bool(left)]
     set_servo_command(channel, grip_before)   # сначала клешня, потом движение
     time.sleep(GRIP_SETTLE)                   # и кадр для цели — уже без неё
@@ -681,6 +730,8 @@ def _point_action(x: float, y: float, grip_before: int, grip_after: int,
         return {"ok": False, "moved": False, "arrived": False,
                 "message": ik.get("message") or "IK не нашёл решения",
                 "point": point}
+    with _arm_slow(MOVE_SPEED_DEG):
+        _lift_if_needed(base, left)      # объект выше/на уровне кисти — сначала вверх
     result = _approach(base, left)
     # Захват переключаем после всех движений и независимо от того, дошла ли рука
     # до цели: оставить клешню в прежнем состоянии хуже, чем сжать/разжать.
