@@ -635,17 +635,20 @@ class ServoController:
         velocity += dv
         step = velocity * tick
 
-        # Не проскакиваем цель.
+        # Не проскакиваем цель. Позицию ведём float: при медленном движении шаг
+        # за тик меньше 0.5°, и округление до целых «замораживало» канал за
+        # несколько градусов до цели (mover ждал таймаут). PWM пишем целым.
         if abs(step) >= abs(distance):
-            command = target
+            position = float(target)
             velocity = 0.0
         else:
-            command = int(round(current + step))
-            command = int(max(command_min, min(command_max, command)))
+            position = float(current) + step
+            position = float(max(command_min, min(command_max, position)))
 
-        self._set_servo_immediate(channel, self._physical_command(channel, command))
+        self._set_servo_immediate(
+            channel, self._physical_command(channel, int(round(position))))
         with self.lock:
-            self._move_positions[channel] = float(command)
+            self._move_positions[channel] = position
             self._move_velocities[channel] = velocity
 
     def _physical_command(self, channel: int, command: int) -> int:

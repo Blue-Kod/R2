@@ -545,9 +545,14 @@ POSES: Dict[str, Dict[int, int]] = {
 
 
 POSE_DEFAULT = "rest"
-# Порядок от кисти к телу: сначала полностью локти, потом плечи. Так кисть не
-# протаскивает локоть через корпус и не цепляет стол на промежуточной позе.
-POSE_ORDER = ((6, 7), (4, 5), (1, 2))
+# Порядок групп каналов для каждой позы:
+#   rest          — сначала плечи (1,2 и 4,5), потом локти;
+#   ready_to_grab — сначала локти, потом плечи.
+# Внутри группы каналы идут одновременно, между группами ждём доводки.
+POSE_ORDER = {
+    "rest": ((1, 2), (4, 5), (6, 7)),
+    "ready_to_grab": ((6, 7), (4, 5), (1, 2)),
+}
 
 
 def pose(name: str = POSE_DEFAULT) -> dict:
@@ -565,7 +570,7 @@ def pose(name: str = POSE_DEFAULT) -> dict:
     sent = {}
     arrived = True
     with _arm_slow(MOVE_SPEED_DEG):          # поза ставится медленно, без рывка
-        for group in POSE_ORDER:             # локоть -> плечо -> плечо к корпусу
+        for group in POSE_ORDER.get(name, ()):
             for channel in group:
                 if channel in commands and set_servo_command(channel, int(commands[channel])):
                     sent[channel] = int(commands[channel])
@@ -598,12 +603,26 @@ def _arm_slow(deg_per_s: float = MOVE_SPEED_DEG):
         servo.set_speed_limit(ARM_CHANNELS_POSE, None)
 
 
+def _reachable(point: Vector3, left: bool = False):
+    """Ближайшая ДОСТИЖИМАЯ точка (м) и результат ik_detail.
+
+    Нужна потому, что IK умеет возвращать ближайшую позу, если цель дальше
+    вылета. Если строить «выше на 20 см» от недостижимой цели, обе фазы
+    схлопываются в один и тот же упор — рука идёт сразу к объекту.
+    """
+    result = ik_detail(point.x * 1000.0, point.y * 1000.0,
+                       point.z * 1000.0, left=left)
+    ee = result.get("ee")
+    if ee is None:
+        return None, result
+    return Vector3(float(ee[0]) / 1000.0, float(ee[1]) / 1000.0,
+                   -float(ee[2]) / 1000.0), result
+
+
 def _approach(point: Vector3, left: bool = False) -> dict:
     """Заход сверху: переезд на APPROACH_UP выше точки, затем медленный спуск.
 
-    Спуск — шагами по DESCENT_STEP с паузой: цель переставляется чаще, чем
-    mover успевает её отработать, поэтому движение получается ровным и медленным
-    (~12 см/с) без рывка в объект.
+    point — уже достижимая точка (см. _reachable).
     """
     above = Vector3(point.x, point.y + APPROACH_UP, point.z)
     with _arm_slow(MOVE_SPEED_DEG):
@@ -657,16 +676,22 @@ def _point_action(x: float, y: float, grip_before: int, grip_after: int,
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
-    result = _approach(point, left)
+    base, ik = _reachable(point, left)
+    if base is None:
+        return {"ok": False, "moved": False, "arrived": False,
+                "message": ik.get("message") or "IK не нашёл решения",
+                "point": point}
+    result = _approach(base, left)
     # Захват переключаем после всех движений и независимо от того, дошла ли рука
     # до цели: оставить клешню в прежнем состоянии хуже, чем сжать/разжать.
     set_servo_command(channel, grip_after)
     time.sleep(GRIP_SETTLE)
     if lift_after:
         with _arm_slow(MOVE_SPEED_DEG):
-            _move_to(Vector3(point.x, point.y + APPROACH_UP, point.z), left)
+            _move_to(Vector3(base.x, base.y + APPROACH_UP, base.z), left)
             result["arrived"] = _wait_motion()
     result["point"] = point
+    result["reachable"] = base
     result["grip"] = grip_after
     return result
 
