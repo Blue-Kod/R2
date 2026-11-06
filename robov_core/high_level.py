@@ -403,7 +403,7 @@ def _stereo_depth() -> StereoDepth:
 
 
 def _stereo_frame() -> Optional[np.ndarray]:
-    """Последний стерео-кадр (BGR 2560x720), декодированный с кэшем по номеру.
+    """Последний стерео-кадр (серый 2560x720), декодированный с кэшем по номеру.
 
     Свежий кадр не ждём: ffmpeg публикует его каждый кадр, самый старый здесь
     отстаёт на 1/13 с. Подписка на стерео нужна только OpenCV-бэкенду, где
@@ -427,7 +427,8 @@ def _stereo_frame() -> Optional[np.ndarray]:
     with _depth_lock:
         if _depth_frame[0] == seq and _depth_frame[1] is not None:
             return _depth_frame[1]
-    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    # серый: глубине цвет не нужен, а декод 2560x720 в серый в 8 раз быстрее
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_GRAYSCALE)
     if img is None:
         return None
     with _depth_lock:

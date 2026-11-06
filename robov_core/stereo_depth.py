@@ -146,6 +146,11 @@ class StereoDepth:
         self._P = (np.asarray(P1r)[:3, :3], np.asarray(P2r)[:3, :3])
         self.f = float(P1r[0, 0]) * DS
 
+    @staticmethod
+    def _gray(img: np.ndarray) -> np.ndarray:
+        """Кадр в градациях серого: SGBM цвета не нужен (и декод серого в 8x быстрее)."""
+        return img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
     @property
     def size(self) -> tuple:
         """Размер одного глаза, в котором считается глубина, (w, h)."""
@@ -180,8 +185,7 @@ class StereoDepth:
         y0 = int(max(0, min(v - FAST_BAND, h - 2 * FAST_BAND)))
         y1 = int(min(h, y0 + 2 * FAST_BAND))
         r1, r2 = self.rectify_crop(left, right, 0, y0, w, y1)
-        d = self.sgbm.compute(cv2.cvtColor(r1, cv2.COLOR_BGR2GRAY),
-                              cv2.cvtColor(r2, cv2.COLOR_BGR2GRAY))
+        d = self.sgbm.compute(self._gray(r1), self._gray(r2))
         d = d.astype(np.float32) / 16.0
         tx, ty = int(round(u)), int(round(v)) - y0
         value = self._median_at(d, tx, ty, window)
@@ -240,10 +244,8 @@ class StereoDepth:
         r1, r2 = self.rectify(left, right)
         h, w = r1.shape[:2]
         small = (int(w * DS), int(h * DS))
-        s1 = cv2.resize(cv2.cvtColor(r1, cv2.COLOR_BGR2GRAY), small,
-                        interpolation=cv2.INTER_AREA)
-        s2 = cv2.resize(cv2.cvtColor(r2, cv2.COLOR_BGR2GRAY), small,
-                        interpolation=cv2.INTER_AREA)
+        s1 = cv2.resize(self._gray(r1), small, interpolation=cv2.INTER_AREA)
+        s2 = cv2.resize(self._gray(r2), small, interpolation=cv2.INTER_AREA)
         return self.sgbm.compute(s1, s2).astype(np.float32) / 16.0
 
     @staticmethod
