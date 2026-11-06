@@ -508,8 +508,9 @@ GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
 GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
 APPROACH_UP = 0.20          # м: над объектом, откуда начинается заход
-DESCENT_STEP = 0.01         # м: шаг спуска к объекту
-DESCENT_DT = 0.08           # с: пауза между шагами (медленный заход сверху)
+MOVE_SPEED = 0.20           # м/с: переезды руки в задачах захвата (медленно)
+DESCENT_SPEED = 0.10        # м/с: заход к объекту сверху — ещё медленнее
+STEP_DT = 0.06              # с: интервал шагов (рука не получает рывком всю цель)
 
 
 def _wait_motion(timeout: float = MOVE_TIMEOUT) -> bool:
@@ -576,6 +577,49 @@ def _move_to(point: Vector3, left: bool = False) -> dict:
                           point.z * 1000.0, left=left)
 
 
+def _current_ee_mm(left: bool = False) -> Optional[np.ndarray]:
+    """Текущее положение кисти по последним КОМАНДАМ, мм в системе ik_solve.
+
+    Датчиков нет, поэтому «текущее» — это то, что мы скомандовали; для медленного
+    ведения по шагам этого достаточно.
+    """
+    servo = _servo
+    if servo is None:
+        return None
+    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
+    try:
+        theta = arm_kinematics.theta_from_commands(
+            {ch: float(servo.current_angles.get(ch, 90)) for ch in channels.values()},
+            left=left)
+        ee = arm_kinematics.fk(theta, left)["EE"]
+        return np.array([float(ee[0]), float(ee[1]), float(-ee[2])])
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
+def _move_slow(point: Vector3, left: bool = False,
+               speed: float = MOVE_SPEED) -> dict:
+    """Вести руку в точку шагами по speed м/с — без рывка на всю цель.
+
+    Шаг команды ~speed*STEP_DT: mover переставляется чаще, чем успевает
+    разгоняться, поэтому движение ровное и медленное (безопасно для людей и
+    мебели). Если стартовой позы нет — одна обычная команда.
+    """
+    target = np.array([point.x, point.y, point.z]) * 1000.0
+    start = _current_ee_mm(left)
+    if start is None:
+        return _move_to(point, left)
+    dist = float(np.linalg.norm(target - start)) / 1000.0      # мм -> м
+    steps = int(np.clip(round(dist / max(1e-3, speed * STEP_DT)), 1, 400))
+    result = {}
+    for i in range(1, steps + 1):
+        p_mm = start + (target - start) * (i / steps)
+        result = move_ik_detail(float(p_mm[0]), float(p_mm[1]), float(p_mm[2]),
+                                left=left)
+        time.sleep(STEP_DT)
+    return result
+
+
 def _approach(point: Vector3, left: bool = False) -> dict:
     """Заход сверху: переезд на APPROACH_UP выше точки, затем медленный спуск.
 
@@ -584,16 +628,9 @@ def _approach(point: Vector3, left: bool = False) -> dict:
     (~12 см/с) без рывка в объект.
     """
     above = Vector3(point.x, point.y + APPROACH_UP, point.z)
-    result = _move_to(above, left)
+    result = _move_slow(above, left, MOVE_SPEED)
     _wait_motion()
-    steps = max(1, int(round(APPROACH_UP / DESCENT_STEP)))
-    for i in range(1, steps + 1):
-        k = i / steps
-        mid = Vector3(point.x,
-                      above.y + (point.y - above.y) * k,
-                      point.z + (point.z - above.z) * k)
-        result = _move_to(mid, left)
-        time.sleep(DESCENT_DT)
+    result = _move_slow(point, left, DESCENT_SPEED)   # заход сверху — медленно
     result["arrived"] = _wait_motion()
     return result
 
@@ -609,8 +646,7 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
-    result = move_ik_detail(point.x * 1000.0, point.y * 1000.0,
-                            point.z * 1000.0, left=left)
+    result = _move_slow(point, left, MOVE_SPEED)
     result["point"] = point
     result["arrived"] = bool(result.get("moved")) and _wait_motion()
     return result
@@ -646,7 +682,7 @@ def _point_action(x: float, y: float, grip_before: int, grip_after: int,
     set_servo_command(channel, grip_after)
     time.sleep(GRIP_SETTLE)
     if lift_after:
-        _move_to(Vector3(point.x, point.y + APPROACH_UP, point.z), left)
+        _move_slow(Vector3(point.x, point.y + APPROACH_UP, point.z), left, MOVE_SPEED)
         result["arrived"] = _wait_motion()
     result["point"] = point
     result["grip"] = grip_after
