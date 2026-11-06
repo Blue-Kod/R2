@@ -549,25 +549,38 @@ POSES: Dict[str, Dict[int, int]] = {
 
 
 POSE_DEFAULT = "rest"
-_last_pose: Optional[str] = None      # в какой позе стоим (для спец-переходов)
 # Плечо (ch1/ch2) на время движения локтей: с ним локтю хватает места.
 ELBOW_CLEAR = 100
 # Поджать локти перед опусканием плеч (тесное пространство).
 ELBOW_TUCK = 20
 
 
-def _pose_steps(src_name: Optional[str], dst_name: str):
-    """Ступени перехода между позами: [(канал: угол), ...].
+def _pose_name_of(state: Dict[int, int]) -> Optional[str]:
+    """Какая из именованных поз это (по углам рук), иначе None."""
+    if not state:
+        return None
+    for name, commands in POSES.items():
+        if all(abs(state.get(ch, -9999) - value) <= 2 for ch, value in commands.items()):
+            return name
+    return None
+
+
+def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
+    """Ступени перехода в позу dst_name от фактических углов state.
+
+    state — последние отправленные углы каналов рук (то, где рука реально
+    оказалась: после pick_point это не «поза», а произвольное положение).
 
     Правила:
       • перед движением локтей ставим плечо (ch1/ch2) в ELBOW_CLEAR;
-      • ready -> rest: сначала ПОДЖАТЬ локти, потом опустить плечи и только
-        затем разогнуть;
+      • если рука была в ready_to_grab, а едем в rest — сначала ПОДЖАТЬ локти,
+        потом опустить плечи и только затем разогнуть;
       • после движения локтей плечо возвращается в требуемое значение;
-      • если перехода нет (rest -> rest), ступеней не будет.
+      • если менять нечего — ступеней не будет.
     """
     dst = POSES[dst_name]
-    state = dict(POSES.get(src_name) or {})     # что считаем текущим
+    state = dict(state or {})                   # что считаем текущим
+    src_name = _pose_name_of(state)
     steps = []
 
     def emit(updates: Dict[int, int]) -> None:
@@ -605,8 +618,13 @@ def pose(name: str = POSE_DEFAULT) -> dict:
 
 
 def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
-    global _last_pose
-    steps = _pose_steps(_last_pose, name)     # переходы работают всегда
+    servo = _servo
+    # Отправленные углы — единственное, что мы знаем о руке (датчиков нет).
+    # После pick_point это произвольное положение, поэтому «уже в этой позе»
+    # определяется по углам, а не по имени последней позы.
+    state = ({ch: int(servo.current_angles.get(ch, 90)) for ch in ARM_CHANNELS_POSE}
+             if servo is not None else None)
+    steps = _pose_steps(state, name)          # переходы работают всегда
     sent = {}
     arrived = True
     with _arm_slow(MOVE_SPEED_DEG):          # поза ставится медленно, без рывка
@@ -615,7 +633,6 @@ def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
                 if set_servo_command(channel, int(angle)):
                     sent[channel] = int(angle)
             arrived = _wait_motion() and arrived   # доводим ступень до конца
-    _last_pose = name
     return {"ok": bool(sent), "pose": name, "servo": sent, "arrived": arrived}
 
 
