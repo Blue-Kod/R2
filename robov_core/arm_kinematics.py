@@ -91,6 +91,7 @@ theta = (t_sz, t_sx, t_eb) — физические углы звеньев, г�
 
 import math
 from functools import lru_cache
+from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -133,6 +134,55 @@ LEFT_X_B = -6900.0 / 37.0        # ≈ -186.486
 
 def _left_target_x(x: float) -> float:
     return LEFT_X_A * float(x) + LEFT_X_B
+
+
+# --- Компенсация кисти -------------------------------------------------------
+# Точка захвата не совпадает с концом цепи (EE): губки висят ниже и смещены
+# вбок, причём у левой и правой руки по-разному (зеркальная сборка, посадка
+# качалки). Замер: расхождение между руками до +-30 мм при одинаковых углах.
+# TOOL_MM — смещение точки захвата от EE в системе КОРПУСА при кисти, смотрящей
+# вниз (в зоне захвата кисть почти не вращается, finger_down 0.68..0.93).
+# Замеряется один раз на робота и лежит в config.json: "tool_mm": {...}
+TOOL_MM: Dict[str, np.ndarray] = {
+    "right": np.zeros(3),
+    "left": np.zeros(3),
+}
+
+
+def load_tool_offsets(path: Optional[Path] = None) -> None:
+    """Прочитать tool_mm из config.json (если есть)."""
+    import json
+    from pathlib import Path as _Path
+
+    p = path or (_Path(__file__).resolve().parent.parent / "config.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:                                   # noqa: BLE001
+        return
+    for side in ("right", "left"):
+        vector = (data.get("tool_mm") or {}).get(side)
+        if vector and len(vector) == 3:
+            TOOL_MM[side] = np.array([float(v) for v in vector])
+
+
+def set_tool_offset(dx: float, dy: float, dz: float, left: bool = False) -> None:
+    """Задать смещение точки захвата от EE, мм (система корпуса)."""
+    TOOL_MM["left" if left else "right"] = np.array([dx, dy, dz], float)
+
+
+def tool_offset(left: bool = False) -> np.ndarray:
+    return TOOL_MM["left" if left else "right"]
+
+
+def grasp_point(theta: Sequence[float], left: bool = False) -> np.ndarray:
+    """Где реально губки: EE + смещение кисти, мм (система корпуса)."""
+    return fk(theta, left)["EE"] + tool_offset(left)
+
+
+def ee_for_grasp(grasp_mm: Sequence[float], left: bool = False) -> np.ndarray:
+    """Куда вести EE, чтобы ГУБКИ попали в точку grasp_mm."""
+    return np.asarray(grasp_mm, float) - tool_offset(left)
 
 
 def camera_to_body(p_mm: Sequence[float], neck: float = HEAD_REST,

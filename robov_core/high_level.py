@@ -1,4 +1,5 @@
 import contextlib
+import json
 import platform
 import socket
 import subprocess
@@ -18,6 +19,8 @@ from robov_core.camera import StereoCamera
 from robov_core.servo import REST_POSE, ServoController
 from robov_core.stereo_depth import StereoDepth, Vector3, split_stereo
 from robov_core import arm_kinematics
+
+arm_kinematics.load_tool_offsets()
 
 # --- Configuration ---
 APP_VERSION = "0.2"
@@ -694,6 +697,13 @@ def _lift_if_needed(target: Vector3, left: bool = False) -> None:
         _wait_motion()
 
 
+def _ee_target(grasp: Vector3, left: bool = False) -> Vector3:
+    """Точка захвата -> цель для IK (EE), с поправкой на смещение губок."""
+    ee = arm_kinematics.ee_for_grasp(
+        (grasp.x * 1000.0, grasp.y * 1000.0, grasp.z * 1000.0), left=left)
+    return Vector3(ee[0] / 1000.0, ee[1] / 1000.0, ee[2] / 1000.0)
+
+
 def _reachable(point: Vector3, left: bool = False):
     """Ближайшая ДОСТИЖИМАЯ точка (м) и результат ik_detail.
 
@@ -723,6 +733,52 @@ def _approach(point: Vector3, left: bool = False) -> dict:
         result = _move_to(point, left)
         result["arrived"] = _wait_motion()
     return result
+
+
+def measure_tool_offset(x: float, y: float, left: bool = False) -> dict:
+    """Замерить смещение губок от конца цепи по видимой точке.
+
+    Процедура: подвести КОНЧИКИ губок ровно к видимой реперной точке (угол
+    доски/метка), взять её пиксель из панели камеры и вызвать эту функцию.
+    Точка берётся по стерео, EE — по последним командам; разница и есть
+    смещение кисти (мм, система корпуса). Пишется в config.json.
+    """
+    point = coords(x, y)
+    if not np.isfinite(point.x):
+        return {"ok": False, "message": "нет глубины в этой точке кадра"}
+    servo = _servo
+    if servo is None:
+        return {"ok": False, "message": "нет сервоприводов"}
+    channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
+    theta = arm_kinematics.theta_from_commands(
+        {ch: float(servo.current_angles.get(ch, 90)) for ch in channels.values()},
+        left=left)
+    ee = arm_kinematics.fk(theta, left)["EE"]
+    offset = (np.array([point.x, point.y, point.z]) * 1000.0) - ee
+    arm_kinematics.set_tool_offset(offset[0], offset[1], offset[2], left=left)
+    saved = _save_tool_offset()
+    return {"ok": True, "offset_mm": [round(float(v), 1) for v in offset],
+            "ee_mm": [round(float(v), 1) for v in ee],
+            "grasp_point": point, "saved": saved}
+
+
+def _save_tool_offset() -> bool:
+    """Записать tool_mm в config.json рядом с калибровкой серв."""
+    path = ROOT_DIR / "config.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:                                   # noqa: BLE001
+        data = {}
+    data["tool_mm"] = {
+        "right": [round(float(v), 1) for v in arm_kinematics.TOOL_MM["right"]],
+        "left": [round(float(v), 1) for v in arm_kinematics.TOOL_MM["left"]],
+    }
+    try:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+        return True
+    except Exception:                                   # noqa: BLE001
+        return False
 
 
 def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
@@ -779,7 +835,8 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
                 "point": point}
     # кисть на замерах чуть завышала точку захвата — целимся ниже
     point = Vector3(point.x, point.y - GRASP_DOWN, point.z)
-    base, ik = _reachable(point, left)
+    # IK двигает конец цепи: пересчитываем в EE с учётом смещения губок
+    base, ik = _reachable(_ee_target(point, left), left)
     if base is None:
         return {"ok": False, "moved": False, "arrived": False,
                 "message": ik.get("message") or "IK не нашёл решения",
