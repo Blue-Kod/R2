@@ -28,10 +28,10 @@ import numpy as np
 
 
 class Vector3(NamedTuple):
-    """Точка в системе координат камеры: X вправо, Y вверх, Z вперёд, мм.
+    """Точка в системе координат камеры: X вправо, Y вверх, Z вперёд, МЕТРЫ.
 
-    Та же система и единицы, что у `ik_detail` / `move_ik_detail`: результат
-    `coords()` можно сразу отдавать в IK.
+    Все метрические величины наружу отдаём в метрах (0.715, а не 715 мм).
+    Внутри кинематики остаются миллиметры — там так заданы звенья.
     """
     x: float
     y: float
@@ -39,7 +39,7 @@ class Vector3(NamedTuple):
 
     def __repr__(self) -> str:
         """В repr сразу единицы: иначе 715 легко прочитать как 715 см."""
-        return (f"Vector3(x={self.x:.1f}, y={self.y:.1f}, z={self.z:.1f}) мм")
+        return f"Vector3(x={self.x:.3f}, y={self.y:.3f}, z={self.z:.3f}) м"
 
 
 # Полное разрешение: диспаратность вдвое больше, ошибка глубины вдвое меньше.
@@ -300,7 +300,7 @@ class StereoDepth:
         return float(self.f * self.baseline / max(dref, 1e-3))
 
     def point_at(self, left, right, x, y, eye="left", window=2) -> Vector3:
-        """Точка пикселя в системе ЛЕВОЙ камеры (мм), по локальному замеру."""
+        """Точка пикселя в системе ЛЕВОЙ камеры (м), по локальному замеру."""
         z = self.depth_point(left, right, x, y, eye, window)
         if not np.isfinite(z):
             return Vector3(float("nan"), float("nan"), float("nan"))
@@ -312,7 +312,7 @@ class StereoDepth:
         p = self._Rrect[i].T @ p
         if eye != "left":
             p = self.R.T @ (p - self.T.ravel())
-        return Vector3(float(p[0] * 1000), float(-p[1] * 1000), float(p[2] * 1000))
+        return Vector3(float(p[0]), float(-p[1]), float(p[2]))
 
     # -- диспаратность и глубина --------------------------------------------
     def disparity(self, left, right) -> np.ndarray:
@@ -428,7 +428,7 @@ class StereoDepth:
 
     def point(self, z: np.ndarray, x: float, y: float,
               eye: str = "left", window: int = 2) -> Vector3:
-        """Точка пикселя в системе ЛЕВОЙ камеры: X вправо, Y вверх, Z вперёд, мм."""
+        """Точка пикселя в системе ЛЕВОЙ камеры: X вправо, Y вверх, Z вперёд, м."""
         d = self.depth_at(z, x, y, eye, window)
         if not np.isfinite(d):
             return Vector3(float("nan"), float("nan"), float("nan"))
@@ -440,7 +440,7 @@ class StereoDepth:
         p = self._Rrect[i].T @ p                  # выпрямленный -> исходный кадр
         if eye != "left":
             p = self.R.T @ (p - self.T.ravel())   # правый глаз -> левый
-        return Vector3(float(p[0] * 1000), float(-p[1] * 1000), float(p[2] * 1000))
+        return Vector3(float(p[0]), float(-p[1]), float(p[2]))
 
     # -- привязка по известным дистанциям -----------------------------------
     def fit(self, samples, cm=None, save: bool = True):

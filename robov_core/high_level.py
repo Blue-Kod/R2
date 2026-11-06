@@ -457,9 +457,13 @@ def depth(x: float, y: float, window: int = 2) -> float:
     """Расстояние до точки кадра, метры. NaN — если данных нет.
 
     x, y — доли кадра от 0 до 1 (x вправо, y вниз, как пиксели). Считается
-    локально вокруг точки (кроп + узкий диапазон диспаратности), поэтому
-    запрос стоит ~0.2 с вместо ~1.3 с. Глубина — медиана окна (2*window+1)²,
-    окно расширяется, если в нём нет валидных пикселей (гладкая поверхность).
+    локально вокруг точки (патч 33x33), поэтому запрос стоит ~20 мс. Глубина —
+    медиана окна, окно расширяется, если в нём нет валидных пикселей.
+
+    Это глубина по оси ВЫПРЯМЛЕННОГО кадра (метры, от камеры). coords() даёт
+    точку в системе корпуса: у точки далеко от центра её z отличается на
+    несколько процентов — это поворот ректификации, а не ошибка; для IK
+    используйте coords().
     """
     eng, left, right, px, py = _depth_sample(x, y)
     if left is None:
@@ -469,15 +473,15 @@ def depth(x: float, y: float, window: int = 2) -> float:
 
 def coords(x: float, y: float, window: int = 2) -> Vector3:
     """3D-точка кадра (x, y от 0 до 1) в системе КОРПУСА: X вправо, Y вверх,
-    Z вперёд, мм.
+    Z вперёд, МЕТРЫ.
 
     Сначала точка считается в системе камеры, затем поворачивается на текущие
     углы шеи (канал 0) и наклона (канал 3) — те команды, что отправлены сервам.
-    Та же система и единицы, что у ik_detail/move_ik_detail: результат можно
-    сразу отдавать в IK. Начало — центр корпуса, ноль по глубине — ось рук.
-    Единицы — МИЛЛИМЕТРЫ (depth() отдаёт метры от камеры): z здесь больше
-    depth() на путь от объектива до центра головы (HEAD_LENS_Z = 45 мм) и на
-    поворот, если шея/наклон не в нуле.
+    Начало — центр корпуса, ноль по глубине — ось рук. Единицы — МЕТРЫ (как у
+    depth()). z здесь больше depth() на путь от объектива до центра головы
+    (HEAD_LENS_Z = 45 мм) и на поворот, если шея/наклон не в нуле. В IK
+    (ik_detail/move_ik_detail) внутри переводятся в миллиметры — там так
+    заданы звенья.
     """
     eng, left, right, px, py = _depth_sample(x, y)
     if left is None:
@@ -485,15 +489,16 @@ def coords(x: float, y: float, window: int = 2) -> Vector3:
     p = eng.point_at(left, right, px, py, eye=_shown_eye(), window=window)
     if not np.isfinite(p.x):
         return p
-    # левый глаз -> середина стереобазы: там проходит ось головы
-    pc = (p.x + 1000.0 * eng.baseline / 2.0, p.y, p.z)
+    # левый глаз -> середина стереобазы (там ось головы), мм для кинематики
+    pc = ((p.x + eng.baseline / 2.0) * 1000.0, p.y * 1000.0, p.z * 1000.0)
     neck = tilt = arm_kinematics.HEAD_REST
     servo = _servo
     if servo is not None:
         neck = float(servo.current_angles.get(arm_kinematics.NECK_CHANNEL, neck))
         tilt = float(servo.current_angles.get(arm_kinematics.TILT_CHANNEL, tilt))
-    q = arm_kinematics.camera_to_body(pc, neck, tilt)
-    return Vector3(float(q[0]), float(q[1]), float(q[2]))
+    q = arm_kinematics.camera_to_body(pc, neck, tilt)   # мм
+    return Vector3(float(q[0]) / 1000.0, float(q[1]) / 1000.0,
+                   float(q[2]) / 1000.0)
 
 
 # --- Захват и движение в точку кадра ---------------------------------------
@@ -567,7 +572,8 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
-    result = move_ik_detail(point.x, point.y, point.z, left=left)
+    result = move_ik_detail(point.x * 1000.0, point.y * 1000.0,
+                            point.z * 1000.0, left=left)
     result["point"] = point
     result["arrived"] = bool(result.get("moved")) and _wait_motion()
     return result
@@ -597,7 +603,8 @@ def _point_action(x: float, y: float, grip_before: int, grip_after: int,
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
                 "point": point}
-    result = move_ik_detail(point.x, point.y, point.z, left=left)
+    result = move_ik_detail(point.x * 1000.0, point.y * 1000.0,
+                            point.z * 1000.0, left=left)
     result["point"] = point
     result["arrived"] = bool(result.get("moved")) and _wait_motion()
     result["grip"] = grip_before
