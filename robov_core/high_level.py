@@ -670,7 +670,8 @@ def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
     return steps, done
 
 
-def pose(name: str = POSE_DEFAULT, speed: Optional[float] = None) -> dict:
+def pose(name: str = POSE_DEFAULT, speed: Optional[float] = None,
+         force: bool = False) -> dict:
     """Поставить робота в именованную позу и дождаться приезда.
 
     "rest" (по умолчанию) — руки вниз, локти выпрямлены (servo.REST_POSE,
@@ -681,22 +682,28 @@ def pose(name: str = POSE_DEFAULT, speed: Optional[float] = None) -> dict:
     Рука, которая уже стоит в этой позе (в пределах POSE_TOL_DEG), команд не
     получает — в результате она в списке skipped.
     speed — град/с переезда; по умолчанию POSE_SPEED_DEG.
+    force — отправить позу, даже если состояние говорит, что рука уже там.
+    Нужно после перезапуска: `current_angles` там = START_POSE (дефолт
+    загрузки), то есть состояние врёт, а физическое положение неизвестно.
     """
     commands = POSES.get(name)
     if commands is None:
         raise ValueError(f"нет позы {name!r}; есть: {', '.join(POSES)}")
     with _motion_lock:
         return _pose_locked(name, commands,
-                            POSE_SPEED_DEG if speed is None else float(speed))
+                            POSE_SPEED_DEG if speed is None else float(speed),
+                            force)
 
 
 def _pose_locked(name: str, commands: Dict[int, int],
-                 speed: float = POSE_SPEED_DEG) -> dict:
+                 speed: float = POSE_SPEED_DEG,
+                 force: bool = False) -> dict:
     servo = _servo
     # Отправленные углы — единственное, что мы знаем о руке (датчиков нет).
     # После pick_point это произвольное положение, поэтому «уже в этой позе»
     # определяется по углам, а не по имени последней позы.
-    state = ({ch: int(servo.current_angles.get(ch, 90)) for ch in ARM_CHANNELS_POSE}
+    state = (None if force else
+             {ch: int(servo.current_angles.get(ch, 90)) for ch in ARM_CHANNELS_POSE}
              if servo is not None else None)
     steps, done = _pose_steps(state, name)    # переходы работают всегда
     sent = {}
