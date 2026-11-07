@@ -524,8 +524,10 @@ APPROACH_UP = 0.30          # м: над объектом, откуда начи
 GRASP_DOWN = 0.0            # м: ручная поправка "чуть ниже"; её роль теперь у TOOL_MM
 ALIGN_ITERS = 3             # итераций выравнивания по маркеру
 ALIGN_TOL_M = 0.004         # м: ближе этого считаем, что губки над объектом
-DESCENT_STEP_M = 0.02       # м: шаг спуска с коррекцией
-DESCENT_DT = 0.12           # с: пауза между шагами (камера 13 fps)
+DESCENT_STEP_M = 0.02       # м: шаг спуска в логах/диагностике
+DESCENT_DT = 0.10           # с: тик непрерывного спуска (10 Гц)
+DESCENT_SPEED_MPS = 0.05    # м/с: линейная скорость спуска (медленно, без рывков)
+DESCENT_MEASURE_EVERY = 3   # тиков между замерами маркера (0.3 с)
 DESCENT_GAIN = 0.8          # доля ошибки, которую выбираем за шаг
 ROI_HALF_PX = 140           # окно поиска маркера вокруг прошлой находки
 MAX_CORR_M = 0.10           # м: предел поправки по маркеру (сбой детекции)
@@ -799,6 +801,77 @@ def _current_point(left: bool = False) -> Optional[Vector3]:
 
 _marker_roi: Dict[bool, Optional[Tuple[int, int, int, int]]] = {False: None,
                                                                True: None}
+
+
+def calibrate_depth_scale(left: bool = False) -> dict:
+    """Подстроить масштаб глубины по маркеру — прямо по ходу работы.
+
+    Маркер 38 мм даёт абсолютную дистанцию (PnP), не зависящую от привязки
+    глубины. Сравниваем её с глубиной в пикселе маркера и правим масштаб
+    движка. Вызывается перед каждым захватом, пока маркер виден.
+    """
+    frame = _stereo_frame()
+    if frame is None:
+        return {"ok": False, "reason": "нет стерео-кадра"}
+    left_img, right_img = split_stereo(frame)
+    if right_img is None:
+        return {"ok": False, "reason": "нет стерео-кадра"}
+    eng = _stereo_depth()
+    marker_id = gripper_marker.MARKER_ID[bool(left)]
+    found = gripper_marker.detect(right_img, eng.K[1], eng.D[1],
+                                  eng._Rrect[1], eng._P[1], ids=(marker_id,))
+    marker = found.get(marker_id)
+    if marker is None:
+        return {"ok": False, "reason": "маркер не виден"}
+    cu, cv = np.clip(np.round(marker["center"]).astype(int), 0,
+                     np.array(right_img.shape[:2])[::-1] - 1)
+    maps = eng._maps[1]
+    raw = (float(maps[0][cv, cu]), float(maps[1][cv, cu]))
+    p = eng.point_at(left_img, right_img, *raw, eye="right")
+    if not np.isfinite(p.x):
+        return {"ok": False, "reason": "нет глубины в маркере"}
+    pnp = float(np.linalg.norm(np.asarray(marker["tvec"], float)))
+    got = float(np.linalg.norm([p.x, p.y, p.z]))
+    if pnp > 1e-3 and got > 1e-3:
+        eng.scale *= pnp / got
+    return {"ok": True, "ratio": round(got / max(pnp, 1e-6), 3),
+            "scale": round(eng.scale, 3), "depth_m": round(got, 3),
+            "marker_m": round(pnp, 3)}
+
+
+def marker_calibrate(x: float, y: float, left: bool = False) -> dict:
+    """Смещение маркер→губки по РЕАЛЬНОЙ точке кадра, а не по FK.
+
+    Поставь руку телеопом так, чтобы губки стояли ровно над точкой, и укажи
+    её в кадре (доли 0..1). Возвращает v (мм) в системе маркера — его надо
+    прописать в gripper_marker.GRASP_FROM_MARKER_MM. Так калибровка не
+    наследует ошибку кинематики.
+    """
+    frame = _stereo_frame()
+    if frame is None:
+        return {"ok": False, "reason": "нет стерео-кадра"}
+    left_img, right_img = split_stereo(frame)
+    if right_img is None:
+        return {"ok": False, "reason": "нет стерео-кадра"}
+    eng = _stereo_depth()
+    marker_id = gripper_marker.MARKER_ID[bool(left)]
+    found = gripper_marker.detect(right_img, eng.K[1], eng.D[1],
+                                  eng._Rrect[1], eng._P[1], ids=(marker_id,))
+    marker = found.get(marker_id)
+    if marker is None:
+        return {"ok": False, "reason": "маркер не виден"}
+    body = coords(x, y)
+    if not np.isfinite(body.x):
+        return {"ok": False, "reason": "нет глубины в точке"}
+    F = np.diag([1.0, -1.0, 1.0])          # камера OpenCV -> корпус по Y
+    cam = np.array([eng.baseline / 2.0, 0.100, 0.060])
+    P = F @ (np.array([body.x, body.y, body.z]) - cam)
+    R = cv2.Rodrigues(np.asarray(marker["rvec"], float))[0]
+    t = np.asarray(marker["tvec"], float).reshape(3)
+    v = 1000.0 * (R.T @ (P - t))
+    return {"ok": True, "v_mm": [round(float(x), 1) for x in v],
+            "now_mm": [round(float(x), 1) for x in gripper_marker.GRASP_FROM_MARKER_MM],
+            "point": body}
 
 
 def _marker_grasp(left: bool = False) -> Optional[Vector3]:
@@ -1130,35 +1203,38 @@ def _approach(point: Vector3, left: bool = False,
         if lateral else 0.0
     want = Vector3(point.x + side, point.y, point.z)   # куда должны попасть губки
     cmd = Vector3(want.x, want.y, want.z)              # куда ведём руку (с поправкой)
-    # Старт захода — не ближе APPROACH_UP от объекта, сверху или сверху-сбоку
-    # (строго вертикально рука поднимается невысоко).
+    # Старт захода — не ближе APPROACH_UP от объекта, сверху или сверху-сбоку.
     current = _approach_point(want, left)
     start_point = current
-    with _arm_slow(MOVE_SPEED_DEG):
-        result = _move_to(_ee_target(current, left), left)
-        _wait_motion()
     corrections = 0
     seen = 0
-    for _ in range(40):                    # спуск к точке по прямой шагами
-        dx, dy, dz = cmd.x - current.x, cmd.y - current.y, cmd.z - current.z
-        left_len = float(np.sqrt(dx * dx + dy * dy + dz * dz))
-        if left_len <= 1e-6:
-            break
-        k = min(1.0, DESCENT_STEP_M / left_len)
-        current = Vector3(current.x + dx * k, current.y + dy * k,
-                          current.z + dz * k)
-        with _arm_slow(DESCENT_SPEED_DEG):
-            result = _move_to(_ee_target(current, left), left)
-        _wait_motion()                     # меряем уже стоящую руку
-        time.sleep(DESCENT_DT)             # и кадр — после остановки (13 fps)
-        if align:
-            new_cmd, model, residual = _correct_cmd(want, cmd, current, left)
-            if model is not None:
-                seen += 1
-                # поправка считается, только если цель реально сдвинулась
-                corrections += int(_dist(new_cmd, cmd) > 0.001)
-            cmd = new_cmd
     residual = None
+    # ОДИН непрерывный проход: лимит скорости ставим на весь спуск, цель
+    # подвигаем каждые 0.1 с. Раньше каждый шаг был отдельным _arm_slow с
+    # ожиданием остановки — отсюда «рывки».
+    with _arm_slow(DESCENT_SPEED_DEG):
+        with _motion_lock:
+            _move_to(_ee_target(current, left), left)
+        for tick in range(1, 400):
+            dx, dy, dz = cmd.x - current.x, cmd.y - current.y, cmd.z - current.z
+            dist = float(np.sqrt(dx * dx + dy * dy + dz * dz))
+            if dist <= 1e-6:
+                break
+            k = min(1.0, DESCENT_SPEED_MPS * DESCENT_DT / dist)
+            current = Vector3(current.x + dx * k, current.y + dy * k,
+                              current.z + dz * k)
+            with _motion_lock:
+                result = _move_to(_ee_target(current, left), left)
+            if align and tick % DESCENT_MEASURE_EVERY == 0:
+                time.sleep(DESCENT_DT)
+                new_cmd, model, residual = _correct_cmd(want, cmd, current, left)
+                if model is not None:
+                    seen += 1
+                    corrections += int(_dist(new_cmd, cmd) > 0.001)
+                cmd = new_cmd
+            else:
+                time.sleep(DESCENT_DT)
+        _wait_motion()
     if align:                              # внизу — последняя поправка, только XY
         cmd, model, residual = _correct_cmd(want, cmd, current, left)
         if model is not None:
@@ -1229,6 +1305,9 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
     _grip_settle()                            # и кадр для цели — уже без неё
     # Захват: точка по силуэту объекта (верх + центр), а не по клику — так
     # губки не бьют объект сбоку. Укладка: ровно точка клика.
+    # Захват: сначала подстроить масштаб глубины по маркеру (эталон 38 мм),
+    # потом искать точку по силуэту — иначе и глубина, и высота врут.
+    scale_info = calibrate_depth_scale(left) if grip_before == GRIP_OPEN else None
     grasp_info = _grasp_point(x, y, left) if grip_before == GRIP_OPEN else None
     point = (grasp_info["point"] if grasp_info and grasp_info.get("ok")
              else coords(x, y))
@@ -1270,6 +1349,7 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
             result["arrived"] = _wait_motion()
     result["point"] = point
     result["grasp"] = grasp_info
+    result["depth_scale"] = scale_info
     result["reachable"] = base
     result["grip"] = grip_after
     return result

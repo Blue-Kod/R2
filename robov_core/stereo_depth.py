@@ -201,6 +201,9 @@ class StereoDepth:
         self.R = np.array(d["R"], float)
         self.T = np.array(d["T_m"], float).reshape(3, 1)
         self.baseline = float(d.get("baseline_m") or np.linalg.norm(self.T))
+        # Масштаб глубины по внешнему эталону (маркер 38 мм). Ставится
+        # high_level.calibrate_depth_scale() по ходу работы: 1.0 — как есть.
+        self.scale = 1.0
         self.K_emp = d.get("depth_K")
         self.c_emp = float(d.get("depth_c") or 0.0)
         self.f_ref = float(d.get("depth_f_ref") or 0.0)
@@ -337,7 +340,7 @@ class StereoDepth:
         # после пересборки калибровки давала +42% к дистанции: сравнение с PnP
         # маркера 38 мм показало 0.273 м против 0.193 м. Отсюда и «берёт по Z
         # дальше» у обеих рук.
-        return float(self.f * self.baseline / max(d, 1e-3))
+        return float(self.scale * self.f * self.baseline / max(d, 1e-3))
 
     def point_at(self, left, right, x, y, eye="left", window=2) -> Vector3:
         """Точка пикселя в системе ПРАВОЙ камеры (опорная), м, по локальному замеру."""
@@ -399,7 +402,7 @@ class StereoDepth:
         if not (disp > 0.5).any():
             return np.full_like(disp, np.nan), disp
         dfill = self.fill(disp)
-        z = self.f * self.baseline / np.maximum(dfill, 1e-3)   # Z = f*B/d
+        z = self.scale * self.f * self.baseline / np.maximum(dfill, 1e-3)
         return z.astype(np.float32), disp
 
     # -- чтение в центре кадра ----------------------------------------------
