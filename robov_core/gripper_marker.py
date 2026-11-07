@@ -11,7 +11,7 @@
 Ориентация: X_m = X кисти, Y_m = −Z кисти, нормаль Z_m = +Y кисти (вверх).
 Отсюда точка захвата в СИСТЕМЕ МАРКЕРА:
 
-    G = M + 155 мм · Y_m − 33 мм · Z_m     →  (+10, +155, −33) мм
+    G = M + 69 мм · Y_m + 36 мм · Z_m      →  (0, +69, +36) мм
     (+Y_m — потому что печатный «верх» маркера наклеен к губкам.)
 
 Детекция «сильная»: несколько наборов параметров, поиск на 1x/1.5x/2x (мелкий
@@ -30,13 +30,13 @@ import numpy as np
 MARKER_SIZE_M = 0.038
 MARKER_DICT = "DICT_4X4_50"
 MARKER_ID = {False: 0, True: 1}          # правая 0, левая 1
-# Точка захвата в системе МАРКЕРА, мм. Откалибровано на роботе по трём позам:
-# цепь IK теперь идёт до точки захвата (L2=330 от локтя), и эталон — FK.
-# Маркер наклеен печатным +Y в сторону губок; от центра маркера до губок
-# 155 мм, плюс 33 мм под плоскость маркера. Разброс замеров был ±8 мм.
-GRASP_FROM_MARKER_MM = np.array([10.0, 155.0, -33.0])
+# Точка захвата в системе МАРКЕРА, мм. Откалибровано ФИЗИЧЕСКИ
+# (marker_calibrate: рука телеопом над объектом, клик по объекту между
+# губками), а не по FK — поэтому не наследует ошибку кинематики.
+GRASP_FROM_MARKER_MM = np.array([0.0, 69.0, 36.0])
 # Порог ошибки репроекции позы, px: хуже — считаем детекцию ненадёжной.
-MAX_REPROJ_PX = 2.0
+MAX_REPROJ_PX = 3.0          # px: поза с наклоном даёт 2-3 px — не бракуем
+CLAHE_CLIP = 2.0             # контраст для повторной попытки на тусклом кадре
 MIN_MARKER_PX = 16                       # меньше — на таком размере поза мусор
 
 _DICT = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, MARKER_DICT))
@@ -97,33 +97,15 @@ def _solve(corners_px: np.ndarray, P: np.ndarray):
     return rvec.reshape(3), tvec.reshape(3), err
 
 
-def detect(frame: np.ndarray, K: np.ndarray, D: np.ndarray,
-           Rrect: np.ndarray, P: np.ndarray,
-           ids: Optional[Tuple[int, ...]] = None,
-           roi: Optional[Tuple[int, int, int, int]] = None) -> Dict[int, dict]:
-    """Найти маркеры кисти. {id: {center, rvec, tvec, corners, reproj}}.
+def _scan(gray: np.ndarray, want: set, K, D, Rrect, P,
+          ox: int = 0, oy: int = 0) -> Dict[int, dict]:
+    """Один проход детектора по серому кадру (без повторов/CLAHE).
 
-    ids — какие ID вообще интересуют (по умолчанию оба, 0 и 1).
-    Кадр может быть цветным или серым; углы переводятся в выпрямленную
-    систему своего глаза (undistortPoints с Rrect/P), поза решается по P.
-    roi — (x0, y0, x1, y1) в пикселях кадра: искать только в этом окне (в
-    ~50 раз быстрее для слежения за маркером при спуске).
+    ox/oy — сдвиг ROI: undistortPoints ждёт КООРДИНАТЫ ПОЛНОГО КАДРА, поэтому
+    сдвиг добавляем до неё, а не после.
     """
-    gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    want = set(MARKER_ID.values()) if ids is None else set(ids)
     best: Dict[int, dict] = {}
-    ox, oy = 0, 0
-    if roi is not None:
-        x0, y0, x1, y1 = [int(v) for v in roi]
-        x0, y0 = max(0, x0), max(0, y0)
-        x1, y1 = min(gray.shape[1], x1), min(gray.shape[0], y1)
-        if x1 - x0 < 24 or y1 - y0 < 24:
-            return best
-        ox, oy = x0, y0
-        gray = gray[y0:y1, x0:x1]
-    # масштабы: 1x, 1.5x (если кадр большой), 2x — для далёкого/мелкого маркера
-    scales = [1.0, 2.0] if roi is not None else (
-        [1.0, 1.5, 2.0] if gray.size <= 1280 * 720 * 1.1 else [1.0])
+    scales = [1.0, 1.5, 2.0] if gray.size <= 1280 * 720 * 1.1 else [1.0]
     for scale in scales:
         img = gray if scale == 1.0 else cv2.resize(
             gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
@@ -158,13 +140,34 @@ def detect(frame: np.ndarray, K: np.ndarray, D: np.ndarray,
     return best
 
 
-def _area(pts: np.ndarray) -> float:
-    return float(abs(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32))))
+def detect(frame: np.ndarray, K: np.ndarray, D: np.ndarray,
+           Rrect: np.ndarray, P: np.ndarray,
+           ids: Optional[Tuple[int, ...]] = None,
+           roi: Optional[Tuple[int, int, int, int]] = None) -> Dict[int, dict]:
+    """Найти маркеры кисти. {id: {center, rvec, tvec, corners, reproj}}.
 
+    ids — какие ID вообще интересуют (по умолчанию оба, 0 и 1).
+    Кадр может быть цветным или серым; углы переводятся в выпрямленную
+    систему своего глаза (undistortPoints с Rrect/P), поза решается по P.
+    roi — (x0, y0, x1, y1) в пикселях кадра: искать только в этом окне (в
+    ~50 раз быстрее для слежения за маркером при спуске).
 
-def grasp_from_marker(marker: dict) -> Tuple[np.ndarray, np.ndarray]:
-    """(точка захвата, м, система камеры с Y ВВЕРХ; центр маркера, м, так же)."""
-    R, _ = cv2.Rodrigues(np.asarray(marker["rvec"], float))
-    t = np.asarray(marker["tvec"], float).reshape(3)
-    g = t + R @ (GRASP_FROM_MARKER_MM / 1000.0)
-    return np.array([g[0], -g[1], g[2]]), np.array([t[0], -t[1], t[2]])
+    Если по исходному кадру ничего не нашлось — повтор на CLAHE-выровненном
+    (на тусклом кадре адаптивный порог не выделяет чёрный квадрат).
+    """
+    gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    want = set(MARKER_ID.values()) if ids is None else set(ids)
+    ox, oy = 0, 0
+    if roi is not None:
+        x0, y0, x1, y1 = [int(v) for v in roi]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(gray.shape[1], x1), min(gray.shape[0], y1)
+        if x1 - x0 < 24 or y1 - y0 < 24:
+            return {}
+        ox, oy = x0, y0
+        gray = gray[y0:y1, x0:x1]
+    best = _scan(gray, want, K, D, Rrect, P, ox, oy)
+    if best:
+        return best
+    gray = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=(8, 8)).apply(gray)
+    return _scan(gray, want, K, D, Rrect, P, ox, oy)
