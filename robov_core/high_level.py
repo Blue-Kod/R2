@@ -604,6 +604,8 @@ ELBOW_CLEAR = 100
 ELBOW_TUCK = 10
 # ниже этого угла локтя считаем, что рука в «согнутом» состоянии (ready-подобном)
 FOLDED_THRESHOLD = 115
+# Ближе этого по всем трём каналам — рука уже в позе, команд ей не шлём.
+POSE_TOL_DEG = 2.0
 
 
 def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
@@ -623,13 +625,26 @@ def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
     state = dict(state or {})                   # что считаем текущим
     steps = []
 
+    # Рука, которая уже в целевой позе (в пределах POSE_TOL_DEG по всем трём
+    # каналам), не получает ни одной команды: датчиков нет, лишняя команда —
+    # лишний рывок. Возвращаем ещё и set её каналов.
+    done = set()
+    for chans in arm_kinematics.ARM_CHANNELS.values():
+        if all(ch in state and abs(state[ch] - dst[ch]) <= POSE_TOL_DEG
+               for ch in chans.values()):
+            done.update(chans.values())
+
     def emit(updates: Dict[int, int]) -> None:
-        delta = {ch: v for ch, v in updates.items() if state.get(ch) != v}
+        delta = {ch: v for ch, v in updates.items()
+                 if ch not in done
+                 and abs(state.get(ch, -10 ** 6) - v) > POSE_TOL_DEG}
         if delta:
             state.update(delta)
             steps.append(delta)
 
-    folded = state.get(6, 999) < FOLDED_THRESHOLD    # локти сейчас согнуты
+    # «согнута» — любая из рук, которую ещё будем двигать
+    folded = any(state.get(ch, 999) < FOLDED_THRESHOLD
+                 for ch in (6, 7) if ch not in done)
     if dst_name == "rest" and folded:
         # из согнутого состояния (ready или «изменённая ready») в rest:
         emit({6: ELBOW_TUCK, 7: ELBOW_TUCK})         # поджать в тесноте
@@ -644,7 +659,7 @@ def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
         emit({4: dst[4], 5: dst[5]})
         emit({6: dst[6], 7: dst[7]})
         emit({1: dst[1], 2: dst[2]})                 # плечо в требуемое
-    return steps
+    return steps, done
 
 
 def pose(name: str = POSE_DEFAULT) -> dict:
@@ -655,6 +670,8 @@ def pose(name: str = POSE_DEFAULT) -> dict:
     локти согнуты) — значения сняты с робота. Меняются только каналы рук:
     голова, захваты и колёса остаются как были.
     Захваты не трогаются: их ставят grab/release.
+    Рука, которая уже стоит в этой позе (в пределах POSE_TOL_DEG), команд не
+    получает — в результате она в списке skipped.
     """
     commands = POSES.get(name)
     if commands is None:
@@ -670,7 +687,7 @@ def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
     # определяется по углам, а не по имени последней позы.
     state = ({ch: int(servo.current_angles.get(ch, 90)) for ch in ARM_CHANNELS_POSE}
              if servo is not None else None)
-    steps = _pose_steps(state, name)          # переходы работают всегда
+    steps, done = _pose_steps(state, name)    # переходы работают всегда
     sent = {}
     arrived = True
     with _arm_slow(MOVE_SPEED_DEG):          # поза ставится медленно, без рывка
@@ -679,7 +696,10 @@ def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
                 if set_servo_command(channel, int(angle)):
                     sent[channel] = int(angle)
             arrived = _wait_motion() and arrived   # доводим ступень до конца
-    return {"ok": bool(sent), "pose": name, "servo": sent, "arrived": arrived}
+    skipped = [side for side, chans in arm_kinematics.ARM_CHANNELS.items()
+               if all(ch in done for ch in chans.values())]
+    return {"ok": servo is not None, "pose": name, "servo": sent,
+            "arrived": arrived, "skipped": skipped}
 
 
 def _move_to(point: Vector3, left: bool = False) -> dict:
