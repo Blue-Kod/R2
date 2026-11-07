@@ -7,7 +7,7 @@
 Правая рука — последовательная серийная цепь из трёх вращательных
 соединений (по аналогии с UR-манипулятором):
 
-    база ──[ч1]──/плечо L1=330мм/──[ч4]──/предплечье L2=220мм/──[ч6]── кисть
+    база ──[ч1]──/плечо L1=330мм/──[ч4]──/локоть→точка захвата L2=330мм/──[ч6]── губки
 
       ч1 : shoulder_x  — ОСЬ X в системе координат базы.
       ч4 : shoulder_z  — ось вращения НЕ жёстко Z: это следующее (серверное)
@@ -101,7 +101,7 @@ from robov_core.servo import DEFAULT_COMMAND_LIMITS, REST_POSE, START_POSE
 
 BASE_X = 115.0
 L1 = 330.0
-L2 = 220.0
+L2 = 330.0
 
 HEAD = np.array([0.0, 100.0, 0.0])
 # Замер владельца: камера стоит на (0, +100, +60) мм от центра вращения головы,
@@ -144,9 +144,12 @@ def _left_target_x(x: float) -> float:
 # вниз (в зоне захвата кисть почти не вращается, finger_down 0.68..0.93).
 # Замеряется один раз на робота и лежит в config.json: "tool_mm": {...}
 # По умолчанию точка захвата — между губок, на 30 мм ниже конца цепи.
+# Конец цепи уже совпадает с точкой захвата (L2 = 330 до губок), поэтому
+# смещение нулевое. Раньше здесь было −30 при L2=220: остальные 80 мм «висели»
+# в body-смещении и врали при наклоне кисти — из-за этого IK целился мимо.
 TOOL_MM: Dict[str, np.ndarray] = {
-    "right": np.array([0.0, -30.0, 0.0]),
-    "left": np.array([0.0, -30.0, 0.0]),
+    "right": np.array([0.0, 0.0, 0.0]),
+    "left": np.array([0.0, 0.0, 0.0]),
 }
 
 
@@ -414,7 +417,9 @@ def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
     error = np.linalg.norm(positions - target, axis=-1)
     below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
     error = error + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
-    error = error + _crane_lift_bias(elbow[..., 1], positions[..., 1])
+    # Кран-байас здесь НЕ применяем: на уточнении он уводил локальный поиск с
+    # точной ветки на «кран» (пример: цель на 19 мм от сетки уточнялась до 74).
+    # Ветку выбирает финальный score, а уточнение должно идти по ошибке.
     index = int(np.argmin(error))
     i1, i2, i3 = np.unravel_index(index, error.shape)
     theta = (float(ranges[0][i1]), float(ranges[1][i2]), float(ranges[2][i3]))
@@ -507,7 +512,9 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
                                        in zip(weights, theta, start)), 100.0)
             return total
         f = fk(theta, left)
-        total += float(_crane_lift_bias(f["E"][1], f["EE"][1]))
+        # Ограничиваем байас 30 мм: иначе точная НЕкран-ветка (0.2 мм) проигрывала
+        # неточной кран-ветке (38 мм), потому что байас считался только у точных.
+        total += min(30.0, float(_crane_lift_bias(f["E"][1], f["EE"][1])))
         if start is not None:
             weights = (1.0, 0.5, 0.25)
             angle_cost = sum(w * (a - b) ** 2
