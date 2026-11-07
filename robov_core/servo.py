@@ -127,6 +127,14 @@ DEFAULT_COMMAND_LIMITS.update({0: (45, 135), 3: (45, 135),
 # Профиль движения (трапеция скорости): разгон, постоянная скорость,
 # торможение. Единый для всех каналов.
 # ----------------------------------------------------------------------
+# Частота ШИМ PCA9685. На 50 Гц один отсчёт = 4.88 мкс ≈ 3° — медленное
+# движение идёт ступеньками по 3° (те самые «рывки»). 196.8 Гц = 25 МГц /
+# (4096 * 31): предделитель 31 ровно, один отсчёт 1.24 мкс ≈ 0.77°, вчетверо
+# мельче. Цифровые сервы держат 200–333 Гц; если серва загудит/греется —
+# верни 50. Импульсы (мкс) не меняются, перекалибровка не нужна.
+PWM_FREQ_HZ: float = 196.8
+PULSE_US_PER_COUNT_50HZ: float = 20000.0 / 4096.0
+
 MOVE_TICK: float = 0.01        # период управления, с (100 Гц)
 MOVE_MAX_SPEED: float = 300.0  # крейсерская скорость, град/с
 MOVE_ACCEL: float = 1000.0     # разгон/торможение, град/с^2
@@ -189,7 +197,7 @@ class ServoController:
         self,
         bus: int = 0,
         address: int = 0x40,
-        freq: int = 50,
+        freq: float = PWM_FREQ_HZ,
         simulation: bool = False,
     ) -> None:
         self.bus: int = bus
@@ -472,15 +480,20 @@ class ServoController:
     # Преобразование угла в импульс
     # ------------------------------------------------------------------
     def angle_to_pulse(self, angle: float, channel: int) -> int:
+        """Угол -> отсчёты PCA9685 для текущей частоты.
+
+        В конфигах каналов min_pulse/max_pulse исторически хранятся как отсчёты
+        при 50 Гц (102..540). Переводим их в микросекунды и только потом в
+        отсчёты текущей частоты, поэтому частота ШИМ свободна, а импульс
+        (и положение сервы) не меняется.
+        """
         if channel not in self.channel_configs:
             raise ServoError(f"Канал {channel} не сконфигурирован")
         min_angle, max_angle, min_pulse, max_pulse = self.channel_configs[channel]
-        if angle < min_angle:
-            angle = min_angle
-        if angle > max_angle:
-            angle = max_angle
-        pulse = min_pulse + (max_pulse - min_pulse) * (angle - min_angle) / (max_angle - min_angle)
-        return int(pulse)
+        angle = max(min_angle, min(max_angle, angle))
+        pulse_us = (min_pulse + (max_pulse - min_pulse) * (angle - min_angle)
+                    / (max_angle - min_angle)) * PULSE_US_PER_COUNT_50HZ
+        return int(round(pulse_us * self.freq * 4096.0 / 1e6))
 
     # ------------------------------------------------------------------
     # Управление сервоприводом
@@ -652,19 +665,21 @@ class ServoController:
             position = float(current) + step
             position = float(max(command_min, min(command_max, position)))
 
+        # Без округления до целых градусов: иначе к кванту 0.77° добавляется
+        # ещё 1°, и плавность снова теряется.
         self._set_servo_immediate(
-            channel, self._physical_command(channel, int(round(position))))
+            channel, self._physical_command(channel, position))
         with self.lock:
             self._move_positions[channel] = position
             self._move_velocities[channel] = velocity
 
-    def _physical_command(self, channel: int, command: int) -> int:
+    def _physical_command(self, channel: int, command: float) -> float:
         offset = self.offsets.get(channel, 0)
         command_min, command_max = self.command_limits[channel]
-        adjusted = command + int(round(offset))
-        logical = int(max(command_min, min(command_max, adjusted)))
+        adjusted = float(command) + float(offset)
+        logical = max(float(command_min), min(float(command_max), adjusted))
         if channel in self.inverted_channels:
-            return (command_min + command_max) - logical
+            return float(command_min + command_max) - logical
         return logical
 
     def _set_servo_immediate(self, channel: int, physical_angle: float, command_angle: Optional[int] = None) -> bool:

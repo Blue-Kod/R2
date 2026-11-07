@@ -728,6 +728,9 @@ def _arm_slow(deg_per_s: float = MOVE_SPEED_DEG):
     try:
         yield
     finally:
+        # Лимит снимаем ПОСЛЕ приезда: иначе mover на остатке пути разгоняется
+        # до 300 °/с — спуск шёл «бросками» (рывок, пауза, рывок).
+        servo.wait_idle(MOVE_TIMEOUT)
         servo.set_speed_limit(ARM_CHANNELS_POSE, None)
 
 
