@@ -1046,44 +1046,71 @@ def _grasp_point(x: float, y: float, left: bool = False) -> dict:
             "samples": len(pts), "anchor": anchor}
 
 
-def _correct_cmd(want: Vector3, cmd: Vector3, left: bool = False):
-    """Одна поправка команды по маркеру: (новый cmd, ошибка м | None).
+def _correct_cmd(want: Vector3, cmd: Vector3, current: Vector3,
+                 left: bool = False):
+    """Поправка команды по маркеру: (новый cmd, ошибка модели, остаток до цели).
 
-    want — куда ДОЛЖНЫ попасть губки (точка объекта + боковое смещение),
-    cmd — куда ведём руку сейчас. Ошибка = реальные губки − want; двигаем
-    команду, а не цель, иначе ошибка не убывает. Рост поправки ограничен
-    MAX_CORR_M, чтобы сбойная детекция не увела руку в сторону.
+    Ошибка модели = реальные губки − КОМАНДА (не цель!): на диагональном заходе
+    рука ещё не над объектом, и сравнение с целью принимало бы путь за ошибку.
+    Модель почти постоянна, поэтому сдвигаем цель на неё же; остаток до цели
+    (факт − want) — для диагностики.
     """
     grasp = _marker_grasp(left)
     if grasp is None:
-        return cmd, None
-    ex, ez = grasp.x - want.x, grasp.z - want.z
-    dx = cmd.x - want.x - ex * DESCENT_GAIN
-    dz = cmd.z - want.z - ez * DESCENT_GAIN
+        return cmd, None, None
+    ex, ez = grasp.x - current.x, grasp.z - current.z
+    model = float(np.hypot(ex, ez))
+    residual = float(np.hypot(grasp.x - want.x, grasp.z - want.z))
+    # Сдвиг цели — сходимся к «команда = цель − ошибка модели»:
+    # dx += g·(−ex − dx), иначе при постоянной ошибке поправка копится без предела.
+    dx = (cmd.x - want.x) + DESCENT_GAIN * (-ex - (cmd.x - want.x))
+    dz = (cmd.z - want.z) + DESCENT_GAIN * (-ez - (cmd.z - want.z))
     dx = max(-MAX_CORR_M, min(MAX_CORR_M, dx))
     dz = max(-MAX_CORR_M, min(MAX_CORR_M, dz))
-    return Vector3(want.x + dx, want.y, want.z + dz), float(np.hypot(ex, ez))
+    return Vector3(want.x + dx, want.y, want.z + dz), model, residual
 
 
-def _approach_height(point: Vector3, left: bool = False) -> float:
-    """Максимальная высота НАД объектом, до которой рука реально достаёт.
+def _dist(a: Vector3, b: Vector3) -> float:
+    return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2) ** 0.5
 
-    «30 см над объектом» — идеал; у края рабочей зоны (близко/низко/по центру)
-    рука туда не дотягивается, и IK отдаёт ближайшую точку в стороне. Тогда
-    заход получается сбоку и объект сбивается. Ищем самую высокую точку с ТЕМИ
-    ЖЕ x/z, которая достижима с ошибкой ≤ 5 мм, и спускаемся от неё.
+
+def _reachable_at(point: Vector3, left: bool = False,
+                  tol: float = 0.008) -> bool:
+    """Достижима ли ТОЧКА (м, корпус) с ошибкой не больше tol."""
+    ee = _ee_target(point, left)
+    base, _ = _reachable(ee, left)
+    return base is not None and _dist(base, ee) <= tol
+
+
+def _approach_point(point: Vector3, left: bool = False,
+                    distance: float = APPROACH_UP) -> Vector3:
+    """Точка старта захода: НЕ БЛИЖЕ `distance` от объекта, лучше сверху.
+
+    Строго вертикально рука поднимается невысоко (предплечье 220, плечо 330),
+    поэтому перебираем наклон от вертикали в свою сторону (правая — вправо,
+    левая — влево) и к корпусу, пока точка на нужной дистанции не станет
+    достижимой: телеоп такие точки берёт, значит они реальны.
     """
-    y = point.y + APPROACH_UP
+    side = 1.0 if not left else -1.0
+    for dist in (distance, distance * 0.8, max(0.10, distance * 0.5)):
+        for tilt in (0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0):
+            t = np.radians(tilt)
+            for az in (90.0, 60.0, 120.0, 0.0, 180.0):   # своя сторона, потом к корпусу
+                a = np.radians(az)
+                d = np.array([np.sin(t) * np.sin(a) * side,
+                              np.cos(t),
+                              -np.sin(t) * np.cos(a)]) * dist
+                cand = Vector3(point.x + float(d[0]), point.y + float(d[1]),
+                               point.z + float(d[2]))
+                if _reachable_at(cand, left):
+                    return cand
+    y = point.y + distance                  # крайний случай: сколько достанем вверх
     while y > point.y + 0.02:
-        ee = _ee_target(Vector3(point.x, y, point.z), left)
-        base, _ = _reachable(ee, left)
-        if base is not None:
-            gap = ((base.x - ee.x) ** 2 + (base.y - ee.y) ** 2
-                   + (base.z - ee.z) ** 2) ** 0.5
-            if gap <= 0.005:
-                return y
-        y -= 0.04
-    return point.y + 0.02
+        cand = Vector3(point.x, y, point.z)
+        if _reachable_at(cand, left):
+            return cand
+        y -= 0.02
+    return Vector3(point.x, point.y + 0.02, point.z)
 
 
 def _approach(point: Vector3, left: bool = False,
@@ -1103,37 +1130,50 @@ def _approach(point: Vector3, left: bool = False,
         if lateral else 0.0
     want = Vector3(point.x + side, point.y, point.z)   # куда должны попасть губки
     cmd = Vector3(want.x, want.y, want.z)              # куда ведём руку (с поправкой)
-    # Заход строго сверху: выше 30 см рука у края зоны не достаёт, поэтому
-    # берём максимально достижимую высоту над этой же точкой.
-    current = Vector3(cmd.x, _approach_height(want, left), cmd.z)
+    # Старт захода — не ближе APPROACH_UP от объекта, сверху или сверху-сбоку
+    # (строго вертикально рука поднимается невысоко).
+    current = _approach_point(want, left)
+    start_point = current
     with _arm_slow(MOVE_SPEED_DEG):
         result = _move_to(_ee_target(current, left), left)
         _wait_motion()
     corrections = 0
     seen = 0
-    while current.y > want.y + 1e-6:
-        current = Vector3(cmd.x, max(want.y, current.y - DESCENT_STEP_M), cmd.z)
+    for _ in range(40):                    # спуск к точке по прямой шагами
+        dx, dy, dz = cmd.x - current.x, cmd.y - current.y, cmd.z - current.z
+        left_len = float(np.sqrt(dx * dx + dy * dy + dz * dz))
+        if left_len <= 1e-6:
+            break
+        k = min(1.0, DESCENT_STEP_M / left_len)
+        current = Vector3(current.x + dx * k, current.y + dy * k,
+                          current.z + dz * k)
         with _arm_slow(DESCENT_SPEED_DEG):
             result = _move_to(_ee_target(current, left), left)
         _wait_motion()                     # меряем уже стоящую руку
         time.sleep(DESCENT_DT)             # и кадр — после остановки (13 fps)
         if align:
-            cmd, error = _correct_cmd(want, cmd, left)
-            if error is not None:
+            new_cmd, model, residual = _correct_cmd(want, cmd, current, left)
+            if model is not None:
                 seen += 1
-                corrections += int(error > ALIGN_TOL_M)
+                # поправка считается, только если цель реально сдвинулась
+                corrections += int(_dist(new_cmd, cmd) > 0.001)
+            cmd = new_cmd
+    residual = None
     if align:                              # внизу — последняя поправка, только XY
-        cmd, error = _correct_cmd(want, cmd, left)
-        if error is not None:
+        cmd, model, residual = _correct_cmd(want, cmd, current, left)
+        if model is not None:
             seen += 1
-            if error > ALIGN_TOL_M:
+            if model > ALIGN_TOL_M:
                 with _arm_slow(DESCENT_SPEED_DEG):
                     _move_to(_ee_target(cmd, left), left)
                     _wait_motion()
                 corrections += 1
     result["target"] = cmd
+    result["approach"] = start_point
     result["align"] = {"ok": seen > 0, "seen": seen,
                        "corrections": corrections,
+                       "residual_mm": None if residual is None
+                       else round(residual * 1000.0, 1),
                        "reason": "нет маркера" if seen == 0 else "ok"}
     return result
 
