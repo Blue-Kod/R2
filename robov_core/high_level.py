@@ -539,6 +539,9 @@ GRASP_WINDOW_UP = 100       # px: вверх от клика (объект об�
 GRASP_WINDOW_DOWN = 20      # px: вниз от клика
 GRASP_STEP = 12             # px: шаг сетки выборки
 GRASP_NEAR = 0.20           # м: точки дальше этого от клика — фон, не объект
+# Видимая поверхность объекта смещена к камере (виден бок, а не центр): тянем
+# точку захвата от камеры на долю размера силуэта. 0.25 ≈ половина радиуса.
+GRASP_DEEP = 0.25
 GRASP_MAX_SHIFT = 0.08      # м: дальше этого верх не уводит от клика (сосед)
 HAND_MASK_M = 0.09          # м: точки у своих губок (по маркеру) не считаем объектом
 # Заход чуть в сторону: неподвижный палец не должен задеть объект при спуске.
@@ -1019,9 +1022,17 @@ def _grasp_point(x: float, y: float, left: bool = False) -> dict:
                    - np.percentile([p.x for p in upper], 10))
     span_z = float(np.percentile([p.z for p in upper], 90)
                    - np.percentile([p.z for p in upper], 10))
+    size = max(span_x, span_z)
+    # От камеры к центру силуэта: видимая поверхность всегда ближе к камере,
+    # поэтому без этого губки наводятся на край и промахиваются.
+    ux, uz = gx, gz - arm_kinematics.HEAD_LENS_Z / 1000.0
+    norm = float(np.hypot(ux, uz))
+    if norm > 1e-3:
+        gx += ux / norm * GRASP_DEEP * size
+        gz += uz / norm * GRASP_DEEP * size
     dip = min(GRASP_DIP, max(0.0, top - bottom - GRASP_CLEAR))
     return {"ok": True, "point": Vector3(gx, top - dip, gz), "top": top,
-            "bottom": bottom, "size": max(span_x, span_z),
+            "bottom": bottom, "size": size,
             "samples": len(pts), "anchor": anchor}
 
 
