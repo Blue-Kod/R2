@@ -333,10 +333,11 @@ class StereoDepth:
         d = self.disp_point(left, right, x, y, eye, window)
         if not np.isfinite(d):
             return float("nan")
-        dref = d * (self.f_ref / self.f if self.f_ref > 0 else 1.0)
-        if self.K_emp is not None:
-            return float(float(self.K_emp) / max(dref + self.c_emp, 1e-3))
-        return float(self.f * self.baseline / max(dref, 1e-3))
+        # Чистая геометрия Z = f*B/d. Эмпирическая привязка (depth_K/c/f_ref)
+        # после пересборки калибровки давала +42% к дистанции: сравнение с PnP
+        # маркера 38 мм показало 0.273 м против 0.193 м. Отсюда и «берёт по Z
+        # дальше» у обеих рук.
+        return float(self.f * self.baseline / max(d, 1e-3))
 
     def point_at(self, left, right, x, y, eye="left", window=2) -> Vector3:
         """Точка пикселя в системе ПРАВОЙ камеры (опорная), м, по локальному замеру."""
@@ -398,11 +399,7 @@ class StereoDepth:
         if not (disp > 0.5).any():
             return np.full_like(disp, np.nan), disp
         dfill = self.fill(disp)
-        dref = dfill * (self.f_ref / self.f if self.f_ref > 0 else 1.0)
-        if self.K_emp is not None:
-            z = float(self.K_emp) / np.maximum(dref + self.c_emp, 1e-3)
-        else:
-            z = self.f * self.baseline / np.maximum(dfill, 1e-3)
+        z = self.f * self.baseline / np.maximum(dfill, 1e-3)   # Z = f*B/d
         return z.astype(np.float32), disp
 
     # -- чтение в центре кадра ----------------------------------------------
@@ -444,11 +441,8 @@ class StereoDepth:
         return float(np.median(p)) if p.size else float("nan")
 
     def disp_from_depth(self, z: float) -> float:
-        """Диспаратность (половинное разрешение), соответствующая глубине z, м."""
-        if self.K_emp is not None:
-            d = float(self.K_emp) / z - self.c_emp
-            return d * (self.f / self.f_ref) if self.f_ref > 0 else d
-        return self.f * self.baseline / z
+        """Диспаратность, соответствующая глубине z, м: d = f*B/z."""
+        return self.f * self.baseline / max(float(z), 1e-6)
 
     def depth_at(self, z: np.ndarray, x: float, y: float,
                  eye: str = "left", window: int = 2) -> float:

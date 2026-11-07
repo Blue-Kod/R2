@@ -706,6 +706,39 @@ def _pose_locked(name: str, commands: Dict[int, int],
             "arrived": arrived, "skipped": skipped}
 
 
+def _system_command(command: str) -> dict:
+    """Сначала rest, потом poweroff/reboot всей системы.
+
+    Порядок обязателен: питание снимается только с руками в rest (иначе сервы
+    отпускают руку там, где она стояла). Ждём приезда, даём сервам 0.3 с дожать
+    и только потом командуем systemd. Процесс не ждёт выключения — команда
+    уходит своей сессией, чтобы systemd не убил её вместе с сервисом.
+    """
+    with _motion_lock:
+        posed = pose("rest")
+    log(f"[{command}] pose(rest): {posed}")
+    print(f"[{command}] pose(rest): {posed}", flush=True)
+    time.sleep(0.3)                       # серве физически дожать
+    try:
+        subprocess.Popen(["systemctl", command], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ok = True
+    except OSError as exc:                # нет systemctl / нет прав
+        log(f"[{command}] ошибка: {exc}")
+        ok = False
+    return {"ok": ok, "command": command, "pose": posed}
+
+
+def poweroff() -> dict:
+    """Поставить руки в rest и выключить робота целиком (systemctl poweroff)."""
+    return _system_command("poweroff")
+
+
+def restart() -> dict:
+    """Поставить руки в rest и перезагрузить робота целиком (systemctl reboot)."""
+    return _system_command("reboot")
+
+
 def _move_to(point: Vector3, left: bool = False) -> dict:
     """Команда IK в точку (coords в метрах, IK в миллиметрах)."""
     return move_ik_detail(point.x * 1000.0, point.y * 1000.0,
