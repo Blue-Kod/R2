@@ -915,16 +915,17 @@ def _grasp_point(x: float, y: float, left: bool = False) -> dict:
 
     Возвращает {ok, point, top, bottom, size, samples, reason}. Ничего не двигает.
     """
-    eng, left, right, px, py = _depth_sample(x, y)
-    if left is None:
+    eng, left_img, right_img, px, py = _depth_sample(x, y)
+    if left_img is None:
         return {"ok": False, "reason": "нет стерео-кадра"}
     eye = _shown_eye()
-    h, w = left.shape[:2]
-    anchor = _p_to_body(eng.point_at(left, right, px, py, eye=eye), eng.baseline)
+    h, w = left_img.shape[:2]
+    anchor = _p_to_body(eng.point_at(left_img, right_img, px, py, eye=eye),
+                        eng.baseline)
     if anchor is None:                 # клик без глубины — тянемся по модели
         return {"ok": False, "reason": "нет глубины в точке клика"}
     # своя кисть в кадре (поднесена к объекту) — не путать её с объектом
-    hand = _marker_grasp(left)
+    hand = _marker_grasp(left)   # left — сторона руки, не кадр
     hand_r2 = HAND_MASK_M ** 2
     pts = []
     for dy in range(-GRASP_WINDOW_UP, GRASP_WINDOW_DOWN + 1, GRASP_STEP):
@@ -932,7 +933,7 @@ def _grasp_point(x: float, y: float, left: bool = False) -> dict:
             u, v = px + dx, py + dy
             if not (2 <= u < w - 2 and 2 <= v < h - 2):
                 continue
-            p = _p_to_body(eng.point_at(left, right, u, v, eye=eye),
+            p = _p_to_body(eng.point_at(left_img, right_img, u, v, eye=eye),
                            eng.baseline)
             if p is None:
                 continue
