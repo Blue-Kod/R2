@@ -1582,6 +1582,14 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
         _last_cmd_time.clear()
     result = ik_detail(x, y, z, left)
     result["moved"] = False
+    # Последний рубеж защиты: поза не должна входить в шар вокруг камеры.
+    if result.get("theta") is not None:
+        clear = arm_kinematics.head_clearance(result["theta"], left)
+        result["head_clearance_mm"] = round(clear, 1)
+        if clear < arm_kinematics.HEAD_SAFE_R:
+            result["message"] = (f"защита камеры: рука в {clear:.0f} мм от головы, "
+                                 f"нужно минимум {arm_kinematics.HEAD_SAFE_R:.0f}")
+            return result
     if _speed_ctx[0] == 0 and _servo is not None:
         # Прямой IK (панель/телеоп) — не на 300 °/с: ставим спокойную скорость.
         _servo.set_speed_limit(ARM_CHANNELS_POSE, IK_SPEED_DEG)

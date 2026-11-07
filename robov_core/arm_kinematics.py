@@ -121,6 +121,11 @@ ARM_CHANNELS = {
     "left": {"shoulder_z": 5, "shoulder_x": 2, "elbow_x": 7},
 }
 
+# --- Защита головы/камеры ---------------------------------------------------
+# Шар, в который не входит ни одно звено руки и ни одна точка кисти.
+HEAD_SAFE_C = np.array([0.0, 100.0, 30.0])   # мм: голова + объектив
+HEAD_SAFE_R = 120.0                          # мм: с запасом на звено и люфт
+
 IK_ERR_OK = 3.0
 IK_TOLERANCE_MM = 50.0
 
@@ -383,6 +388,31 @@ def _fk_grid_positions(t_sz: Sequence[float], t_sx: Sequence[float],
     return ee, elbow
 
 
+def _seg_dist(p, a, b):
+    """Векторно: расстояние от точки p до отрезка a-b (a,b: (...,3))."""
+    ab = np.asarray(b) - np.asarray(a)
+    ap = np.asarray(p) - np.asarray(a)
+    denom = np.sum(ab * ab, axis=-1)
+    t = np.clip(np.sum(ap * ab, axis=-1) / np.where(denom > 1e-9, denom, 1.0),
+                0.0, 1.0)
+    return np.linalg.norm(np.asarray(a) + ab * t[..., None] - p, axis=-1)
+
+
+def head_clearance_grid(elbow, ee, left: bool = False):
+    """Мин. расстояние (мм) от центра головы до звеньев руки, для сетки поз."""
+    shoulder = np.broadcast_to(base(left), np.shape(elbow))
+    d1 = _seg_dist(HEAD_SAFE_C, shoulder, elbow)
+    d2 = _seg_dist(HEAD_SAFE_C, elbow, ee)
+    d3 = np.linalg.norm(np.asarray(ee) - HEAD_SAFE_C, axis=-1)
+    return np.minimum(np.minimum(d1, d2), d3)
+
+
+def head_clearance(theta: Sequence[float], left: bool = False) -> float:
+    """Мин. расстояние (мм) от центра головы до звеньев руки в этой позе."""
+    f = fk(theta, left)
+    return float(head_clearance_grid(f["E"][None, :], f["EE"][None, :], left)[0])
+
+
 def _collides(theta: Sequence[float], left: bool = False) -> bool:
     """Попала ли какая-либо часть руки ниже плоскости стола."""
     f = fk(theta, left)
@@ -431,6 +461,8 @@ def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
     error = np.linalg.norm(positions - target, axis=-1)
     below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
     error = error + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
+    near_head = head_clearance_grid(elbow, positions, left) < HEAD_SAFE_R
+    error = error + np.where(near_head, TABLE_COLLISION_PENALTY, 0.0)
     # Кран-байас здесь НЕ применяем: на уточнении он уводил локальный поиск с
     # точной ветки на «кран» (пример: цель на 19 мм от сетки уточнялась до 74).
     # Ветку выбирает финальный score, а уточнение должно идти по ошибке.
@@ -480,6 +512,8 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
     errors = np.linalg.norm(positions - wanted, axis=-1)
     below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
     errors = errors + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
+    near_head = head_clearance_grid(elbow, positions, left) < HEAD_SAFE_R
+    errors = errors + np.where(near_head, TABLE_COLLISION_PENALTY, 0.0)
     # Стартовые бассейны сеются по ДВУМ ценам: чистой (коллайдер, без крана)
     # и кран-предпочтительной. Это гарантирует, что в старты попадут и
     # узкие натуральные бассейны, и кран-бассейны; ветку выбирает финальный
@@ -529,6 +563,9 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
         # Байас ограничен 30 мм (иначе точная ветка проигрывает неточной) и
         # зависит от выбранного направления: сверху — высокий локоть, снизу —
         # низкий.
+        if float(head_clearance_grid(f["E"][None, :], f["EE"][None, :],
+                                     left)[0]) < HEAD_SAFE_R:
+            total += TABLE_COLLISION_PENALTY      # поза лезет в камеру
         lift = float(f["E"][1] - f["EE"][1])
         if IK_BRANCH == "bottom":
             total += min(30.0, 5.0 * max(0.0, lift - TABLE_CRANE_LIFT))
