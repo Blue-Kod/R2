@@ -25,7 +25,8 @@ from robov_core.high_level import (
     get_servo_angles, get_servo_positions, get_servo_limits,
     get_stereo_camera, health_snapshot, ip_address,
     get_logs, robot_config,
-    set_servo_command, ik_detail, move_ik_detail, log, cleanup, servo_toggle,
+    set_servo_command, ik_detail, move_ik_detail, set_ik_branch, log, cleanup,
+    servo_toggle,
     get_servo_calibration, set_servo_calibration, reset_servo_calibration,
     reinit_servo_bus,
 )
@@ -775,6 +776,15 @@ def create_app() -> Flask:
         if point is None:
             return jsonify({"error": "x, y and z must be numbers"}), 400
         return jsonify(ik_detail(*point, left=left))
+
+    @app.route("/api/ik/branch", methods=["POST"])
+    @require_auth
+    def api_ik_branch():
+        data = request.get_json(silent=True) or {}
+        try:
+            return jsonify({"branch": set_ik_branch(data.get("branch"))})
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     @app.route("/api/ik/move", methods=["POST"])
     @require_auth

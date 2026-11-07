@@ -238,6 +238,20 @@ TABLE_COLLISION_PENALTY = 1e6
 # TABLE_CRANE_LIFT — целевой «лифт» elbow_y − ee_y (мм); за каждый мм
 # недобора добавляется TABLE_CRANE_WEIGHT мм-ошибки (до BIAS_MAX).
 TABLE_CRANE_LIFT = 150.0
+# Предпочитаемая ветка IK: "top" — локоть высоко (кран), "bottom" — низко
+# (натуральная). Меняется на лету из панели (set_branch).
+IK_BRANCH = "top"
+IK_BRANCHES = ("top", "bottom")
+
+
+def set_branch(name: str) -> str:
+    """Выбрать предпочитаемую ветку: "top" (сверху) или "bottom" (снизу)."""
+    global IK_BRANCH
+    name = str(name or "top").lower()
+    if name not in IK_BRANCHES:
+        raise ValueError(f"ветка должна быть одна из {IK_BRANCHES}, а не {name!r}")
+    IK_BRANCH = name
+    return IK_BRANCH
 TABLE_CRANE_WEIGHT = 5.0
 TABLE_CRANE_BIAS_MAX = 1e6
 
@@ -512,9 +526,14 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
                                        in zip(weights, theta, start)), 100.0)
             return total
         f = fk(theta, left)
-        # Ограничиваем байас 30 мм: иначе точная НЕкран-ветка (0.2 мм) проигрывала
-        # неточной кран-ветке (38 мм), потому что байас считался только у точных.
-        total += min(30.0, float(_crane_lift_bias(f["E"][1], f["EE"][1])))
+        # Байас ограничен 30 мм (иначе точная ветка проигрывает неточной) и
+        # зависит от выбранного направления: сверху — высокий локоть, снизу —
+        # низкий.
+        lift = float(f["E"][1] - f["EE"][1])
+        if IK_BRANCH == "bottom":
+            total += min(30.0, 5.0 * max(0.0, lift - TABLE_CRANE_LIFT))
+        else:
+            total += min(30.0, 5.0 * max(0.0, TABLE_CRANE_LIFT - lift))
         if start is not None:
             weights = (1.0, 0.5, 0.25)
             angle_cost = sum(w * (a - b) ** 2
@@ -544,6 +563,7 @@ def browser_config() -> dict:
     """Конфиг для браузера: только базовые параметры для ориентации,
     никакой локальной FK-кинематики в браузере больше нет."""
     return {
+        "branch": IK_BRANCH,
         "base_x": BASE_X,
         "l1": L1,
         "l2": L2,

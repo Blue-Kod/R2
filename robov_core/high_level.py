@@ -560,6 +560,8 @@ ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захв�
 # ждёт, пока первый доведёт руку до конца (иначе IK-цели перебивают друг друга).
 _motion_lock = threading.RLock()
 MOVE_SPEED_DEG = 60.0       # град/с: переезды руки в задачах захвата
+IK_SPEED_DEG = 40.0         # град/с: обычный IK (панель, телеоп) — было 300
+_speed_ctx = [0]            # >0 — скорость задаёт _arm_slow, IK её не трогает
 DESCENT_SPEED_DEG = 30.0    # град/с: заход к объекту сверху — вдвое медленнее
 POSE_SPEED_DEG = 90.0       # град/с: переезд в именованную позу (mover до 300)
 
@@ -773,9 +775,11 @@ def _arm_slow(deg_per_s: float = MOVE_SPEED_DEG):
         yield
         return
     servo.set_speed_limit(ARM_CHANNELS_POSE, deg_per_s)
+    _speed_ctx[0] += 1
     try:
         yield
     finally:
+        _speed_ctx[0] -= 1
         # Лимит снимаем ПОСЛЕ приезда: иначе mover на остатке пути разгоняется
         # до 300 °/с — спуск шёл «бросками» (рывок, пауза, рывок).
         servo.wait_idle(MOVE_TIMEOUT)
@@ -869,6 +873,12 @@ def marker_calibrate(x: float, y: float, left: bool = False) -> dict:
     R = cv2.Rodrigues(np.asarray(marker["rvec"], float))[0]
     t = np.asarray(marker["tvec"], float).reshape(3)
     v = 1000.0 * (R.T @ (P - t))
+    if float(np.linalg.norm(v)) < 40.0:
+        return {"ok": False,
+                "reason": ("точка попала в губки/маркер: |v| < 40 мм, а губки "
+                           "не могут быть у центра маркера — кликни ОБЪЕКТ "
+                           "между губками"),
+                "v_mm": [round(float(x), 1) for x in v], "point": body}
     return {"ok": True, "v_mm": [round(float(x), 1) for x in v],
             "now_mm": [round(float(x), 1) for x in gripper_marker.GRASP_FROM_MARKER_MM],
             "point": body}
@@ -1355,6 +1365,11 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
     return result
 
 
+def set_ik_branch(name: str) -> str:
+    """Предпочитаемая ветка IK: "top" (сверху) или "bottom" (снизу)."""
+    return arm_kinematics.set_branch(name)
+
+
 def robot_config() -> dict:
     """Единый конфиг робота (серво + кинематика) для API и фронтенда.
 
@@ -1567,6 +1582,9 @@ def move_ik_detail(x: float, y: float, z: float, left: bool = False) -> dict:
         _last_cmd_time.clear()
     result = ik_detail(x, y, z, left)
     result["moved"] = False
+    if _speed_ctx[0] == 0 and _servo is not None:
+        # Прямой IK (панель/телеоп) — не на 300 °/с: ставим спокойную скорость.
+        _servo.set_speed_limit(ARM_CHANNELS_POSE, IK_SPEED_DEG)
     if not result["servo"]:
         return result
     limited = _rate_limit_commands(result["servo"])

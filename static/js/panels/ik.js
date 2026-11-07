@@ -32,6 +32,17 @@ export const ikPanel = {
         },
       }), text);
 
+    // Ветка IK: сверху (локоть высоко) или снизу (натуральная).
+    const branchName = `ik-branch-${Math.random().toString(36).slice(2)}`;
+    const branchRadio = (text, val) => h('label', { class: 'flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[12px] text-muted-foreground has-[:checked]:border-primary/40 has-[:checked]:text-foreground' },
+      h('input', {
+        type: 'radio', name: branchName, value: val, class: 'accent-primary',
+        checked: (ctx.boot.ik_config?.branch ?? 'top') === val,
+        onchange: () => api.setIkBranch(val).catch((err) => { status.textContent = `Ветка: ${err.message}`; }),
+      }), text);
+    const branchRow = h('div', { class: 'flex items-center gap-2' },
+      microLabel('Ветка'), branchRadio('СВЕРХУ', 'top'), branchRadio('СНИЗУ', 'bottom'));
+
     const status = h('div', { class: 'min-h-[34px] overflow-y-auto text-[11px] leading-relaxed text-muted-foreground' });
     const btn = button({ label: 'Вычислить IK и переместить', className: 'w-full', onClick: () => run() });
 
@@ -56,6 +67,7 @@ export const ikPanel = {
       h('div', { class: 'flex items-center gap-2' }, icon('arm', 'size-4 text-muted-foreground'), h('span', { class: 'text-[13px] font-medium', text: 'Обратная кинематика' })),
       h('div', { class: 'flex gap-2' }, armRadio('ЛЕВАЯ', 'left'), armRadio('ПРАВАЯ', 'right')),
       h('div', { class: 'grid grid-cols-3 gap-2' }, fx.node, fy.node, fz.node),
+      branchRow,
       btn,
       status,
       h('p', { class: 'text-[11px] leading-relaxed text-muted-foreground/70', text: 'Система координат камеры: X вправо, Y вверх, Z вперёд.' }),

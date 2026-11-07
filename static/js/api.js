@@ -57,6 +57,7 @@ export const api = {
   servoPower: (enabled) => request('POST', '/api/servo/power', { body: { enabled } }),
 
   ikMove: (x, y, z, left) => request('POST', '/api/ik/move', { body: { x, y, z, left } }),
+  setIkBranch: (branch) => request('POST', '/api/ik/branch', { body: { branch } }),
 
   pythonExec: (code) => request('POST', '/api/python/exec', { body: { code } }),
   pythonNames: () => request('GET', '/api/python/names'),
