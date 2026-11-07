@@ -476,26 +476,30 @@ def get_remote_head_commit_info(owner, repo, branch='main'):
         log_message(f"[!] Error getting commit info: {e}")
         return None, None
 
-def is_repo_up_to_date(target_dir):
+def repo_commit_state(target_dir):
+    """(local, remote, up_to_date) — ровно то, что сравнивает обновление.
+
+    local — sha из .last_commit (что лежит на роботе), remote — HEAD ветки main
+    на GitHub. Оба печатаются в лог, чтобы было видно, какие коммиты сравнились.
+    """
     last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
-    if not os.path.exists(last_commit_path):
-        return False
-    try:
-        with open(last_commit_path, 'r') as f:
-            local_sha = f.read().strip()
-    except:
-        return False
+    local_sha = None
+    if os.path.exists(last_commit_path):
+        try:
+            with open(last_commit_path, 'r') as f:
+                local_sha = f.read().strip() or None
+        except OSError:
+            pass
     remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
-    if remote_sha is None:
-        return False
-    return local_sha == remote_sha
+    return local_sha, remote_sha, (remote_sha is not None and local_sha == remote_sha)
+
 
 def save_last_commit_info(target_dir, sha):
     last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
     try:
         with open(last_commit_path, 'w') as f:
             f.write(sha)
-        log_message(f"[L] Saved commit SHA: {sha[:8]}")
+        log_message(f"[L] Saved commit SHA: {sha[:12]}")
     except Exception as e:
         log_message(f"[!] Error saving .last_commit: {e}")
 
@@ -604,19 +608,13 @@ def download_changed_files(target_dir, to_download, to_delete, script_name):
 
 def download_and_extract_repo(target_dir, script_name, target_user):
     """Incremental update via GitHub Compare API with ZIP fallback."""
-    if is_repo_up_to_date(target_dir):
+    local_sha, remote_sha, up_to_date = repo_commit_state(target_dir)
+    log_message(f"[L] Commit: local {local_sha[:12] if local_sha else '(нет)'}"
+                f" | remote {remote_sha[:12] if remote_sha else '(нет)'}"
+                f"  (main, Blue-Kod/R2)")
+    if up_to_date:
+        log_message("[L] Уже актуально, обновление не нужно.")
         return True
-
-    last_commit_path = os.path.join(target_dir, LAST_COMMIT_FILE)
-    local_sha = None
-    if os.path.exists(last_commit_path):
-        try:
-            with open(last_commit_path, 'r') as f:
-                local_sha = f.read().strip()
-        except Exception:
-            pass
-
-    remote_sha, _ = get_remote_head_commit_info("Blue-Kod", "R2", "main")
     if remote_sha is None:
         log_message("[!] Could not get remote commit SHA, update aborted.")
         return False
