@@ -69,7 +69,7 @@ export const videoPanel = {
     img.addEventListener('mouseleave', onLeave);
 
     const bar = h('div', { class: 'flex flex-wrap items-center gap-3' },
-      h('div', { class: 'flex items-center gap-3' }, eyeRadio('Левый', true), eyeRadio('Правый', false)),
+      h('div', { class: 'flex items-center gap-3' }, eyeRadio('Левый', true), eyeRadio('Правый · опорный', false)),
       h('div', { class: 'grow' }),
       fpsTag, debugBtn);
 

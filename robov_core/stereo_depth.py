@@ -140,6 +140,44 @@ def _zncc_shift(gl: np.ndarray, gr: np.ndarray, ui: int, vi: int,
     return d, peak, second
 
 
+def _zncc_shift_right(gl: np.ndarray, gr: np.ndarray, ui: int, vi: int,
+                      half: int = FAST_PATCH, dy: int = FAST_DY,
+                      nd: int = 256):
+    """То же, но шаблон берётся из ПРАВОГО кадра; d = u_лев − u_прав.
+
+    Нужен, когда опорный глаз — правый: нельзя искать шаблон левого кадра
+    в правом, иначе диспаратность считается для соседней точки (на наклонной
+    поверхности это ошибка в сантиметры).
+    """
+    if vi - half < 0 or vi + half + 1 > gr.shape[0]:
+        return None
+    if ui - half < 0 or ui + half + 1 > gr.shape[1]:
+        return None
+    tmpl = gr[vi - half:vi + half + 1, ui - half:ui + half + 1].astype(np.float32)
+    y0 = max(0, vi - half - dy)
+    y1 = min(gl.shape[0], vi + half + dy + 1)
+    xs = max(0, ui - half)
+    xe = min(gl.shape[1], ui + nd + half + 1)
+    strip = gl[y0:y1, xs:xe].astype(np.float32)
+    if strip.shape[0] <= tmpl.shape[0] or strip.shape[1] <= tmpl.shape[1]:
+        return None
+    r = cv2.matchTemplate(strip, tmpl, cv2.TM_CCOEFF_NORMED)
+    iy, ix = np.unravel_index(int(np.argmax(r)), r.shape)
+    peak = float(r[iy, ix])
+    off = 0.0
+    if 0 < ix < r.shape[1] - 1:
+        a, b, c = float(r[iy, ix - 1]), float(r[iy, ix]), float(r[iy, ix + 1])
+        den = a - 2 * b + c
+        if abs(den) > 1e-6:
+            off = float(np.clip(0.5 * (a - c) / den, -0.5, 0.5))
+    d = (xs + ix + half + off) - ui
+    row = r[max(0, iy - 1):iy + 2].max(axis=0).copy()
+    lo, hi = max(0, ix - half), min(row.size, ix + half + 1)
+    row[lo:hi] = -9.0
+    second = float(row.max()) if row.size else -9.0
+    return d, peak, second
+
+
 class StereoDepth:
     """Ректификация + SGBM + перевод диспаратности в метры."""
 
@@ -234,12 +272,13 @@ class StereoDepth:
         half, dy = FAST_PATCH, FAST_DY
         nd = int(SGBM_PARAMS["numDisparities"])
         x0 = int(max(0, u - nd - half - 2))
-        x1 = int(min(w, u + half + 3))
+        x1 = int(min(w, u + nd + half + 3))     # правому глазу искать вправо
         y0 = int(max(0, v - half - dy - 2))
         y1 = int(min(h, v + half + dy + 3))
         r1, r2 = self.rectify_crop(left, right, x0, y0, x1, y1)
-        res = _zncc_shift(self._gray(r1), self._gray(r2),
-                          int(round(u)) - x0, int(round(v)) - y0, half, dy, nd)
+        find = _zncc_shift_right if eye == "right" else _zncc_shift
+        res = find(self._gray(r1), self._gray(r2),
+                   int(round(u)) - x0, int(round(v)) - y0, half, dy, nd)
         if res is None:
             return float("nan")
         d, peak, second = res
@@ -300,7 +339,7 @@ class StereoDepth:
         return float(self.f * self.baseline / max(dref, 1e-3))
 
     def point_at(self, left, right, x, y, eye="left", window=2) -> Vector3:
-        """Точка пикселя в системе ЛЕВОЙ камеры (м), по локальному замеру."""
+        """Точка пикселя в системе ПРАВОЙ камеры (опорная), м, по локальному замеру."""
         z = self.depth_point(left, right, x, y, eye, window)
         if not np.isfinite(z):
             return Vector3(float("nan"), float("nan"), float("nan"))
@@ -310,8 +349,8 @@ class StereoDepth:
         p = np.array([(u - P[0, 2]) / P[0, 0] * z,
                       (v - P[1, 2]) / P[1, 1] * z, z])
         p = self._Rrect[i].T @ p
-        if eye != "left":
-            p = self.R.T @ (p - self.T.ravel())
+        if eye != "right":
+            p = self.R @ p + self.T.ravel()       # левый глаз -> правый (опорный)
         return Vector3(float(p[0]), float(-p[1]), float(p[2]))
 
     # -- диспаратность и глубина --------------------------------------------
@@ -428,7 +467,11 @@ class StereoDepth:
 
     def point(self, z: np.ndarray, x: float, y: float,
               eye: str = "left", window: int = 2) -> Vector3:
-        """Точка пикселя в системе ЛЕВОЙ камеры: X вправо, Y вверх, Z вперёд, м."""
+        """Точка пикселя в системе ПРАВОЙ камеры (опорная): X вправо, Y вверх, Z вперёд, м.
+
+        Опорный глаз — правый: из его системы в систему корпуса переводит
+        high_level.coords() одним сдвигом на полбазы, без лишних поворотов.
+        """
         d = self.depth_at(z, x, y, eye, window)
         if not np.isfinite(d):
             return Vector3(float("nan"), float("nan"), float("nan"))
@@ -438,8 +481,8 @@ class StereoDepth:
         p = np.array([(u - P[0, 2]) / P[0, 0] * d,
                       (v - P[1, 2]) / P[1, 1] * d, d])
         p = self._Rrect[i].T @ p                  # выпрямленный -> исходный кадр
-        if eye != "left":
-            p = self.R.T @ (p - self.T.ravel())   # правый глаз -> левый
+        if eye != "right":
+            p = self.R @ p + self.T.ravel()       # левый глаз -> правый (опорный)
         return Vector3(float(p[0]), float(-p[1]), float(p[2]))
 
     # -- привязка по известным дистанциям -----------------------------------

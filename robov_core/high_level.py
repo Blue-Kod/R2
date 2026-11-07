@@ -476,6 +476,22 @@ def depth(x: float, y: float, window: int = 2) -> float:
     return eng.depth_point(left, right, px, py, eye=_shown_eye(), window=window)
 
 
+def _p_to_body(p: Vector3, baseline_m: float) -> Optional[Vector3]:
+    """Точка опорного (правого) глаза -> корпус, МЕТРЫ. None — нет глубины."""
+    if not np.isfinite(p.x):
+        return None
+    # правый глаз -> середина стереобазы (там ось головы), мм для кинематики
+    pc = ((p.x + baseline_m / 2.0) * 1000.0, p.y * 1000.0, p.z * 1000.0)
+    neck = tilt = arm_kinematics.HEAD_REST
+    servo = _servo
+    if servo is not None:
+        neck = float(servo.current_angles.get(arm_kinematics.NECK_CHANNEL, neck))
+        tilt = float(servo.current_angles.get(arm_kinematics.TILT_CHANNEL, tilt))
+    q = arm_kinematics.camera_to_body(pc, neck, tilt)   # мм
+    return Vector3(float(q[0]) / 1000.0, float(q[1]) / 1000.0,
+                   float(q[2]) / 1000.0)
+
+
 def coords(x: float, y: float, window: int = 2) -> Vector3:
     """3D-точка кадра (x, y от 0 до 1) в системе КОРПУСА: X вправо, Y вверх,
     Z вперёд, МЕТРЫ.
@@ -492,25 +508,17 @@ def coords(x: float, y: float, window: int = 2) -> Vector3:
     if left is None:
         return Vector3(float("nan"), float("nan"), float("nan"))
     p = eng.point_at(left, right, px, py, eye=_shown_eye(), window=window)
-    if not np.isfinite(p.x):
-        return p
-    # левый глаз -> середина стереобазы (там ось головы), мм для кинематики
-    pc = ((p.x + eng.baseline / 2.0) * 1000.0, p.y * 1000.0, p.z * 1000.0)
-    neck = tilt = arm_kinematics.HEAD_REST
-    servo = _servo
-    if servo is not None:
-        neck = float(servo.current_angles.get(arm_kinematics.NECK_CHANNEL, neck))
-        tilt = float(servo.current_angles.get(arm_kinematics.TILT_CHANNEL, tilt))
-    q = arm_kinematics.camera_to_body(pc, neck, tilt)   # мм
-    return Vector3(float(q[0]) / 1000.0, float(q[1]) / 1000.0,
-                   float(q[2]) / 1000.0)
+    body = _p_to_body(p, eng.baseline)
+    return body if body is not None else Vector3(float("nan"), float("nan"),
+                                                 float("nan"))
 
 
 # --- Захват и движение в точку кадра ---------------------------------------
 GRIP_CLOSE = 180            # сомкнут (как GRIP_CLOSE в templates/webxr.html)
 GRIP_OPEN = 0
 GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
-GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
+GRIP_SETTLE = 0.1           # с: дожимка сервы уже после того, как mover встал
+GRIP_TIMEOUT = 2.0          # с: 180° хода захвата mover проходит за ~0.6 с
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
 APPROACH_UP = 0.30          # м: над объектом, откуда начинается заход
 GRASP_DOWN = 0.0            # м: ручная поправка "чуть ниже"; её роль теперь у TOOL_MM
@@ -521,6 +529,16 @@ DESCENT_DT = 0.12           # с: пауза между шагами (камер
 DESCENT_GAIN = 0.8          # доля ошибки, которую выбираем за шаг
 ROI_HALF_PX = 140           # окно поиска маркера вокруг прошлой находки
 MAX_CORR_M = 0.10           # м: предел поправки по маркеру (сбой детекции)
+# Точка захвата по объекту: клик часто попадает на бок/низ, брать ровно по нему
+# значит толкнуть объект. Сэмплируем глубину в окне над кликом и берём центр
+# верха силуэта. GRASP_DIP — насколько губки опускаются ниже верха.
+GRASP_DIP = 0.015           # м: глубина захвата от верха объекта
+GRASP_CLEAR = 0.005         # м: минимальный зазор губок над столом
+GRASP_WINDOW_X = 50         # px: полуокно выборки вбок от клика
+GRASP_WINDOW_UP = 100       # px: вверх от клика (объект обычно выше точки клика)
+GRASP_WINDOW_DOWN = 20      # px: вниз от клика
+GRASP_STEP = 12             # px: шаг сетки выборки
+GRASP_NEAR = 0.20           # м: точки дальше этого от клика — фон, не объект
 # Заход чуть в сторону: неподвижный палец не должен задеть объект при спуске.
 # Правая рука идёт левее (−X корпуса), левая — правее (+X), т.е. обе к центру.
 # Знак/величина — одна правка здесь, если на железе окажется наоборот.
@@ -538,6 +556,17 @@ DESCENT_SPEED_DEG = 30.0    # град/с: заход к объекту свер
 def _wait_motion(timeout: float = MOVE_TIMEOUT) -> bool:
     servo = _servo
     return False if servo is None else servo.wait_idle(timeout)
+
+
+def _grip_settle() -> None:
+    """Дождаться, пока захват реально доедет, и дать серве дожать.
+
+    Каналы 8/9 не ограничены _arm_slow: 180° mover идёт ~0.6 с. Фиксированная
+    пауза 0.3 с оставляла губки в движении на старте спуска и на подъёме —
+    отсюда толчки объекта. Ждём mover и только потом трогаемся.
+    """
+    _wait_motion(GRIP_TIMEOUT)
+    time.sleep(GRIP_SETTLE)
 
 
 def grab(left: bool = False) -> bool:
@@ -700,25 +729,26 @@ _marker_roi: Dict[bool, Optional[Tuple[int, int, int, int]]] = {False: None,
 def _marker_grasp(left: bool = False) -> Optional[Vector3]:
     """Точка захвата по ArUco-маркеру этой руки, м в системе корпуса.
 
-    Маркер ищется в ЛЕВОМ глазу (он опорный в калибровке), поэтому пересчёт в
-    корпус — та же цепочка, что у coords(): +полубаза, поворот головы, монтаж.
+    Маркер ищется в ПРАВОМ глазу (опорный), поэтому в корпус — та же цепочка,
+    что у coords(): +полубаза, поворот головы, монтаж. Ни одного лишнего
+    перевода между глазами.
     """
     frame = _stereo_frame()
     if frame is None:
         return None
-    left_img, _ = split_stereo(frame)
-    if left_img is None:
+    _left_img, right_img = split_stereo(frame)
+    if right_img is None:
         return None
     eng = _stereo_depth()
     marker_id = gripper_marker.MARKER_ID[bool(left)]
     roi = _marker_roi[bool(left)]
-    found = gripper_marker.detect(left_img, eng.K[0], eng.D[0],
-                                  eng._Rrect[0], eng._P[0], ids=(marker_id,),
+    found = gripper_marker.detect(right_img, eng.K[1], eng.D[1],
+                                  eng._Rrect[1], eng._P[1], ids=(marker_id,),
                                   roi=roi)
     if not found and roi is not None:            # потеряли — ищем по всему кадру
         _marker_roi[bool(left)] = None
-        found = gripper_marker.detect(left_img, eng.K[0], eng.D[0],
-                                      eng._Rrect[0], eng._P[0], ids=(marker_id,))
+        found = gripper_marker.detect(right_img, eng.K[1], eng.D[1],
+                                      eng._Rrect[1], eng._P[1], ids=(marker_id,))
     marker = found.get(marker_id)
     if marker is None:
         return None
@@ -726,15 +756,8 @@ def _marker_grasp(left: bool = False) -> Optional[Vector3]:
     _marker_roi[bool(left)] = (int(cx) - ROI_HALF_PX, int(cy) - ROI_HALF_PX,
                                int(cx) + ROI_HALF_PX, int(cy) + ROI_HALF_PX)
     grasp, _center = gripper_marker.grasp_from_marker(marker)
-    neck = tilt = arm_kinematics.HEAD_REST
-    servo = _servo
-    if servo is not None:
-        neck = float(servo.current_angles.get(arm_kinematics.NECK_CHANNEL, neck))
-        tilt = float(servo.current_angles.get(arm_kinematics.TILT_CHANNEL, tilt))
-    pc = ((grasp[0] + eng.baseline / 2.0) * 1000.0,
-          grasp[1] * 1000.0, grasp[2] * 1000.0)
-    q = arm_kinematics.camera_to_body(pc, neck, tilt)
-    return Vector3(float(q[0]) / 1000.0, float(q[1]) / 1000.0, float(q[2]) / 1000.0)
+    return _p_to_body(Vector3(float(grasp[0]), float(grasp[1]), float(grasp[2])),
+                      eng.baseline)
 
 
 def _align_by_marker(target: Vector3, left: bool = False,
@@ -844,6 +867,58 @@ def _reachable(point: Vector3, left: bool = False):
                    -float(ee[2]) / 1000.0), result
 
 
+def _grasp_point(x: float, y: float) -> dict:
+    """Точка захвата по ОБЪЕКТУ под кликом: центр и верх локального силуэта.
+
+    Клик может быть на боку, на нижней части или на краю — если тянуться ровно
+    туда, губки бьют объект сбоку. Поэтому: берём клик как подсказку, сэмплируем
+    глубину сеткой (вверх больше, чем вниз), отбрасываем фон (дальше GRASP_NEAR
+    от клика) и берём ВЕРХ оставшихся точек. Центр верха по X/Z — ось губок,
+    высота — верх минус GRASP_DIP, но не ниже стола (низ точек) + GRASP_CLEAR.
+
+    Возвращает {ok, point, top, bottom, size, samples, reason}. Ничего не двигает.
+    """
+    eng, left, right, px, py = _depth_sample(x, y)
+    if left is None:
+        return {"ok": False, "reason": "нет стерео-кадра"}
+    eye = _shown_eye()
+    h, w = left.shape[:2]
+    anchor = _p_to_body(eng.point_at(left, right, px, py, eye=eye), eng.baseline)
+    if anchor is None:                 # клик без глубины — тянемся по модели
+        return {"ok": False, "reason": "нет глубины в точке клика"}
+    pts = []
+    for dy in range(-GRASP_WINDOW_UP, GRASP_WINDOW_DOWN + 1, GRASP_STEP):
+        for dx in range(-GRASP_WINDOW_X, GRASP_WINDOW_X + 1, GRASP_STEP):
+            u, v = px + dx, py + dy
+            if not (2 <= u < w - 2 and 2 <= v < h - 2):
+                continue
+            p = _p_to_body(eng.point_at(left, right, u, v, eye=eye),
+                           eng.baseline)
+            if p is None:
+                continue
+            if (abs(p.x - anchor.x) <= GRASP_NEAR
+                    and abs(p.y - anchor.y) <= GRASP_NEAR
+                    and abs(p.z - anchor.z) <= GRASP_NEAR):
+                pts.append(p)
+    if len(pts) < 6:
+        return {"ok": False, "reason": "мало точек глубины вокруг", "anchor": anchor}
+    top = float(np.percentile([p.y for p in pts], 90))    # выбросы не в счёт
+    upper = [p for p in pts if p.y >= top - 0.010]
+    if len(upper) < 3:
+        upper = sorted(pts, key=lambda p: p.y)[-3:]
+    gx = float(np.median([p.x for p in upper]))
+    gz = float(np.median([p.z for p in upper]))
+    bottom = float(np.percentile([p.y for p in pts], 10))
+    span_x = float(np.percentile([p.x for p in upper], 90)
+                   - np.percentile([p.x for p in upper], 10))
+    span_z = float(np.percentile([p.z for p in upper], 90)
+                   - np.percentile([p.z for p in upper], 10))
+    dip = min(GRASP_DIP, max(0.0, top - bottom - GRASP_CLEAR))
+    return {"ok": True, "point": Vector3(gx, top - dip, gz), "top": top,
+            "bottom": bottom, "size": max(span_x, span_z),
+            "samples": len(pts), "anchor": anchor}
+
+
 def _correct_cmd(want: Vector3, cmd: Vector3, left: bool = False):
     """Одна поправка команды по маркеру: (новый cmd, ошибка м | None).
 
@@ -930,11 +1005,13 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
 
 
 def pick_point(x: float, y: float, left: bool = False) -> dict:
-    """Взять объект: раскрыть захват -> зайти на 30 см выше -> спуститься с
-    коррекцией по маркеру -> сжать захват -> поднять руку на LIFT_AFTER_UP.
+    """Взять объект под точкой кадра (x, y от 0 до 1).
 
-    Сжатие — в самом конце, после всех движений; подъём — уже с объектом.
+    Раскрыть захват -> точка берётся по СИЛУЭТУ объекта (верх и центр верха,
+    а не по клику — иначе губки бьют предмет сбоку) -> заход на 30 см выше ->
+    спуск шагами с коррекцией по маркеру -> сжать -> поднять на LIFT_AFTER_UP.
     Заход смещён вбок (APPROACH_SIDE_M), чтобы неподвижный палец не задел объект.
+    Результат: point — куда реально целились, grasp — как найдена точка.
     """
     return _point_action(x, y, GRIP_OPEN, GRIP_CLOSE, left=left, lift_after=True)
 
@@ -957,12 +1034,16 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
                          lift_after: bool = False, left: bool = False) -> dict:
     channel = GRIP_CHANNEL[bool(left)]
     set_servo_command(channel, grip_before)   # сначала клешня, потом движение
-    time.sleep(GRIP_SETTLE)                   # и кадр для цели — уже без неё
-    point = coords(x, y)
+    _grip_settle()                            # и кадр для цели — уже без неё
+    # Захват: точка по силуэту объекта (верх + центр), а не по клику — так
+    # губки не бьют объект сбоку. Укладка: ровно точка клика.
+    grasp_info = _grasp_point(x, y) if grip_before == GRIP_OPEN else None
+    point = (grasp_info["point"] if grasp_info and grasp_info.get("ok")
+             else coords(x, y))
     if not np.isfinite(point.x):
         return {"ok": False, "moved": False, "arrived": False,
                 "message": "нет глубины в этой точке кадра",
-                "point": point}
+                "point": point, "grasp": grasp_info}
     if GRASP_DOWN:                     # ручная поправка (обычно 0 — см. TOOL_MM)
         point = Vector3(point.x, point.y - GRASP_DOWN, point.z)
     # IK двигает конец цепи: пересчитываем в EE с учётом смещения губок
@@ -981,7 +1062,7 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
     # Захват переключаем после всех движений и независимо от того, дошла ли рука
     # до цели: оставить клешню в прежнем состоянии хуже, чем сжать/разжать.
     set_servo_command(channel, grip_after)
-    time.sleep(GRIP_SETTLE)
+    _grip_settle()                            # сжали — только теперь поднимаем
     grasp = result.get("target", point)
     if lift_after:
         with _arm_slow(MOVE_SPEED_DEG):
@@ -989,6 +1070,7 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
                                         grasp.z), left), left)
             result["arrived"] = _wait_motion()
     result["point"] = point
+    result["grasp"] = grasp_info
     result["reachable"] = base
     result["grip"] = grip_after
     return result
