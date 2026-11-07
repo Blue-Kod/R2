@@ -496,6 +496,16 @@ def ik_solve(x: float, y: float, z: float, left: bool = False,
 
     def score(error, theta):
         total = error
+        # Кран-предпочтение — только среди ТОЧНЫХ решений (ошибка <= IK_ERR_OK).
+        # Раньше байас был доминирующим всегда, и для целей выше плеча IK отдавал
+        # кран-позу на 271 мм мимо цели: рука не могла подняться над объектом и
+        # заходила сбоку. Точность важнее высоты локтя.
+        if error > IK_ERR_OK:
+            if start is not None:
+                weights = (1.0, 0.5, 0.25)
+                total += min(0.2 * sum(w * (a - b) ** 2 for w, a, b
+                                       in zip(weights, theta, start)), 100.0)
+            return total
         f = fk(theta, left)
         total += float(_crane_lift_bias(f["E"][1], f["EE"][1]))
         if start is not None:

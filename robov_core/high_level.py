@@ -1059,6 +1059,27 @@ def _correct_cmd(want: Vector3, cmd: Vector3, left: bool = False):
     return Vector3(want.x + dx, want.y, want.z + dz), float(np.hypot(ex, ez))
 
 
+def _approach_height(point: Vector3, left: bool = False) -> float:
+    """Максимальная высота НАД объектом, до которой рука реально достаёт.
+
+    «30 см над объектом» — идеал; у края рабочей зоны (близко/низко/по центру)
+    рука туда не дотягивается, и IK отдаёт ближайшую точку в стороне. Тогда
+    заход получается сбоку и объект сбивается. Ищем самую высокую точку с ТЕМИ
+    ЖЕ x/z, которая достижима с ошибкой ≤ 5 мм, и спускаемся от неё.
+    """
+    y = point.y + APPROACH_UP
+    while y > point.y + 0.02:
+        ee = _ee_target(Vector3(point.x, y, point.z), left)
+        base, _ = _reachable(ee, left)
+        if base is not None:
+            gap = ((base.x - ee.x) ** 2 + (base.y - ee.y) ** 2
+                   + (base.z - ee.z) ** 2) ** 0.5
+            if gap <= 0.005:
+                return y
+        y -= 0.04
+    return point.y + 0.02
+
+
 def _approach(point: Vector3, left: bool = False,
               align: bool = True, lateral: bool = True,
               side_m: Optional[float] = None) -> dict:
@@ -1076,7 +1097,9 @@ def _approach(point: Vector3, left: bool = False,
         if lateral else 0.0
     want = Vector3(point.x + side, point.y, point.z)   # куда должны попасть губки
     cmd = Vector3(want.x, want.y, want.z)              # куда ведём руку (с поправкой)
-    current = Vector3(cmd.x, want.y + APPROACH_UP, cmd.z)
+    # Заход строго сверху: выше 30 см рука у края зоны не достаёт, поэтому
+    # берём максимально достижимую высоту над этой же точкой.
+    current = Vector3(cmd.x, _approach_height(want, left), cmd.z)
     with _arm_slow(MOVE_SPEED_DEG):
         result = _move_to(_ee_target(current, left), left)
         _wait_motion()
