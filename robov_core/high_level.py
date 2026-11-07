@@ -553,6 +553,7 @@ ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захв�
 _motion_lock = threading.RLock()
 MOVE_SPEED_DEG = 60.0       # град/с: переезды руки в задачах захвата
 DESCENT_SPEED_DEG = 30.0    # град/с: заход к объекту сверху — вдвое медленнее
+POSE_SPEED_DEG = 90.0       # град/с: переезд в именованную позу (mover до 300)
 
 
 def _wait_motion(timeout: float = MOVE_TIMEOUT) -> bool:
@@ -662,7 +663,7 @@ def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
     return steps, done
 
 
-def pose(name: str = POSE_DEFAULT) -> dict:
+def pose(name: str = POSE_DEFAULT, speed: Optional[float] = None) -> dict:
     """Поставить робота в именованную позу и дождаться приезда.
 
     "rest" (по умолчанию) — руки вниз, локти выпрямлены (servo.REST_POSE,
@@ -672,15 +673,18 @@ def pose(name: str = POSE_DEFAULT) -> dict:
     Захваты не трогаются: их ставят grab/release.
     Рука, которая уже стоит в этой позе (в пределах POSE_TOL_DEG), команд не
     получает — в результате она в списке skipped.
+    speed — град/с переезда; по умолчанию POSE_SPEED_DEG.
     """
     commands = POSES.get(name)
     if commands is None:
         raise ValueError(f"нет позы {name!r}; есть: {', '.join(POSES)}")
     with _motion_lock:
-        return _pose_locked(name, commands)
+        return _pose_locked(name, commands,
+                            POSE_SPEED_DEG if speed is None else float(speed))
 
 
-def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
+def _pose_locked(name: str, commands: Dict[int, int],
+                 speed: float = POSE_SPEED_DEG) -> dict:
     servo = _servo
     # Отправленные углы — единственное, что мы знаем о руке (датчиков нет).
     # После pick_point это произвольное положение, поэтому «уже в этой позе»
@@ -690,7 +694,7 @@ def _pose_locked(name: str, commands: Dict[int, int]) -> dict:
     steps, done = _pose_steps(state, name)    # переходы работают всегда
     sent = {}
     arrived = True
-    with _arm_slow(MOVE_SPEED_DEG):          # поза ставится медленно, без рывка
+    with _arm_slow(speed):                   # поза ставится без рывка
         for step in steps:
             for channel, angle in step.items():
                 if set_servo_command(channel, int(angle)):
