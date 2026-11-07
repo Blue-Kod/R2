@@ -97,6 +97,10 @@ def _solve(corners_px: np.ndarray, P: np.ndarray):
     return rvec.reshape(3), tvec.reshape(3), err
 
 
+def _area(pts: np.ndarray) -> float:
+    return float(abs(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32))))
+
+
 def _scan(gray: np.ndarray, want: set, K, D, Rrect, P,
           ox: int = 0, oy: int = 0) -> Dict[int, dict]:
     """Один проход детектора по серому кадру (без повторов/CLAHE).
@@ -171,3 +175,11 @@ def detect(frame: np.ndarray, K: np.ndarray, D: np.ndarray,
         return best
     gray = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=(8, 8)).apply(gray)
     return _scan(gray, want, K, D, Rrect, P, ox, oy)
+
+
+def grasp_from_marker(marker: dict) -> Tuple[np.ndarray, np.ndarray]:
+    """(точка захвата, м, система камеры с Y ВВЕРХ; центр маркера, м, так же)."""
+    R, _ = cv2.Rodrigues(np.asarray(marker["rvec"], float))
+    t = np.asarray(marker["tvec"], float).reshape(3)
+    g = t + R @ (GRASP_FROM_MARKER_MM / 1000.0)
+    return np.array([g[0], -g[1], g[2]]), np.array([t[0], -t[1], t[2]])
