@@ -539,6 +539,7 @@ GRASP_WINDOW_UP = 100       # px: вверх от клика (объект об�
 GRASP_WINDOW_DOWN = 20      # px: вниз от клика
 GRASP_STEP = 12             # px: шаг сетки выборки
 GRASP_NEAR = 0.20           # м: точки дальше этого от клика — фон, не объект
+HAND_MASK_M = 0.09          # м: точки у своих губок (по маркеру) не считаем объектом
 # Заход чуть в сторону: неподвижный палец не должен задеть объект при спуске.
 # Правая рука идёт левее (−X корпуса), левая — правее (+X), т.е. обе к центру.
 # Знак/величина — одна правка здесь, если на железе окажется наоборот.
@@ -804,6 +805,41 @@ def align_xy(x: float, y: float, left: bool = False) -> dict:
             return _align_by_marker(Vector3(point.x, height, point.z), left)
 
 
+def depth_check(left: bool = False) -> dict:
+    """Сверить глубину по привязке с дистанцией до маркера (PnP, без привязки).
+
+    Маркер 50 мм: его tvec даёт расстояние независимо от формулы глубины.
+    Сравниваем с |point_at| в пикселе маркера. Расхождение больше 5% значит
+    привязку глубины надо пересобрать (`charuco_calib.py --depth-fit`).
+    """
+    frame = _stereo_frame()
+    if frame is None:
+        return {"ok": False, "reason": "нет стерео-кадра"}
+    left_img, right_img = split_stereo(frame)
+    if right_img is None:
+        return {"ok": False, "reason": "нет стерео-кадра"}
+    eng = _stereo_depth()
+    marker_id = gripper_marker.MARKER_ID[bool(left)]
+    found = gripper_marker.detect(right_img, eng.K[1], eng.D[1], eng._Rrect[1],
+                                  eng._P[1], ids=(marker_id,))
+    marker = found.get(marker_id)
+    if marker is None:
+        return {"ok": False, "reason": "маркер не виден"}
+    cu, cv = np.clip(np.round(marker["center"]).astype(int), 0,
+                     np.array(right_img.shape[:2])[::-1] - 1)
+    maps = eng._maps[1]                    # выпрямленный пиксель -> сырой
+    raw = (float(maps[0][cv, cu]), float(maps[1][cv, cu]))
+    point = eng.point_at(left_img, right_img, *raw, eye="right")
+    if not np.isfinite(point.x):
+        return {"ok": False, "reason": "нет глубины в маркере"}
+    pnp = float(np.linalg.norm(np.asarray(marker["tvec"], float)))
+    got = float(np.linalg.norm([point.x, point.y, point.z]))
+    return {"ok": True, "left": bool(left), "depth_m": round(got, 3),
+            "marker_m": round(pnp, 3), "ratio": round(got / max(pnp, 1e-6), 3),
+            "verdict": "ok" if abs(got / max(pnp, 1e-6) - 1.0) < 0.05 else
+                       "привязку пересобрать (--depth-fit)"}
+
+
 def marker_check(left: bool = False) -> dict:
     """Сравнить точку захвата из маркера с моделью (FK + TOOL_MM).
 
@@ -867,7 +903,7 @@ def _reachable(point: Vector3, left: bool = False):
                    -float(ee[2]) / 1000.0), result
 
 
-def _grasp_point(x: float, y: float) -> dict:
+def _grasp_point(x: float, y: float, left: bool = False) -> dict:
     """Точка захвата по ОБЪЕКТУ под кликом: центр и верх локального силуэта.
 
     Клик может быть на боку, на нижней части или на краю — если тянуться ровно
@@ -886,6 +922,9 @@ def _grasp_point(x: float, y: float) -> dict:
     anchor = _p_to_body(eng.point_at(left, right, px, py, eye=eye), eng.baseline)
     if anchor is None:                 # клик без глубины — тянемся по модели
         return {"ok": False, "reason": "нет глубины в точке клика"}
+    # своя кисть в кадре (поднесена к объекту) — не путать её с объектом
+    hand = _marker_grasp(left)
+    hand_r2 = HAND_MASK_M ** 2
     pts = []
     for dy in range(-GRASP_WINDOW_UP, GRASP_WINDOW_DOWN + 1, GRASP_STEP):
         for dx in range(-GRASP_WINDOW_X, GRASP_WINDOW_X + 1, GRASP_STEP):
@@ -898,7 +937,9 @@ def _grasp_point(x: float, y: float) -> dict:
                 continue
             if (abs(p.x - anchor.x) <= GRASP_NEAR
                     and abs(p.y - anchor.y) <= GRASP_NEAR
-                    and abs(p.z - anchor.z) <= GRASP_NEAR):
+                    and abs(p.z - anchor.z) <= GRASP_NEAR
+                    and (hand is None or (p.x - hand.x) ** 2 + (p.y - hand.y) ** 2
+                         + (p.z - hand.z) ** 2 > hand_r2)):
                 pts.append(p)
     if len(pts) < 6:
         return {"ok": False, "reason": "мало точек глубины вокруг", "anchor": anchor}
@@ -1037,7 +1078,7 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
     _grip_settle()                            # и кадр для цели — уже без неё
     # Захват: точка по силуэту объекта (верх + центр), а не по клику — так
     # губки не бьют объект сбоку. Укладка: ровно точка клика.
-    grasp_info = _grasp_point(x, y) if grip_before == GRIP_OPEN else None
+    grasp_info = _grasp_point(x, y, left) if grip_before == GRIP_OPEN else None
     point = (grasp_info["point"] if grasp_info and grasp_info.get("ok")
              else coords(x, y))
     if not np.isfinite(point.x):
