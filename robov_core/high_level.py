@@ -512,10 +512,19 @@ GRIP_OPEN = 0
 GRIP_CHANNEL = {False: 8, True: 9}    # 8 — правый, 9 — левый
 GRIP_SETTLE = 0.3           # с: даём серве захвата доехать/схватить
 MOVE_TIMEOUT = 10.0         # с: дольше этого считаем, что рука не доехала
-APPROACH_UP = 0.20          # м: над объектом, откуда начинается заход
+APPROACH_UP = 0.30          # м: над объектом, откуда начинается заход
 GRASP_DOWN = 0.0            # м: ручная поправка "чуть ниже"; её роль теперь у TOOL_MM
 ALIGN_ITERS = 3             # итераций выравнивания по маркеру
 ALIGN_TOL_M = 0.004         # м: ближе этого считаем, что губки над объектом
+DESCENT_STEP_M = 0.02       # м: шаг спуска с коррекцией
+DESCENT_DT = 0.12           # с: пауза между шагами (камера 13 fps)
+DESCENT_GAIN = 0.8          # доля ошибки, которую выбираем за шаг
+ROI_HALF_PX = 140           # окно поиска маркера вокруг прошлой находки
+MAX_CORR_M = 0.10           # м: предел поправки по маркеру (сбой детекции)
+# Заход чуть в сторону: неподвижный палец не должен задеть объект при спуске.
+# Правая рука идёт левее (−X корпуса), левая — правее (+X), т.е. обе к центру.
+# Знак/величина — одна правка здесь, если на железе окажется наоборот.
+APPROACH_SIDE_M = {False: -0.012, True: 0.012}
 LIFT_AFTER_UP = 0.25        # м: на сколько поднять руку после захвата/укладки
 UP_MARGIN = 0.02            # м: если объект не ниже кисти на этот запас — сначала вверх
 ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захватов и колёс)
@@ -684,6 +693,10 @@ def _current_point(left: bool = False) -> Optional[Vector3]:
         return None
 
 
+_marker_roi: Dict[bool, Optional[Tuple[int, int, int, int]]] = {False: None,
+                                                               True: None}
+
+
 def _marker_grasp(left: bool = False) -> Optional[Vector3]:
     """Точка захвата по ArUco-маркеру этой руки, м в системе корпуса.
 
@@ -698,11 +711,20 @@ def _marker_grasp(left: bool = False) -> Optional[Vector3]:
         return None
     eng = _stereo_depth()
     marker_id = gripper_marker.MARKER_ID[bool(left)]
+    roi = _marker_roi[bool(left)]
     found = gripper_marker.detect(left_img, eng.K[0], eng.D[0],
-                                  eng._Rrect[0], eng._P[0], ids=(marker_id,))
+                                  eng._Rrect[0], eng._P[0], ids=(marker_id,),
+                                  roi=roi)
+    if not found and roi is not None:            # потеряли — ищем по всему кадру
+        _marker_roi[bool(left)] = None
+        found = gripper_marker.detect(left_img, eng.K[0], eng.D[0],
+                                      eng._Rrect[0], eng._P[0], ids=(marker_id,))
     marker = found.get(marker_id)
     if marker is None:
         return None
+    cx, cy = marker["center"]
+    _marker_roi[bool(left)] = (int(cx) - ROI_HALF_PX, int(cy) - ROI_HALF_PX,
+                               int(cx) + ROI_HALF_PX, int(cy) + ROI_HALF_PX)
     grasp, _center = gripper_marker.grasp_from_marker(marker)
     neck = tilt = arm_kinematics.HEAD_REST
     servo = _servo
@@ -822,30 +844,70 @@ def _reachable(point: Vector3, left: bool = False):
                    -float(ee[2]) / 1000.0), result
 
 
-def _approach(point: Vector3, left: bool = False,
-              align: bool = True) -> dict:
-    """Заход сверху: 20 см выше точки, выравнивание по маркеру, медленный спуск.
+def _correct_cmd(want: Vector3, cmd: Vector3, left: bool = False):
+    """Одна поправка команды по маркеру: (новый cmd, ошибка м | None).
 
-    point — точка ЗАХВАТА (м, корпус); EE считается через _ee_target.
-    На высоте захода губки видны камерой — там и правим XY по маркеру.
-    Возвращает результат спуска; result["target"] — уточнённая точка захвата.
+    want — куда ДОЛЖНЫ попасть губки (точка объекта + боковое смещение),
+    cmd — куда ведём руку сейчас. Ошибка = реальные губки − want; двигаем
+    команду, а не цель, иначе ошибка не убывает. Рост поправки ограничен
+    MAX_CORR_M, чтобы сбойная детекция не увела руку в сторону.
     """
-    above = Vector3(point.x, point.y + APPROACH_UP, point.z)
+    grasp = _marker_grasp(left)
+    if grasp is None:
+        return cmd, None
+    ex, ez = grasp.x - want.x, grasp.z - want.z
+    dx = cmd.x - want.x - ex * DESCENT_GAIN
+    dz = cmd.z - want.z - ez * DESCENT_GAIN
+    dx = max(-MAX_CORR_M, min(MAX_CORR_M, dx))
+    dz = max(-MAX_CORR_M, min(MAX_CORR_M, dz))
+    return Vector3(want.x + dx, want.y, want.z + dz), float(np.hypot(ex, ez))
+
+
+def _approach(point: Vector3, left: bool = False,
+              align: bool = True, lateral: bool = True) -> dict:
+    """Заход сверху 30 см, затем спуск шагами с коррекцией по маркеру.
+
+    point — точка ЗАХВАТА (м, корпус). Калибровка кисти не нужна: на каждом
+    шаге спуска после остановки сравниваем реальную точку захвата (из маркера)
+    с точкой объекта и сдвигаем команду на ошибку; ошибка модели почти
+    постоянна, поэтому сходится за 2-3 шага. Внизу — ещё одна поправка (только
+    XY). Если маркера не видно — идём по модели.
+    lateral — сместить весь заход вбок на APPROACH_SIDE_M, чтобы неподвижный
+    палец не задел объект; смещение остаётся и в точке захвата.
+    """
+    side = APPROACH_SIDE_M[bool(left)] if lateral else 0.0
+    want = Vector3(point.x + side, point.y, point.z)   # куда должны попасть губки
+    cmd = Vector3(want.x, want.y, want.z)              # куда ведём руку (с поправкой)
+    current = Vector3(cmd.x, want.y + APPROACH_UP, cmd.z)
     with _arm_slow(MOVE_SPEED_DEG):
-        result = _move_to(_ee_target(above, left), left)
+        result = _move_to(_ee_target(current, left), left)
         _wait_motion()
-    target = point
-    align_info = {"ok": False, "reason": "выравнивание выключено"}
-    if align:
-        with _arm_slow(MOVE_SPEED_DEG):
-            align_info = _align_by_marker(above, left)
-        corrected = align_info.get("point") or above
-        target = Vector3(corrected.x, point.y, corrected.z)
-    with _arm_slow(DESCENT_SPEED_DEG):       # заход сверху — медленно
-        result = _move_to(_ee_target(target, left), left)
-        result["arrived"] = _wait_motion()
-    result["target"] = target
-    result["align"] = align_info
+    corrections = 0
+    seen = 0
+    while current.y > want.y + 1e-6:
+        current = Vector3(cmd.x, max(want.y, current.y - DESCENT_STEP_M), cmd.z)
+        with _arm_slow(DESCENT_SPEED_DEG):
+            result = _move_to(_ee_target(current, left), left)
+        _wait_motion()                     # меряем уже стоящую руку
+        time.sleep(DESCENT_DT)             # и кадр — после остановки (13 fps)
+        if align:
+            cmd, error = _correct_cmd(want, cmd, left)
+            if error is not None:
+                seen += 1
+                corrections += int(error > ALIGN_TOL_M)
+    if align:                              # внизу — последняя поправка, только XY
+        cmd, error = _correct_cmd(want, cmd, left)
+        if error is not None:
+            seen += 1
+            if error > ALIGN_TOL_M:
+                with _arm_slow(DESCENT_SPEED_DEG):
+                    _move_to(_ee_target(cmd, left), left)
+                    _wait_motion()
+                corrections += 1
+    result["target"] = cmd
+    result["align"] = {"ok": seen > 0, "seen": seen,
+                       "corrections": corrections,
+                       "reason": "нет маркера" if seen == 0 else "ok"}
     return result
 
 
@@ -868,11 +930,11 @@ def hand_go_to_point(x: float, y: float, left: bool = False) -> dict:
 
 
 def pick_point(x: float, y: float, left: bool = False) -> dict:
-    """Взять объект: раскрыть захват -> зайти на 20 см выше -> медленно спуститься
-    -> сжать захват -> поднять руку на LIFT_AFTER_UP (25 см).
+    """Взять объект: раскрыть захват -> зайти на 30 см выше -> спуститься с
+    коррекцией по маркеру -> сжать захват -> поднять руку на LIFT_AFTER_UP.
 
     Сжатие — в самом конце, после всех движений; подъём — уже с объектом.
-    Целимся на GRASP_DOWN ниже точки: кисть на замерах чуть завышала захват.
+    Заход смещён вбок (APPROACH_SIDE_M), чтобы неподвижный палец не задел объект.
     """
     return _point_action(x, y, GRIP_OPEN, GRIP_CLOSE, left=left, lift_after=True)
 
@@ -915,7 +977,7 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
                 "point": point, "reachable": base}
     with _arm_slow(MOVE_SPEED_DEG):
         _lift_if_needed(point, left)     # объект выше/на уровне кисти — сначала вверх
-    result = _approach(point, left)
+    result = _approach(point, left, lateral=grip_before == GRIP_OPEN)
     # Захват переключаем после всех движений и независимо от того, дошла ли рука
     # до цели: оставить клешню в прежнем состоянии хуже, чем сжать/разжать.
     set_servo_command(channel, grip_after)

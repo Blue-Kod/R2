@@ -91,18 +91,31 @@ def _solve(corners_px: np.ndarray, P: np.ndarray):
 
 def detect(frame: np.ndarray, K: np.ndarray, D: np.ndarray,
            Rrect: np.ndarray, P: np.ndarray,
-           ids: Optional[Tuple[int, ...]] = None) -> Dict[int, dict]:
+           ids: Optional[Tuple[int, ...]] = None,
+           roi: Optional[Tuple[int, int, int, int]] = None) -> Dict[int, dict]:
     """Найти маркеры кисти. {id: {center, rvec, tvec, corners, reproj}}.
 
     ids — какие ID вообще интересуют (по умолчанию оба, 0 и 1).
     Кадр может быть цветным или серым; углы переводятся в выпрямленную
     систему своего глаза (undistortPoints с Rrect/P), поза решается по P.
+    roi — (x0, y0, x1, y1) в пикселях кадра: искать только в этом окне (в
+    ~50 раз быстрее для слежения за маркером при спуске).
     """
     gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     want = set(MARKER_ID.values()) if ids is None else set(ids)
     best: Dict[int, dict] = {}
+    ox, oy = 0, 0
+    if roi is not None:
+        x0, y0, x1, y1 = [int(v) for v in roi]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(gray.shape[1], x1), min(gray.shape[0], y1)
+        if x1 - x0 < 24 or y1 - y0 < 24:
+            return best
+        ox, oy = x0, y0
+        gray = gray[y0:y1, x0:x1]
     # масштабы: 1x, 1.5x (если кадр большой), 2x — для далёкого/мелкого маркера
-    scales = [1.0, 1.5, 2.0] if gray.size <= 1280 * 720 * 1.1 else [1.0]
+    scales = [1.0, 2.0] if roi is not None else (
+        [1.0, 1.5, 2.0] if gray.size <= 1280 * 720 * 1.1 else [1.0])
     for scale in scales:
         img = gray if scale == 1.0 else cv2.resize(
             gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
@@ -115,6 +128,8 @@ def detect(frame: np.ndarray, K: np.ndarray, D: np.ndarray,
                 if marker_id not in want:
                     continue
                 pts = quad.reshape(-1, 2).astype(np.float64) / scale
+                pts[:, 0] += ox
+                pts[:, 1] += oy
                 if _area(pts) < (MIN_MARKER_PX * scale) ** 2:
                     continue
                 q = cv2.fisheye.undistortPoints(
