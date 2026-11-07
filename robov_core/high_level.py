@@ -539,6 +539,7 @@ GRASP_WINDOW_UP = 100       # px: вверх от клика (объект об�
 GRASP_WINDOW_DOWN = 20      # px: вниз от клика
 GRASP_STEP = 12             # px: шаг сетки выборки
 GRASP_NEAR = 0.20           # м: точки дальше этого от клика — фон, не объект
+GRASP_MAX_SHIFT = 0.08      # м: дальше этого верх не уводит от клика (сосед)
 HAND_MASK_M = 0.09          # м: точки у своих губок (по маркеру) не считаем объектом
 # Заход чуть в сторону: неподвижный палец не должен задеть объект при спуске.
 # Правая рука идёт левее (−X корпуса), левая — правее (+X), т.е. обе к центру.
@@ -949,6 +950,8 @@ def _grasp_point(x: float, y: float, left: bool = False) -> dict:
         upper = sorted(pts, key=lambda p: p.y)[-3:]
     gx = float(np.median([p.x for p in upper]))
     gz = float(np.median([p.z for p in upper]))
+    if float(np.hypot(gx - anchor.x, gz - anchor.z)) > 0.08:
+        gx, gz = anchor.x, anchor.z    # верх чужого объекта — остаёмся над кликом
     bottom = float(np.percentile([p.y for p in pts], 10))
     span_x = float(np.percentile([p.x for p in upper], 90)
                    - np.percentile([p.x for p in upper], 10))
@@ -980,7 +983,8 @@ def _correct_cmd(want: Vector3, cmd: Vector3, left: bool = False):
 
 
 def _approach(point: Vector3, left: bool = False,
-              align: bool = True, lateral: bool = True) -> dict:
+              align: bool = True, lateral: bool = True,
+              side_m: Optional[float] = None) -> dict:
     """Заход сверху 30 см, затем спуск шагами с коррекцией по маркеру.
 
     point — точка ЗАХВАТА (м, корпус). Калибровка кисти не нужна: на каждом
@@ -991,7 +995,8 @@ def _approach(point: Vector3, left: bool = False,
     lateral — сместить весь заход вбок на APPROACH_SIDE_M, чтобы неподвижный
     палец не задел объект; смещение остаётся и в точке захвата.
     """
-    side = APPROACH_SIDE_M[bool(left)] if lateral else 0.0
+    side = (APPROACH_SIDE_M[bool(left)] if side_m is None else side_m) \
+        if lateral else 0.0
     want = Vector3(point.x + side, point.y, point.z)   # куда должны попасть губки
     cmd = Vector3(want.x, want.y, want.z)              # куда ведём руку (с поправкой)
     current = Vector3(cmd.x, want.y + APPROACH_UP, cmd.z)
@@ -1099,7 +1104,14 @@ def _point_action_locked(x: float, y: float, grip_before: int, grip_after: int,
                 "point": point, "reachable": base}
     with _arm_slow(MOVE_SPEED_DEG):
         _lift_if_needed(point, left)     # объект выше/на уровне кисти — сначала вверх
-    result = _approach(point, left, lateral=grip_before == GRIP_OPEN)
+    # Боковой заход: для мелкого объекта смещение меньше — иначе он окажется
+    # на самом краю губок и его снесёт движущимся пальцем.
+    side = None
+    if grasp_info and grasp_info.get("ok"):
+        base_side = APPROACH_SIDE_M[bool(left)]
+        side = float(np.sign(base_side) * min(abs(base_side),
+                                              0.25 * float(grasp_info["size"])))
+    result = _approach(point, left, lateral=grip_before == GRIP_OPEN, side_m=side)
     # Захват переключаем после всех движений и независимо от того, дошла ли рука
     # до цели: оставить клешню в прежнем состоянии хуже, чем сжать/разжать.
     set_servo_command(channel, grip_after)
