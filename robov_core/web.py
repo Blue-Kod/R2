@@ -514,10 +514,14 @@ def create_app() -> Flask:
             return jsonify({"error": "Недоступно в режиме симуляции"}), 409
         log("Shutdown command received")
         def _shutdown():
+            try:
+                high_level.pose("rest")      # руки в rest ДО снятия питания
+            except Exception as exc:          # noqa: BLE001
+                log(f"shutdown: rest failed: {exc}")
             servo_toggle(False)
-            time.sleep(0.7)
+            time.sleep(0.4)
             cleanup()
-            subprocess.run(["sudo", "shutdown", "-P", "now"], timeout=5)
+            subprocess.run(["systemctl", "poweroff"], timeout=5)
         threading.Thread(target=_shutdown, daemon=True).start()
         return jsonify({"status": "ok", "message": "Shutting down"})
 
@@ -528,10 +532,14 @@ def create_app() -> Flask:
             return jsonify({"error": "Недоступно в режиме симуляции"}), 409
         log("Reboot command received")
         def _reboot():
+            try:
+                high_level.pose("rest")      # руки в rest ДО перезагрузки
+            except Exception as exc:          # noqa: BLE001
+                log(f"reboot: rest failed: {exc}")
             servo_toggle(False)
-            time.sleep(0.7)
+            time.sleep(0.4)
             cleanup()
-            subprocess.run(["sudo", "reboot"], timeout=5)
+            subprocess.run(["systemctl", "reboot"], timeout=5)
         threading.Thread(target=_reboot, daemon=True).start()
         return jsonify({"status": "ok", "message": "Rebooting"})
 
