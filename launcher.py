@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import zipfile
 import shutil
+import threading
 import requests
 import argparse
 import platform
@@ -606,6 +607,125 @@ def download_changed_files(target_dir, to_download, to_delete, script_name):
     return failed == 0, new_launcher_tmp
 
 
+UPDATE_DIR = ".update"
+UPDATE_STAGE = ".update/stage"
+UPDATE_STATE = ".update/state.json"
+UPDATE_APPLY = ".update/apply"
+
+
+def update_paths(target_dir):
+    return (os.path.join(target_dir, UPDATE_DIR),
+            os.path.join(target_dir, UPDATE_STAGE),
+            os.path.join(target_dir, UPDATE_STATE),
+            os.path.join(target_dir, UPDATE_APPLY))
+
+
+def read_update_state(target_dir):
+    """Что лежит в staging: {local, remote, files, deleted} или None."""
+    _, _, state_path, _ = update_paths(target_dir)
+    try:
+        with open(state_path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def stage_changes(target_dir, local_sha, remote_sha) -> bool:
+    """Скачать обновление в .update/stage, НЕ трогая работающие файлы."""
+    to_download, to_delete = get_changed_files(local_sha, remote_sha)
+    if not to_download:
+        return False
+    _, stage_dir, state_path, _ = update_paths(target_dir)
+    shutil.rmtree(stage_dir, ignore_errors=True)
+    for path, raw_url in to_download:
+        dest = os.path.join(stage_dir, path)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        try:
+            resp = gh_request(raw_url, timeout=30)
+            with open(dest, "wb") as f:
+                f.write(resp.content)
+        except Exception as e:                       # noqa: BLE001
+            log_message(f"[!] stage {path}: {e}")
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            return False
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    with open(state_path, "w") as f:
+        json.dump({"local": local_sha, "remote": remote_sha,
+                   "files": [p for p, _ in to_download],
+                   "deleted": list(to_delete or [])}, f)
+    log_message(f"[L] Обновление скачано в staging: {local_sha[:8]} -> "
+                f"{remote_sha[:8]} ({len(to_download)} файлов), ждёт подтверждения")
+    return True
+
+
+def apply_staged(target_dir) -> bool:
+    """Применить скачанное: скопировать файлы, удалить лишние, записать sha."""
+    state = read_update_state(target_dir)
+    if not state:
+        return False
+    _, stage_dir, state_path, apply_flag = update_paths(target_dir)
+    try:
+        for path in state.get("files", []):
+            src = os.path.join(stage_dir, path)
+            dst = os.path.join(target_dir, path)
+            if not os.path.exists(src):
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+        for path in state.get("deleted", []):
+            dst = os.path.join(target_dir, path)
+            if os.path.exists(dst):
+                os.remove(dst)
+    except Exception as e:                           # noqa: BLE001
+        log_message(f"[!] Применение обновления не удалось: {e}")
+        return False
+    save_last_commit_info(target_dir, state["remote"])
+    shutil.rmtree(stage_dir, ignore_errors=True)
+    for p in (state_path, apply_flag):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    log_message(f"[L] Обновление применено: {state['remote'][:8]}")
+    return True
+
+
+def update_watcher(target_dir, script_name):
+    """Фон: дождаться сети, скачать обновление в staging и ждать кнопку.
+
+    Работающий робот при этом не останавливается: файлы не трогаются, пока
+    пользователь не нажмёт «Обновить» (флаг .update/apply) или не перезапустит
+    робота — тогда apply_staged() отработает при старте.
+    """
+    while not _stop_update_watcher.is_set():
+        try:
+            if is_internet_available(timeout=3):
+                local, remote, up_to_date = repo_commit_state(target_dir)
+                if remote and local and not up_to_date:
+                    stage_changes(target_dir, local, remote)
+                else:
+                    log_message("[L] Обновлений нет")
+                break
+        except Exception as e:                       # noqa: BLE001
+            log_message(f"[!] update check: {e}")
+        _stop_update_watcher.wait(30)
+    _, _, _, apply_flag = update_paths(target_dir)
+    while not _stop_update_watcher.is_set():
+        if os.path.exists(apply_flag):
+            log_message("[L] Запрошено обновление — останавливаю main.py")
+            global _restart_requested
+            _restart_requested = True
+            proc = _main_proc
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            return
+        _stop_update_watcher.wait(1)
+
+
 def download_and_extract_repo(target_dir, script_name, target_user):
     """Incremental update via GitHub Compare API with ZIP fallback."""
     local_sha, remote_sha, up_to_date = repo_commit_state(target_dir)
@@ -755,6 +875,11 @@ def remove_autostart_linux(target_user):
 def is_autostart_installed(target_user):
     return os.path.exists(SERVICE_FILE)
 
+_main_proc = None
+_restart_requested = False
+_stop_update_watcher = threading.Event()
+
+
 def start_main(extra_args=None) -> bool:
     """Launch main.py and wait for it to finish."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -769,11 +894,10 @@ def start_main(extra_args=None) -> bool:
         if system_name == "Linux":
             env["PYTHONPATH"] = script_dir
         cmd = [sys.executable or "python3", main_path] + list(extra_args or [])
-        result = subprocess.run(
-            cmd,
-            cwd=script_dir, env=env,
-        )
-        return result.returncode == 0
+        global _main_proc
+        _main_proc = subprocess.Popen(cmd, cwd=script_dir, env=env)
+        rc = _main_proc.wait()
+        return rc == 0
     except Exception as e:
         log_message(f"[!] Error starting {MAIN_SCRIPT}: {e}")
         return False
@@ -854,30 +978,30 @@ def main():
             log_message("[L] Updating autostart...")
         setup_autostart_linux(target_user)
 
-    # Internet check and repo update
-    internet_ok = wait_for_internet(max_wait=6)
-    repo_updated = False
-
-    if internet_ok:
-        log_message("[L] Updating repository from GitHub...")
-        repo_updated = download_and_extract_repo(script_dir, script_name, target_user)
-        if not repo_updated:
-            log_message("[*] Repository update failed or not needed.")
-
-        # Install dependencies that changed in this update (requirements.txt /
-        # APT package list), so new libraries land without a manual pip install.
+    # Обновление, скачанное в прошлый раз и подтверждённое, применяем ДО старта
+    # приложения — робот сразу поднимается на новой версии, без интернета.
+    if read_update_state(script_dir):
+        log_message("[L] Есть скачанное обновление — применяю при старте")
+        apply_staged(script_dir)
         try:
             ensure_dependencies()
         except Exception as e:
             log_message(f"[!] Dependency check failed: {e}")
-    else:
-        log_message("[*] No internet, skipping update and dependency check.")
 
-    # Start main.py
+    # Проверка обновлений — в фоне, старт робота её не ждёт.
+    threading.Thread(target=update_watcher, args=(script_dir, script_name),
+                     daemon=True, name="update-watcher").start()
+
     if not args.no_start:
         start_main()
     else:
         log_message("[L] main.py launch skipped.")
+
+    _stop_update_watcher.set()
+    if _restart_requested:
+        log_message("[L] Перезапуск лаунчера для применения обновления")
+        os.execv(sys.executable or "python3",
+                 [sys.executable or "python3", os.path.abspath(__file__)])
 
     log_message("[L] Launcher work completed.")
 

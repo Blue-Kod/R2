@@ -777,6 +777,39 @@ def create_app() -> Flask:
             return jsonify({"error": "x, y and z must be numbers"}), 400
         return jsonify(ik_detail(*point, left=left))
 
+    @app.route("/api/update/status")
+    @require_auth
+    def api_update_status():
+        """Есть ли скачанное обновление (staging) и запрошено ли применение."""
+        import json as _json
+        base = os.path.join(ROOT_DIR, ".update")
+        state = None
+        try:
+            with open(os.path.join(base, "state.json")) as f:
+                state = _json.load(f)
+        except (OSError, ValueError):
+            pass
+        out = {"available": bool(state),
+               "requested": os.path.exists(os.path.join(base, "apply"))}
+        if state:
+            out.update({"local": state.get("local"),
+                        "remote": state.get("remote"),
+                        "files": len(state.get("files") or [])})
+        return jsonify(out)
+
+    @app.route("/api/update/apply", methods=["POST"])
+    @require_auth
+    def api_update_apply():
+        """Кнопка «Обновить»: лаунчер применит скачанное и перезапустит робота."""
+        base = os.path.join(ROOT_DIR, ".update")
+        if not os.path.exists(os.path.join(base, "state.json")):
+            return jsonify({"error": "нет скачанного обновления"}), 409
+        os.makedirs(base, exist_ok=True)
+        with open(os.path.join(base, "apply"), "w") as f:
+            f.write("1")
+        return jsonify({"status": "ok",
+                        "message": "обновление принято: робот перезапустится"})
+
     @app.route("/api/ik/branch", methods=["POST"])
     @require_auth
     def api_ik_branch():

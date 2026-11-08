@@ -58,6 +58,8 @@ export const api = {
 
   ikMove: (x, y, z, left) => request('POST', '/api/ik/move', { body: { x, y, z, left } }),
   setIkBranch: (branch) => request('POST', '/api/ik/branch', { body: { branch } }),
+  updateStatus: () => request('GET', '/api/update/status'),
+  applyUpdate: () => request('POST', '/api/update/apply'),
 
   pythonExec: (code) => request('POST', '/api/python/exec', { body: { code } }),
   pythonNames: () => request('GET', '/api/python/names'),
