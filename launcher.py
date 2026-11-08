@@ -500,6 +500,8 @@ def save_last_commit_info(target_dir, sha):
     try:
         with open(last_commit_path, 'w') as f:
             f.write(sha)
+            f.flush()
+            os.fsync(f.fileno())
         log_message(f"[L] Saved commit SHA: {sha[:12]}")
     except Exception as e:
         log_message(f"[!] Error saving .last_commit: {e}")
@@ -679,6 +681,7 @@ def apply_staged(target_dir) -> bool:
     except Exception as e:                           # noqa: BLE001
         log_message(f"[!] Применение обновления не удалось: {e}")
         return False
+    os.sync()                                   # файлы обновления уже на карте
     save_last_commit_info(target_dir, state["remote"])
     shutil.rmtree(stage_dir, ignore_errors=True)
     for p in (state_path, apply_flag):

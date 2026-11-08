@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import os
 import math
 import threading
 import time
@@ -456,6 +457,8 @@ class ServoController:
             }
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())        # обрыв питания не должен резать JSON
             print(f"[Servo] Калибровка сохранена в {path}")
             return True
         except Exception as e:

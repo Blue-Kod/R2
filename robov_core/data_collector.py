@@ -21,6 +21,7 @@
 """
 
 import json
+import os
 import threading
 import time as _time
 from datetime import datetime
@@ -376,6 +377,10 @@ class DataCollector:
             self._prev_sample = None
         self._flush()
         self._close_writer()
+        try:
+            os.sync()          # эпизод целиком на карте: обрыв питания его не режет
+        except Exception:      # noqa: BLE001
+            pass
 
         n = self._row_count
         episode = int(self._episode_index)
