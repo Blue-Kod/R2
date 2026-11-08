@@ -710,7 +710,9 @@ def setup_autostart_linux(target_user):
 
     unit = f"""[Unit]
 Description=R2 Robot
-After=network.target
+# Приложению сеть для старта не нужна (веб-сервер слушает 0.0.0.0),
+# ждём только файловую систему — запуск на ~2-3 с раньше.
+After=local-fs.target
 
 [Service]
 Type=simple
@@ -853,7 +855,7 @@ def main():
         setup_autostart_linux(target_user)
 
     # Internet check and repo update
-    internet_ok = wait_for_internet(max_wait=60)
+    internet_ok = wait_for_internet(max_wait=6)
     repo_updated = False
 
     if internet_ok:
@@ -873,7 +875,6 @@ def main():
 
     # Start main.py
     if not args.no_start:
-        time.sleep(2)
         start_main()
     else:
         log_message("[L] main.py launch skipped.")
