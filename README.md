@@ -49,3 +49,7 @@ dev-скрипты. Для фронтенда `servo_config()` отдаётся 
 ```bash
 tools/build-css.sh
 ```
+
+Шрифты (Unbounded + Golos Text) самохостятся в `static/fonts`. Красный
+(`--destructive`) — только аварийные действия; цвета камеры/синтаксиса не
+трогаем.

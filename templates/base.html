@@ -3,11 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#0a0a0a">
+    <meta name="theme-color" content="#0d0d0d">
     <title>R2 — рабочее пространство</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="stylesheet" href="/static/vendor/goldenlayout/goldenlayout-base.css">
+    <!-- Шрифты ASBDS грузим заранее: иначе кириллица успевает отрисоваться
+         запасным и остаётся им до перезагрузки. -->
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/golos-cyr.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/golos-lat.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/unbounded-cyr.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/unbounded-lat.woff2">
     <link rel="stylesheet" href="/static/css/r2.css">
+    <link rel="stylesheet" href="/static/vendor/goldenlayout/goldenlayout-base.css">
     <link rel="stylesheet" href="/static/css/dock.css">
     <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css">
     <link rel="stylesheet" href="/static/vendor/codemirror/theme/monokai.min.css">

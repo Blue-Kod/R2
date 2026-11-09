@@ -1,11 +1,11 @@
-import { h, icon, iconButton, panelBody } from '../ui.js';
+import { h } from '../ui.js';
 
 // Full interactive terminal: xterm.js over a WebSocket to a local pty bash.
 const XTERM_THEME = {
-  background: '#0a0a0a',
+  background: '#0d0d0d',
   foreground: '#e6e6e6',
   cursor: '#e6e6e6',
-  cursorAccent: '#0a0a0a',
+  cursorAccent: '#0d0d0d',
   selectionBackground: 'rgba(255,255,255,0.22)',
   black: '#3b3b3b', red: '#e06c75', green: '#98c379', yellow: '#d19a66',
   blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#e6e6e6',
@@ -25,10 +25,11 @@ export const terminalPanel = {
       return;
     }
 
-    const host = h('div', { class: 'min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-black/50 p-1.5' });
+    /* Терминал — это терминал: ни заголовка, ни кнопок, ни внутренней рамки. */
+    const host = h('div', { class: 'h-full min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] px-2 py-1.5' });
 
     const term = new window.Terminal({
-      fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      fontFamily: "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace",
       fontSize: 12.5,
       lineHeight: 1.25,
       cursorBlink: true,
@@ -82,21 +83,7 @@ export const terminalPanel = {
     el.addEventListener('r2:resize', doFit);
     host.addEventListener('mousedown', () => setTimeout(() => term.focus(), 0));
 
-    const head = h('div', { class: 'flex items-center gap-2' },
-      icon('terminal', 'size-4 text-muted-foreground'),
-      h('span', { class: 'text-[13px] font-medium', text: 'Терминал' }),
-      h('div', { class: 'grow' }),
-      iconButton('refresh', {
-        title: 'Переподключить',
-        onClick: () => {
-          clearTimeout(retry);
-          try { ws && ws.close(); } catch { /* ignore */ }
-          disposed = false;
-          connect();
-        },
-      }));
-
-    el.appendChild(panelBody(head, host));
+    el.appendChild(host);
     connect();
 
     return () => {

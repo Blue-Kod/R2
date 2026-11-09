@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, icon, button, inputClass, panelBody, label as microLabel } from '../ui.js';
+import { h, button, inputClass, panelBody, label as microLabel } from '../ui.js';
 
 export const ikPanel = {
   id: 'ik',
@@ -22,7 +22,7 @@ export const ikPanel = {
 
     // One shared radio name per panel instance (otherwise both look selected).
     const radioGroup = `ik-arm-${Math.random().toString(36).slice(2)}`;
-    const armRadio = (text, val) => h('label', { class: 'flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[12px] text-muted-foreground has-[:checked]:border-primary/40 has-[:checked]:text-foreground' },
+    const armRadio = (text, val) => h('label', { class: 'sg press cursor-pointer' },
       h('input', {
         type: 'radio', name: radioGroup, checked: side.value === val, class: 'accent-primary',
         onchange: () => {
@@ -34,28 +34,26 @@ export const ikPanel = {
 
     // Ветка IK: сверху (локоть высоко) или снизу (натуральная).
     const branchName = `ik-branch-${Math.random().toString(36).slice(2)}`;
-    const branchRadio = (text, val) => h('label', { class: 'flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[12px] text-muted-foreground has-[:checked]:border-primary/40 has-[:checked]:text-foreground' },
+    const branchRadio = (text, val) => h('label', { class: 'sg press cursor-pointer' },
       h('input', {
         type: 'radio', name: branchName, value: val, class: 'accent-primary',
         checked: (ctx.boot.ik_config?.branch ?? 'top') === val,
         onchange: () => api.setIkBranch(val).catch((err) => { status.textContent = `Ветка: ${err.message}`; }),
       }), text);
-    const branchRow = h('div', { class: 'flex items-center gap-2' },
-      microLabel('Ветка'), branchRadio('СВЕРХУ', 'top'), branchRadio('СНИЗУ', 'bottom'));
 
-    const status = h('div', { class: 'min-h-[34px] overflow-y-auto text-[11px] leading-relaxed text-muted-foreground' });
-    const btn = button({ label: 'Вычислить IK и переместить', className: 'w-full', onClick: () => run() });
+    const status = h('div', { class: 'min-h-[34px] overflow-y-auto text-[12px] leading-relaxed text-muted-foreground' });
+    const btn = button({ variant: 'primary', label: 'Переместить', className: 'self-start mt-1', onClick: () => run() });
 
     const run = async () => {
       const x = Number(fx.input.value), y = Number(fy.input.value), z = Number(fz.input.value);
-      if (![x, y, z].every(Number.isFinite)) { status.textContent = 'Введите числовые X, Y и Z.'; return; }
+      if (![x, y, z].every(Number.isFinite)) { status.textContent = 'X, Y, Z — числа'; return; }
       btn.disabled = true;
       try {
         const d = await api.ikMove(x, y, z, side.value === 'left');
         if (d.error) throw new Error(d.error);
         const cmds = d.servo ? Object.entries(d.servo).map(([ch, v]) => `ch${ch}=${v}`).join('  ') : 'углы не определены';
-        const dist = d.err_mm ? ` (ближайшая точка ~${Math.round(d.err_mm)} мм)` : '';
-        status.textContent = `${d.ok ? '✓ достижима' : '✗ недостижима'}: ${d.message}. ${cmds}${dist}${d.moved ? ' — рука поехала.' : ''}`;
+        const dist = d.err_mm ? ` ~${Math.round(d.err_mm)} мм` : '';
+        status.textContent = `${d.ok ? '✓ достижима' : '✗ недостижима'}: ${d.message}  ${cmds}${dist}${d.moved ? '  → рука поехала' : ''}`;
       } catch (err) {
         status.textContent = `Ошибка: ${err.message}`;
       } finally {
@@ -64,13 +62,14 @@ export const ikPanel = {
     };
 
     el.appendChild(panelBody(
-      h('div', { class: 'flex items-center gap-2' }, icon('arm', 'size-4 text-muted-foreground'), h('span', { class: 'text-[13px] font-medium', text: 'Обратная кинематика' })),
-      h('div', { class: 'flex gap-2' }, armRadio('ЛЕВАЯ', 'left'), armRadio('ПРАВАЯ', 'right')),
-      h('div', { class: 'grid grid-cols-3 gap-2' }, fx.node, fy.node, fz.node),
-      branchRow,
+      h('div', { class: 'flex flex-wrap items-center gap-2' },
+        h('div', { class: 'seg self-start' }, armRadio('левая', 'left'), armRadio('правая', 'right')),
+        h('div', { class: 'seg self-start' }, branchRadio('сверху', 'top'), branchRadio('снизу', 'bottom'))),
+      h('div', { class: 'grid grid-cols-3 gap-3' }, fx.node, fy.node, fz.node),
+
       btn,
       status,
-      h('p', { class: 'text-[11px] leading-relaxed text-muted-foreground/70', text: 'Система координат камеры: X вправо, Y вверх, Z вперёд.' }),
+      h('span', { class: 'lbl', text: 'X → вправо · Y ↑ вверх · Z ↗ вперёд' }),
     ));
   },
 };

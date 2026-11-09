@@ -1,181 +1,509 @@
-/* R2 design system — Negentropy visual language (dark-only).
- * Source for the Tailwind v4 standalone CLI. Build (dev machine only):
- *   ./tools/tailwindcss -i static/css/input.css -o static/css/r2.css --minify
- * The compiled r2.css is committed; the robot never needs Node/Tailwind.
+/* R2 — приложение на дизайн-системе ASBDS.
+ *
+ * Источник истины: static/css/asbds.css (дословная копия
+ * /home/bluekod/Проекты/ASBDS/index.html). Здесь только то, чего в оригинале
+ * нет: мост к Tailwind и раскладка панелей приложения. Токены, шрифты,
+ * .mono/.display/.tile/.tab/.rng/.cur/bloom берутся из asbds.css и не
+ * переопределяются.
+ *
+ * Сборка CSS (только на машине разработки): ./tools/build-css.sh
  */
+
+/* asbds.css живёт в слое components: после reset Tailwind (иначе `*{border:0}`
+   убивает рамки .tab/.sg), но до utilities (иначе его глобальный
+   `*{margin:0;padding:0}` съедает отступы утилит). Отдельным <link> его
+   подключать нельзя — нелейерный CSS сильнее любых слоёв. */
 @import "tailwindcss";
+@import "./asbds.css" layer(components);
 
 @source "../../templates";
 @source "../js";
 
-/* --- Geist Variable (self-hosted, latin + cyrillic) --- */
+/* Шрифты ASBDS — те же семейства и веса, что грузит оригинал с Google
+   (Golos Text 400;500;600, Unbounded 200..600), но self-hosted: робот без сети. */
 @font-face {
-    font-family: 'Geist Variable';
+    font-family: 'Golos Text';
     font-style: normal;
     font-display: swap;
-    font-weight: 100 900;
-    src: url('../fonts/geist-cyrillic-ext-wght-normal-DjL33-gN.woff2') format('woff2-variations');
-    unicode-range: U+460-52F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+    font-weight: 400 600;
+    src: url('../fonts/golos-cyr.woff2') format('woff2');
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
 }
 @font-face {
-    font-family: 'Geist Variable';
+    font-family: 'Golos Text';
     font-style: normal;
     font-display: swap;
-    font-weight: 100 900;
-    src: url('../fonts/geist-cyrillic-wght-normal-BEAKL7Jp.woff2') format('woff2-variations');
-    unicode-range: U+301, U+400-45F, U+490-491, U+4B0-4B1, U+2116;
+    font-weight: 400 600;
+    src: url('../fonts/golos-lat.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
-    font-family: 'Geist Variable';
+    font-family: 'Unbounded';
     font-style: normal;
     font-display: swap;
-    font-weight: 100 900;
-    src: url('../fonts/geist-vietnamese-wght-normal-6IgcOCM7.woff2') format('woff2-variations');
-    unicode-range: U+102-103, U+110-111, U+128-129, U+168-169, U+1A0-1A1, U+1AF-1B0, U+300-301, U+303-304, U+308-309, U+323, U+329, U+1EA0-1EF9, U+20AB;
+    font-weight: 200 600;
+    src: url('../fonts/unbounded-cyr.woff2') format('woff2');
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
 }
 @font-face {
-    font-family: 'Geist Variable';
+    font-family: 'Unbounded';
     font-style: normal;
     font-display: swap;
-    font-weight: 100 900;
-    src: url('../fonts/geist-latin-ext-wght-normal-DC-KSUi6.woff2') format('woff2-variations');
-    unicode-range: U+100-2BA, U+2BD-2C5, U+2C7-2CC, U+2CE-2D7, U+2DD-2FF, U+304, U+308, U+329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-    font-family: 'Geist Variable';
-    font-style: normal;
-    font-display: swap;
-    font-weight: 100 900;
-    src: url('../fonts/geist-latin-wght-normal-BgDaEnEv.woff2') format('woff2-variations');
-    unicode-range: U+00??, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    font-weight: 200 600;
+    src: url('../fonts/unbounded-lat.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* --- Token bridge: CSS vars -> Tailwind color/radius/font utilities --- */
+/* --- Мост: токены ASBDS -> утилиты Tailwind ------------------------------ */
 @theme inline {
-    --font-sans: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
-    --font-heading: var(--font-sans);
-    --color-background: var(--background);
-    --color-foreground: var(--foreground);
-    --color-card: var(--card);
-    --color-card-foreground: var(--card-foreground);
-    --color-popover: var(--popover);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-primary: var(--primary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-secondary: var(--secondary);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-muted: var(--muted);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-accent: var(--accent);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-destructive: var(--destructive);
-    --color-border: var(--border);
-    --color-input: var(--input);
-    --color-ring: var(--ring);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+    --font-sans: var(--font);
+    --font-display: var(--display);
+
+    --color-background: var(--bg);
+    --color-foreground: var(--fg);
+    --color-card: var(--bg-2);
+    --color-card-foreground: var(--fg);
+    --color-popover: var(--bg-2);
+    --color-popover-foreground: var(--fg);
+    --color-primary: var(--fg);
+    --color-primary-foreground: var(--bg);
+    --color-secondary: var(--ink-08);
+    --color-secondary-foreground: var(--fg);
+    --color-muted: var(--ink-08);
+    --color-muted-foreground: var(--ink-50);
+    --color-accent: var(--ink-12);
+    --color-accent-foreground: var(--fg);
+    /* Красный — только авария/E-stop, см. ГАЙД.md */
+    --color-destructive: oklch(0.63 0.21 25);
+    /* Шкала прозрачности ASBDS — иначе утилиты border-ink-12/text-ink-50
+       не компилируются и рамка падает в currentColor (почти белый). */
+    --color-ink-08: var(--ink-08);
+    --color-ink-12: var(--ink-12);
+    --color-ink-20: var(--ink-20);
+    --color-ink-32: var(--ink-32);
+    --color-ink-50: var(--ink-50);
+    --color-border: var(--ink-12);
+    --color-input: var(--ink-20);
+    --color-ring: var(--ink-32);
+
+    /* Радиусы только из ASBDS: 14 поверхности, 22 оверлеи, 999 пилюли. */
+    --radius-sm: 6px;
+    --radius-md: var(--r);
+    --radius-lg: var(--r-lg);
+    --radius-xl: var(--r-lg);
+    --radius-2xl: var(--r-lg);
 }
 
-/* Dark-only theme: Negentropy's `.dark` palette applied at the root. */
+/* Скругления — сильные: пилюли у контролов, крупные радиусы у поверхностей.
+   Значения заданы в dock.css (он грузится последним). */
+
+/* Один вес во всём интерфейсе — Golos Text 400. Жирный/средний не используем:
+   иерархию держат размер, регистр, трекинг и цвет, а не насыщенность.
+   Моноширинные зоны (код, терминал, файлы) не трогаем — у них свой шрифт. */
+body, h1, h2, h3, h4, strong, b, th, option,
+.brand, .display, .num, .lbl, .mono, .tab, .sg, .r2-btn, .tile span, .kpi, .acc-h, .tl .y, .cta-mail {
+    font-weight: 400 !important;
+}
+.CodeMirror, .CodeMirror *, .xterm, .xterm *, .term, .trow, .trow * {
+    font-weight: inherit !important;
+}
+
+/* Шкала отступов: всё в интерфейсе кратно 4. Один ритм — одинаковые
+   просветы сверху/снизу/слева/справа в шапках, панелях и тулбарах. */
 :root {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --radius: 0.625rem;
-    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 24px;
+    --sp-6: 32px;
+    --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+@layer components {
+    html, body { height: 100%; }
+    /* body — как в ASBDS (font-size 1rem, --font); меняется только overflow:
+       приложение не скроллит страницу, панели скроллят себя сами. */
+    body { overflow: hidden; }
+    ::selection { background: var(--fg); color: var(--bg); }
 }
 
 @layer base {
-    * {
-        @apply border-border outline-ring/50;
-    }
-    html, body {
-        height: 100%;
-    }
-    body {
-        @apply bg-background text-foreground font-sans antialiased;
-        overflow: hidden;
-        cursor: default;
-    }
-    input:not([type='button']):not([type='submit']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='color']),
-    textarea,
-    [contenteditable='true'] {
-        cursor: text;
-    }
-    /* No selection caret on chrome; real fields and content stay selectable. */
+    /* Каретку и выделение не показываем на «хроме»; поля и контент — можно. */
     header, aside, form, [role='dialog'], [role='menu'], [role='listbox'], [data-chrome] {
         -webkit-touch-callout: none;
         user-select: none;
     }
-    input, textarea, select, [contenteditable='true'], [data-selectable='true'] {
-        user-select: text;
-    }
+    input, textarea, select, [contenteditable='true'], [data-selectable='true'] { user-select: text; }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: oklch(1 0 0 / 12%); border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 20%); }
+    ::-webkit-scrollbar-thumb { background: var(--ink-12); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--ink-20); }
 }
 
-/* --- Motion utilities (mirrors tw-animate-css usage in Negentropy) --- */
-@keyframes r2-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes r2-slide-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes r2-zoom-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-@keyframes r2-shimmer { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+/* --- Панель приложения: поверхность ASBDS без рамки-коробки --------------- */
+@layer components {
+    /* .lbl/.mono/.num/.board/.tab/.rng/.cur — из asbds.css, здесь не дублируются. */
 
-.anim-in { animation: r2-slide-up 200ms var(--ease-out) both; }
-.anim-fade { animation: r2-fade-in 150ms var(--ease-out) both; }
-.anim-zoom { animation: r2-zoom-in 150ms var(--ease-out) both; }
-.shimmer { animation: r2-shimmer 1.4s ease-in-out infinite; }
-.press { transition: scale 150ms var(--ease-out), background-color 150ms var(--ease-out); }
-.press:active { scale: 0.96; }
+    /* Рамок нет вообще: границы только волосяные (--ink-12) и только как
+       разделитель, никогда как коробка вокруг блока. */
+    /* Список чисел как .nums в ASBDS: волосяные линии сверху/снизу, без коробок. */
+    .stats { display: flex; flex-direction: column; }
+    .stat {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.4rem 0.25rem;
+        border-bottom: 1px solid var(--ink-08);
+        min-width: 0;
+    }
+    .stat:first-child { border-top: 1px solid var(--ink-08); }
+    /* Внутри панелей подписи — обычный текст ASBDS (Golos, строчные, без
+       трекинга), а не «технические» .mono/.lbl с лендинга: в плотной сетке
+       капс с разрядкой читается как моноширинный и мешает. */
+    .lm_content .mono,
+    .lm_content .lbl {
+        font-family: var(--font);
+        font-size: 0.8125rem;
+        font-weight: 400;
+        letter-spacing: 0;
+        text-transform: none;
+    }
 
-/* Brand mark: stroke draw-in. Normalised with pathLength="1" so it works at
-   any path length / size. `.r2-mark-draw` loops (loading); `.r2-mark-intro`
-   draws once on mount, staggered per part. */
-@keyframes r2-draw-loop {
-    0% { stroke-dashoffset: 1; }
-    45% { stroke-dashoffset: 0; }
-    55% { stroke-dashoffset: 0; }
-    100% { stroke-dashoffset: -1; }
+    /* Числа в панелях — обычный текст ASBDS (Golos Text), не витринный Unbounded:
+       на 12–16px широкий дисплейный шрифт читается плохо. Unbounded остаётся
+       у бренда и крупных акцентов. */
+    .num {
+        font-family: var(--font);
+        font-weight: 500;
+        letter-spacing: 0;
+        font-variant-numeric: tabular-nums;
+    }
+    .stat .num {
+        font-size: 1.5rem;
+        line-height: 1;
+        white-space: nowrap;
+        min-width: 0;
+    }
+    .stat .lbl { flex: none; }
+
+    /* Пилюля-переключатель (.pseg/.sg из asbds): один класс на весь проект. */
+    .seg {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        padding: 2px;
+        border: 1px solid var(--ink-12);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--fg) 5%, transparent);
+    }
+    /* Переползающая пилюля: одна на переключатель, ездит под активным пунктом. */
+    .seg-pill {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        height: calc(100% - 4px);
+        border-radius: 999px;
+        background: var(--fg);
+        pointer-events: none;
+        transition: transform .42s var(--ease), width .42s var(--ease), opacity .25s var(--ease);
+    }
+    .seg-pill.is-hidden { opacity: 0; }
+    /* Обычный текст, без капса и разрядки — сегмент читается как подпись. */
+    .seg .sg { position: relative; z-index: 1; padding: 4px 8px; font-size: 11.5px; border-radius: 999px; background: none;
+        letter-spacing: 0; text-transform: none; font-weight: 400; }
+    .seg .sg { color: var(--ink-50); transition: color .3s var(--ease); }
+    .seg .sg:hover { color: var(--fg); }
+    /* Выбрано: текст инвертируется, заливку рисует .seg-pill. */
+    .seg .sg.on,
+    .seg .sg:has(input:checked) { background: none; color: var(--bg); }
+    .seg label { cursor: pointer; }
+    .seg input[type='radio'], .seg input[type='checkbox'] { position: absolute; opacity: 0; pointer-events: none; }
+    .seg .tc { font-family: var(--font); font-size: 12px; font-variant-numeric: tabular-nums; padding: 0 6px; }
+
+    /* Строка списка (эпизоды): волосок снизу, инверсия только у активной. */
+    .eprow {
+        display: grid;
+        grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 0.5rem;
+        padding: var(--sp-1) var(--sp-2);
+        border-bottom: 1px solid var(--ink-08);
+        color: var(--ink-50);
+        text-align: left;
+        transition: background 0.3s var(--ease), color 0.3s var(--ease);
+    }
+    .eprow:hover { background: var(--ink-08); color: var(--fg); }
+    .eprow.on { background: var(--ink-08); color: var(--fg); }
+
+    /* Дорожка таймлайна: плоскость, разделённая волоском. */
+    .lane { position: relative; overflow: hidden; border-bottom: 1px solid var(--ink-08); }
+
+    /* CodeMirror: фон редактора — фон панели, без «окна в окне». */
+    .CodeMirror { background: transparent !important; height: 100%; font-size: 12.5px; }
+    /* Шрифт ASBDS и в редакторе: моноширинный приходит из темы monokai. */
+    .CodeMirror, .cm-s-monokai.CodeMirror { font-family: var(--font-mono) !important; line-height: 1.5 !important; }
+    .CodeMirror-gutters, .CodeMirror-linenumbers { background: transparent !important; border: 0 !important; }
+    .CodeMirror-cursor { border-left-color: var(--fg); }
+    /* Попап автодополнения: список на тёмной карточке, активный пункт —
+       инверсия, как .tab.on / .seg .sg.on. Попап живёт в body, не в панели. */
+
+    /* Ползунок канала: геометрия .rng из asbds.css, дорожка нейтральная
+       (спектральный градиент — только у слайдера спектра). */
+    input[type='range'].rng { background: var(--ink-20); }
+    input[type='range'].rng::-webkit-slider-thumb { width: 16px; height: 16px; }
+    input[type='range'].rng::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--bg); border: 1px solid var(--fg); }
+
+    /* Камера: кадр занимает всё, текст лежит поверх на скриме. */
+    .cam { position: relative; overflow: hidden; border-radius: var(--r); background: #000; }
+    .cam video, .cam img.cam-frame { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .cam-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+    .cam-overlay > * { pointer-events: auto; }
+    .cam-scrim {
+        background: linear-gradient(180deg, rgba(13, 13, 13, 0.72) 0%, transparent 22%, transparent 70%, rgba(13, 13, 13, 0.78) 100%);
+    }
+    .cam-hud { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); }
+    .cam-hud .mono { color: var(--fg); opacity: 0.75; }
+    .cam-hud .num { font-size: 0.8125rem; letter-spacing: 0; }
+
+    /* Терминал: только строки. Ни заголовка, ни кнопок — их нет в терминале. */
+    .term { font-size: 12px; line-height: 1.45; }
+    .term .ln { display: block; }
+
+    /* Список файлов: одна высота строки на всё, действие прижато вправо. */
+    .trow {
+        display: grid;
+        grid-template-columns: 16px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 0.5rem;
+        height: 26px;
+        padding: 0 0.35rem;
+        font-size: 12.5px;
+        border-radius: 999px;
+        color: var(--ink-50);
+        transition: background 0.35s var(--ease), color 0.35s var(--ease);
+    }
+    /* Капсула — только у папок; у файлов подсветка прямоугольная. */
+    /* Заливка-капсула при наведении — у всех строк; контур капсулы рисует
+       «фонарик» и только у папок (класс is-dir). */
+    .trow { position: relative; }
+    .trow:hover { background: var(--ink-08); color: var(--fg); }
+    /* Строки в списке файлов: без подъёма, без рамки и без вспышек —
+       наведение меняет только цвет текста, у папок остаётся капсула. */
+    .trow .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+    .trow .fsize { font-size: 10.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink-50); }
 }
-@keyframes r2-draw-once {
-    from { stroke-dashoffset: 1; }
-    to { stroke-dashoffset: 0; }
+
+/* Bloom из ASBDS, в три слоя по типу элемента:
+   текст — text-shadow, иконка — drop-shadow, поверхность — мягкая рамка-свечение.
+   Всё монохромное, цветных теней нет. */
+@media (hover: hover) {
+    .r2-bloom:hover { text-shadow: 0 0 10px rgba(241, 239, 234, 0.3), 0 0 3px rgba(241, 239, 234, 0.4); }
+    .r2-bloom:hover > svg,
+    .r2-bloom:focus-visible > svg { filter: drop-shadow(0 0 6px rgba(241, 239, 234, 0.35)); }
+    .r2-glow:hover { box-shadow: 0 0 18px rgba(241, 239, 234, 0.12); }
 }
-.r2-mark-draw path {
-    stroke-dasharray: 1;
-    animation: r2-draw-loop 2.4s var(--ease-out) infinite;
+.r2-glow { transition: box-shadow .45s var(--ease), border-color .45s var(--ease); }
+.r2-bloom > svg { transition: filter .45s var(--ease); }
+
+/* Нажатие: сам элемент, без глобального кольца (как в ASBDS). */
+.r2-bloom.press { scale: .986; filter: brightness(1.05); transition-duration: .16s; }
+
+/* --- Мобильная раскладка панелей: одно правило на все окна --------------- */
+@layer components {
+    .grid-auto { display: grid; gap: 0.5rem; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); }
+    .split { display: grid; gap: 0.5rem; min-height: 0; }
+    .split-2 { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+    @media (max-width: 900px) {
+        .split-2 { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (max-width: 640px) {
+            .trow .fsize { display: none; }
+    }
 }
-.r2-mark-intro path {
-    stroke-dasharray: 1;
-    stroke-dashoffset: 1;
-    animation: r2-draw-once 0.85s var(--ease-out) both;
+
+/* Шапка приложения: .head из ASBDS — но статичная, а не поверх контента. */
+:root { --head-h: 44px; }   /* 8 + 28 (кнопка) + 8 — по сетке */
+
+/* Шапка — как .head в ASBDS: лежит поверх контента, полупрозрачная,
+   с размытием под собой и волосяной линией снизу (.head::after). */
+.app-head {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 100;
+    height: var(--head-h);
+    padding: 0 var(--pad);
+    /* Шапка чуть темнее фона — читается как отдельный слой. */
+    background: color-mix(in srgb, var(--bg) 72%, #000);
+    flex: 0 0 auto;
 }
-.r2-mark-intro path:nth-child(2) { animation-delay: 0.10s; }
-.r2-mark-intro path:nth-child(3) { animation-delay: 0.22s; }
-.r2-mark-intro path:nth-child(4) { animation-delay: 0.36s; }
+/* Логотип: знак из ASBDS (квадрат с точками по углам) + слово Unbounded. */
+.app-logo { display: inline-flex; align-items: center; gap: 0.6rem; background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg); }
+.app-logo .brand { line-height: 1; }
+/* Единый язык форм R2 — тот же, что у .tile/.tab/.rng из ASBDS:
+   линия снизу вместо рамки, без нативного chrome, один фокус-цвет. */
+.r2-select, select {
+    -webkit-appearance: none; appearance: none;
+    background: transparent; color: var(--fg);
+    border: 0; border-bottom: 1px solid var(--ink-20); border-radius: 0;
+    padding: .25rem 1.4rem .25rem 0; font: inherit; font-size: 13px; outline: none; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--fg) 50%), linear-gradient(135deg, var(--fg) 50%, transparent 50%);
+    background-position: calc(100% - 9px) 52%, calc(100% - 5px) 52%;
+    background-size: 4px 4px, 4px 4px; background-repeat: no-repeat;
+    transition: border-color .3s var(--ease);
+}
+.r2-select:hover, .r2-select:focus-visible, select:focus-visible { border-bottom-color: var(--fg); }
+select option { background: var(--bg-2); color: var(--fg); }
+
+.r2-check, input[type='checkbox'] {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; margin: 0; flex: 0 0 auto;
+    border: 1px solid var(--ink-32); border-radius: 3px; background: transparent; cursor: pointer;
+    display: inline-grid; place-content: center; transition: border-color .25s var(--ease), background-color .25s var(--ease);
+}
+.r2-check:checked, input[type='checkbox']:checked { background: var(--fg); border-color: var(--fg); }
+.r2-check:checked::after, input[type='checkbox']:checked::after {
+    content: ""; width: 6px; height: 3px; border-left: 1.5px solid var(--bg); border-bottom: 1.5px solid var(--bg); transform: translateY(-1px) rotate(-45deg);
+}
+.r2-check:hover, input[type='checkbox']:hover { border-color: var(--fg); }
+
+/* range: дорожка и ручка из .rng (ASBDS), нативного трека не видно */
+input[type='range']:not(.rng) {
+    -webkit-appearance: none; appearance: none; background: transparent; height: 20px; cursor: pointer;
+}
+input[type='range']:not(.rng)::-webkit-slider-runnable-track { height: 2px; background: var(--ink-20); }
+input[type='range']:not(.rng)::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; margin-top: -7px; border-radius: 50%;
+    background: var(--bg); border: 1px solid var(--fg); transition: transform .25s var(--ease);
+}
+input[type='range']:not(.rng):hover::-webkit-slider-thumb { transform: scale(1.15); }
+input[type='range'].rng { -webkit-appearance: none; appearance: none; height: 2px; background: var(--ink-20); }
+
+/* Поля ввода: без нативных стрелок number, каретка и цвет — из системы. */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+input[type='text'], input[type='number'], textarea { color: var(--fg); caret-color: var(--fg); }
+
+/* Единый капсульный язык контролов — тот же, что .seg/.sg.
+   Поля, select, textarea, чекбоксы-переключатели, кнопки. Переходы — один --ease. */
+:root { --cap-bg: color-mix(in srgb, var(--fg) 5%, transparent); }
+input[type='text'], input[type='number'], input[type='search'], input[type='password'],
+select, textarea {
+    border: 1px solid var(--ink-08); background: color-mix(in srgb, var(--fg) 3%, transparent); color: var(--fg);
+    outline: none; transition: border-color .35s var(--ease), background-color .35s var(--ease), box-shadow .35s var(--ease);
+}
+input[type='text'], input[type='number'], input[type='search'], input[type='password'], select {
+    border-radius: 10px; padding: .35rem .75rem; font-size: 13px;
+}
+textarea { border-radius: 12px; padding: .55rem .85rem; font-size: 13px; line-height: 1.5; }
+input:hover, select:hover, textarea:hover { border-color: var(--ink-20); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--ink-32); }
+input::placeholder, textarea::placeholder { color: var(--ink-32); }
+
+/* Чекбокс-переключатель: капсула с ползунком, как .seg. */
+.r2-switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.r2-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.r2-switch .track {
+    position: relative; width: 28px; height: 16px; border-radius: 999px;
+    border: 1px solid var(--ink-20); background: var(--cap-bg);
+    transition: background-color .4s var(--ease), border-color .4s var(--ease);
+}
+.r2-switch .track::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--fg); transition: transform .45s var(--ease), background-color .4s var(--ease);
+}
+.r2-switch input:checked + .track { background: var(--fg); border-color: var(--fg); }
+.r2-switch input:checked + .track::after { transform: translateX(12px); background: var(--bg); }
+.r2-switch:hover .track { border-color: var(--ink-32); }
+.r2-switch input:focus-visible + .track { box-shadow: 0 0 0 3px var(--ink-08); }
+
+/* Переходы кнопок и капсул при наведении/нажатии. */
+.press, .sg, .seg .sg { transition-timing-function: var(--ease); }
+
+/* Движение — из ASBDS: один --ease, reveal снизу (translateY 18px, 1.2s),
+   fade, slideIn. Классы anim-* уже используются в ui.js (модалки, тосты, меню). */
+@keyframes r2-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes r2-rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes r2-zoom { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes r2-slide { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+.anim-in   { animation: r2-rise .55s var(--ease) both; }
+.anim-zoom { animation: r2-zoom .5s var(--ease) both; }
+.lm_item   { animation: r2-fade .6s var(--ease) both; }
+.lm_content { transition: box-shadow .5s var(--ease), border-color .5s var(--ease), transform .5s var(--ease); }
+.lm_content:hover { border-color: var(--ink-20); }
+.lm_stack, .lm_items { transition: transform .55s var(--ease); }
+/* Вкладки окон: мягкая смена активной капсулы */
+.lm_header .lm_tab { transition: background-color .4s var(--ease), color .4s var(--ease), border-color .4s var(--ease); }
+
+/* Мобильная адаптация: один столбец, тач-цели не меньше 36px, без hover-эффектов. */
+@media (max-width: 760px) {
+    .lm_header .lm_tab { min-height: 36px; padding-inline: .75rem; }
+    .lm_header { height: 40px; }
+    .r2-bloom:hover, .shot:hover, .tile:hover { transform: none; }
+    input[type='text'], input[type='number'], select { min-height: 40px; font-size: 16px; }
+    .app-head { padding-inline: var(--pad); }
+}
 @media (prefers-reduced-motion: reduce) {
-    .anim-in, .anim-fade, .anim-zoom, .shimmer { animation: none; }
-    .press:active { scale: 1; }
-    .r2-mark-draw path, .r2-mark-intro path { animation: none; stroke-dashoffset: 0; }
+    .anim-in, .anim-zoom, .lm_item { animation: none; }
+    .lm_content, .lm_stack, .lm_items { transition: none; }
 }
+
+/* Автодополнение CodeMirror: попап в стиле системы, а не дефолтный светлый. */
+.CodeMirror-hints {
+    background: var(--bg-2) !important;
+    border: 1px solid var(--ink-12) !important;
+    border-radius: 12px !important;
+    padding: 4px !important;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .55) !important;
+    font-family: var(--font) !important;
+    font-size: 12px !important;
+    color: var(--fg);
+    z-index: 500;
+}
+.CodeMirror-hint {
+    padding: 4px 10px !important;
+    border-radius: 8px !important;
+    color: color-mix(in srgb, var(--fg) 70%, transparent) !important;
+    transition: background-color .18s var(--ease), color .18s var(--ease);
+}
+li.CodeMirror-hint-active {
+    background: var(--fg) !important;
+    color: var(--bg) !important;
+}
+
+/* Капсула для «ручных» кнопок (не через ui.button): одна геометрия,
+   одно поведение. Всё, что не .sg/.tile — это .r2-btn. */
+.r2-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .375rem;
+    /* Целая высота и line-height 1: иначе 1px рамка ложится на полупиксель
+       и на скруглениях вертикальные участки выглядят вдвое толще. */
+    height: 26px; padding: 0 .8rem; border-radius: 999px; line-height: 1;
+    border: 0; background: none; color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--ink-12);
+    font-family: var(--font); font-size: .625rem; font-weight: 400; letter-spacing: .09em; text-transform: uppercase;
+    white-space: nowrap; cursor: pointer; outline: none;
+    transition: box-shadow .35s var(--ease), background-color .35s var(--ease), color .35s var(--ease), scale .2s var(--ease);
+}
+.r2-btn:hover { color: var(--fg); box-shadow: inset 0 0 0 1px var(--ink-32); }
+.r2-btn:active { scale: .97; }
+.r2-btn:disabled { opacity: .45; pointer-events: none; }
+.r2-btn--quiet { border-color: transparent; color: color-mix(in srgb, var(--fg) 40%, transparent); }
+.r2-btn--quiet:hover { color: var(--fg); border-color: transparent; }
+.r2-btn--danger { border-color: transparent; color: color-mix(in srgb, var(--destructive) 80%, transparent); }
+/* Иконочная кнопка: размер задаёт утилита, padding не должен сжимать содержимое. */
+.r2-btn--icon { padding: 0 !important; }
+.r2-btn--on { background: var(--fg); color: var(--bg); box-shadow: inset 0 0 0 1px var(--fg); }
+
+/* Курсор R2: кольцо меньше, чем в ASBDS (36px → 18px, hover 64px → 30px). */
+.cur .c2{width:18px;height:18px;margin:-9px 0 0 -9px}
+.cur[data-mode="hover"] .c2{width:30px;height:30px;margin:-15px 0 0 -15px}
+
+/* Часы в шапке — .mono dim из ASBDS. */
+.app-clock { font-family: var(--ui); font-size: var(--fs-micro); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-32); white-space: nowrap; }
+.app-head .nav { gap: clamp(0.75rem, 1.6vw, 1.35rem); }
+.app-head .nav button { padding: 0; }
+.app-head .nav button svg { width: 18px; height: 18px; stroke-width: 1.2; }
+.app-head .brand { line-height: 1; }
+.app-head .nav button { background: none; border: 0; padding: 0; }

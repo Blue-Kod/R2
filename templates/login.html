@@ -3,40 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#0a0a0a">
-    <title>R2 — Вход</title>
+    <meta name="theme-color" content="#0d0d0d">
+    <title>R2 — вход</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="stylesheet" href="/static/css/r2.css">
 </head>
 <body class="grid min-h-dvh place-items-center p-4">
-    <div class="anim-in flex w-full max-w-[360px] flex-col items-center">
-        <div class="mb-7 flex justify-center">
-            <svg viewBox="0 0 42 32" class="r2-mark-intro h-14 w-auto text-foreground" fill="none"
-                 stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <div class="anim-fade flex w-full max-w-[320px] flex-col">
+        <div class="mb-8 flex">
+            <svg viewBox="0 0 42 32" class="r2-mark-intro h-12 w-auto text-foreground" fill="none"
+                 stroke="currentColor" stroke-width="2.8" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true">
                 <path pathLength="1" d="M8 26V6h9a4.5 4.5 0 0 1 0 9H8M13 15l6.5 11"/>
                 <path pathLength="1" d="M25 10a4.5 4.5 0 0 1 9 0l-9 16h9"/>
             </svg>
         </div>
 
-        <h1 class="text-lg font-semibold tracking-tight text-foreground">Добро пожаловать</h1>
-        <p class="mt-1 text-center text-sm text-muted-foreground">Введите пароль для доступа к роботу.</p>
-
-        <div id="authForm" class="mt-6 w-full">
-            <form id="loginForm" class="flex flex-col gap-4">
-                <label class="flex flex-col gap-2">
-                    <span class="text-sm font-medium text-foreground">Пароль</span>
-                    <input id="passwordInput" type="password" autocomplete="current-password" placeholder="••••••••"
-                           class="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30">
-                </label>
+        <div id="authForm" class="w-full">
+            <form id="loginForm" class="flex flex-col gap-2">
+                <span class="lbl">пароль</span>
+                <input id="passwordInput" type="password" autocomplete="current-password" placeholder="••••••••"
+                       class="h-10 w-full border-0 border-b border-border bg-transparent px-0 text-[15px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/50 focus:border-foreground">
                 <button id="loginBtn" type="submit"
-                        class="press inline-flex h-9 w-full items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 disabled:pointer-events-none disabled:opacity-50">
-                    Войти
+                        class="press mt-4 inline-flex h-10 w-full items-center justify-center rounded-md bg-primary px-3 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/85 disabled:pointer-events-none disabled:opacity-50">
+                    войти
                 </button>
-                <p class="min-h-[18px] text-center text-sm text-destructive" id="errorMsg"></p>
+                <p class="min-h-[16px] text-center text-[12px] text-destructive" id="errorMsg"></p>
             </form>
         </div>
 
-        <div id="loadingMsg" class="hidden items-center gap-2 text-sm text-muted-foreground">
+        <div id="loadingMsg" class="hidden items-center gap-2 text-muted-foreground">
             <svg viewBox="0 0 24 24" fill="none" class="size-4 animate-spin" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.2"/>
                 <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>

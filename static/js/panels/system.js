@@ -1,10 +1,14 @@
 import { api } from '../api.js';
-import { h, icon, panelBody, label as microLabel } from '../ui.js';
+import { h, panelBody, label as microLabel } from '../ui.js';
 
-function tile(name, key, unit = '') {
-  const value = h('span', { class: 'font-mono text-lg tabular-nums text-foreground', text: '—' });
-  const node = h('div', { class: 'flex flex-col gap-1.5 rounded-xl border border-border bg-card/60 p-3' },
-    microLabel(name), h('span', {}, value, h('span', { class: 'ml-1 text-[11px] text-muted-foreground', text: unit })));
+/* Строка .nums из ASBDS: подпись слева, число справа, разделитель — волосок.
+   Никаких коробок: значение всегда помещается, обрезать нечего. */
+function row(name, unit = '') {
+  const value = h('span', { class: 'num', text: '—' });
+  const node = h('div', { class: 'stat' },
+    microLabel(name),
+    h('span', { class: 'flex items-baseline justify-end gap-1' }, value,
+      unit ? h('span', { class: 'mono text-foreground/45', text: unit }) : null));
   return { node, set: (v) => { value.textContent = v ?? '—'; } };
 }
 
@@ -14,12 +18,12 @@ export const systemPanel = {
   icon: 'cpu',
   group: 'Отладка',
   mount(el) {
-    const cpu = tile('CPU', 'cpu', '%');
-    const ram = tile('RAM', 'ram', '%');
-    const temp = tile('Температура');
-    const fps = tile('Сервер', 'fps', 'fps');
-    const stream = tile('Стрим', 'stream', 'fps');
-    const cam = tile('Камера');
+    const cpu = row('CPU', '%');
+    const ram = row('RAM', '%');
+    const temp = row('Температура', '°C');
+    const fps = row('Сервер', 'fps');
+    const stream = row('Стрим', 'fps');
+    const cam = row('Камера');
 
     let alive = true;
     const tick = async () => {
@@ -35,14 +39,14 @@ export const systemPanel = {
       } catch { /* ignore */ }
     };
 
-    const ipValue = h('span', { class: 'font-mono text-[13px] text-foreground', text: '—' });
+    const ipValue = h('span', { class: 'num', text: '—' });
 
     // Обновление: лаунчер качает его в фоне, здесь только кнопка «применить».
-    const updText = h('span', { class: 'text-[11px] text-muted-foreground', text: '' });
+    const updText = h('span', { class: 'mono tabular-nums text-foreground/50 normal-case tracking-normal', text: '' });
     const updBtn = h('button', {
-      type: 'button', class: 'hidden rounded-lg border border-primary/40 px-2.5 py-1 text-[12px] text-foreground hover:bg-primary/10', text: 'Обновить',
+      type: 'button', class: 'r2-btn press hidden', text: 'Обновить',
     });
-    const updRow = h('div', { class: 'flex items-center justify-between rounded-xl border border-border bg-card/60 px-3 py-2' },
+    const updRow = h('div', { class: 'stat' },
       microLabel('Обновление'), h('div', { class: 'flex items-center gap-2' }, updText, updBtn));
     updBtn.addEventListener('click', async () => {
       updBtn.disabled = true;
@@ -64,9 +68,8 @@ export const systemPanel = {
       } catch { /* ignore */ }
     };
     el.appendChild(panelBody(
-      h('div', { class: 'flex items-center gap-2' }, icon('cpu', 'size-4 text-muted-foreground'), h('span', { class: 'text-[13px] font-medium', text: 'Система' })),
-      h('div', { class: 'grid grid-cols-2 gap-2' }, cpu.node, ram.node, temp.node, fps.node, stream.node, cam.node),
-      h('div', { class: 'flex items-center justify-between rounded-xl border border-border bg-card/60 px-3 py-2' }, microLabel('IP-адрес'), ipValue),
+      h('div', { class: 'stats' }, cpu.node, ram.node, temp.node, fps.node, stream.node, cam.node),
+      h('div', { class: 'stat' }, microLabel('IP'), ipValue),
       updRow));
 
     (async () => {

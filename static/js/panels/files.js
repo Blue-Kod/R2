@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, icon, iconButton, inputClass, panelBody, toast, modal, emptyState } from '../ui.js';
+import { h, icon, iconButton, button, inputClass, panelBody, toast, modal, emptyState, label as microLabel } from '../ui.js';
 
 const IMAGE = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
 const AUDIO = new Set(['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac']);
@@ -16,7 +16,7 @@ const fmtSize = (n) => {
 
 function promptModal({ title, value = '', placeholder, onOk }) {
   const input = h('input', { type: 'text', value, placeholder, class: inputClass });
-  const ok = h('button', { class: 'press inline-flex h-8 items-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground', type: 'button', text: 'OK' });
+  const ok = button({ variant: 'primary', label: 'OK', size: 'default' });
   const m = modal({
     title,
     width: 'max-w-sm',
@@ -42,12 +42,12 @@ export const filesPanel = {
     const tabs = [];
     let activePath = null;
 
-    const tree = h('div', { class: 'flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto' });
-    const crumb = h('div', { class: 'truncate rounded-md bg-black/30 px-2 py-1 font-mono text-[11px] text-muted-foreground', text: '/' });
+    const tree = h('div', { class: 'tlist flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto' });
+    const crumb = h('span', { class: 'mono min-w-0 flex-1 truncate text-foreground/45', text: '/' });
 
-    const tabBar = h('div', { class: 'flex items-center gap-1 overflow-x-auto border-b border-border pb-1' });
+    const tabBar = h('div', { class: 'flex h-7 items-center gap-1 overflow-x-auto' });
     const editorHost = h('div', { class: 'min-h-0 flex-1 overflow-hidden' });
-    const previewHost = h('div', { class: 'hidden min-h-0 flex-1 items-center justify-center overflow-auto rounded-lg border border-border bg-black/30 p-3' });
+    const previewHost = h('div', { class: 'hidden min-h-0 flex-1 items-center justify-center overflow-auto p-3' });
 
     const fileInput = h('input', { type: 'file', multiple: true, class: 'hidden' });
 
@@ -74,7 +74,7 @@ export const filesPanel = {
       editorHost.classList.add('hidden');
       previewHost.classList.add('hidden');
       previewHost.innerHTML = '';
-      if (!t) { previewHost.classList.remove('hidden'); previewHost.appendChild(emptyState('Файл не выбран')); return; }
+      if (!t) { previewHost.classList.remove('hidden'); previewHost.appendChild(emptyState('—')); return; }
       if (t.kind === 'text') {
         editorHost.classList.remove('hidden');
         ensureEditor();
@@ -95,23 +95,24 @@ export const filesPanel = {
         previewHost.appendChild(h('div', { class: 'flex flex-col items-center gap-3 text-center' },
           icon('file', 'size-8 text-muted-foreground'),
           h('span', { class: 'text-[13px] text-muted-foreground', text: `${t.name} — ${fmtSize(t.size)}` }),
-          h('a', { class: 'press inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground', href: api.fileUrl(t.path), text: 'Скачать' })));
+          h('a', { class: 'press inline-flex h-7 items-center rounded-full bg-primary px-3 text-[11px] font-medium uppercase tracking-[0.09em] text-primary-foreground', href: api.fileUrl(t.path), text: 'Скачать' })));
       }
     };
 
     const renderTabs = () => {
       tabBar.innerHTML = '';
-      if (!tabs.length) { tabBar.appendChild(h('span', { class: 'px-1 text-[11px] text-muted-foreground/70', text: 'Файлы' })); return; }
+      if (!tabs.length) return;
       for (const t of tabs) {
         const active = t.path === activePath;
         const tab = h('div', {
-          class: `group/tab flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] transition-colors ${active ? 'border-primary/30 bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:bg-muted'}`,
+          class: 'group/tab flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium uppercase tracking-[0.09em] transition-colors '
+            + (active ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground/55 hover:text-foreground'),
           onclick: () => { activePath = t.path; renderTabs(); showContent(); },
-        }, icon(t.kind === 'image' ? 'image' : 'file', 'size-3.5'),
+        },
           h('span', { class: 'max-w-[140px] truncate', text: t.name }),
-          t.dirty ? h('span', { class: 'text-primary', text: '•' }) : null,
+          t.dirty ? h('span', { text: '•' }) : null,
           h('button', {
-            class: 'rounded p-0.5 text-muted-foreground opacity-0 group-hover/tab:opacity-100 hover:text-foreground',
+            class: 'r2-btn r2-btn--quiet r2-btn--icon',
             title: 'Закрыть', text: '×',
             onclick: (e) => { e.stopPropagation(); closeTab(t.path); },
           }));
@@ -177,7 +178,7 @@ export const filesPanel = {
         tree.appendChild(row({ name: '..', path: parentOf(cwd), type: 'directory' }, true));
       }
       if (!visible.length) {
-        tree.appendChild(h('div', { class: 'p-3 text-center text-[12px] text-muted-foreground/70', text: 'Пусто' }));
+        tree.appendChild(h('div', { class: 'p-3 text-center text-[11px] text-muted-foreground', text: '—' }));
       }
       for (const e of visible) tree.appendChild(row(e));
     };
@@ -186,15 +187,14 @@ export const filesPanel = {
 
     const row = (entry, isUp = false) => {
       const isDir = entry.type === 'directory';
-      const node = h('div', {
-        class: 'group/row flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-[12.5px] hover:bg-muted',
+      return h('div', {
+        class: `trow cursor-pointer${isDir ? ' is-dir' : ''}`,
         onclick: () => { if (isDir) navigate(entry.path); else openEntry(entry); },
         oncontextmenu: (e) => { e.preventDefault(); contextMenu(e, entry, isDir); },
       },
-        icon(isDir ? 'folder' : IMAGE.has(ext(entry.name)) ? 'image' : 'file', 'size-4 shrink-0 text-muted-foreground'),
-        h('span', { class: 'min-w-0 flex-1 truncate', text: isUp ? '..' : entry.name }),
-        !isDir ? h('span', { class: 'shrink-0 font-mono text-[10.5px] text-muted-foreground/70', text: fmtSize(entry.size) }) : null);
-      return node;
+        icon(isDir ? 'folder' : IMAGE.has(ext(entry.name)) ? 'image' : 'file', 'size-4 shrink-0'),
+        h('span', { class: 'fname', text: isUp ? '..' : entry.name }),
+        isDir ? null : h('span', { class: 'fsize', text: fmtSize(entry.size) }));
     };
 
     const contextMenu = (event, entry, isDir) => {
@@ -209,14 +209,14 @@ export const filesPanel = {
       items.push(['Удалить', async () => {
         const m = modal({
           title: 'Удалить?', width: 'max-w-sm',
-          body: h('p', { class: 'text-[13px] text-muted-foreground', text: `Удалить «${entry.name}»${isDir ? ' со всем содержимым' : ''}?` }),
-          footer: [h('button', { class: 'press h-8 rounded-lg px-3 text-sm text-destructive hover:bg-destructive/10', text: 'Удалить', onclick: async (e) => { e.currentTarget.disabled = true; try { await api.fileDelete(entry.path); m.close(); toast('Удалено', 'success'); navigate(cwd); } catch (err) { toast(err.message, 'error'); } } })],
+          body: h('p', { class: 'text-[12.5px] text-muted-foreground', text: `Удалить «${entry.name}»${isDir ? ' со всем содержимым' : ''}?` }),
+          footer: [h('button', { class: 'r2-btn r2-btn--danger press', text: 'Удалить', onclick: async (e) => { e.currentTarget.disabled = true; try { await api.fileDelete(entry.path); m.close(); toast('Удалено', 'success'); navigate(cwd); } catch (err) { toast(err.message, 'error'); } } })],
         });
       }]);
 
-      const menu = h('div', { class: 'anim-zoom fixed z-[95] min-w-40 rounded-lg border border-border bg-popover p-1 shadow-xl' });
+      const menu = h('div', { class: 'anim-zoom fixed z-[95] min-w-40 rounded-[18px] border border-ink-12 bg-card p-1.5 shadow-xl' });
       for (const [label, fn] of items) {
-        menu.appendChild(h('button', { class: 'block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-muted-foreground hover:bg-muted hover:text-foreground', text: label, onclick: () => { menu.remove(); fn(); } }));
+        menu.appendChild(h('button', { class: 'block w-full rounded-full px-3 py-1.5 text-left text-[12px] normal-case tracking-normal text-muted-foreground hover:bg-muted hover:text-foreground', text: label, onclick: () => { menu.remove(); fn(); } }));
       }
       document.body.appendChild(menu);
       menu.style.left = `${Math.min(event.clientX, window.innerWidth - 170)}px`;
@@ -226,14 +226,14 @@ export const filesPanel = {
     };
 
     // --- toolbar ---
-    const toolbar = h('div', { class: 'flex items-center gap-1' },
+    const toolbar = h('div', { class: 'flex h-7 items-center gap-1' },
       iconButton('chevronRight', { title: 'Вверх', className: 'rotate-[-90deg]', onClick: () => navigate(parentOf(cwd)) }),
+      crumb,
       iconButton('refresh', { title: 'Обновить', onClick: () => navigate(cwd) }),
       iconButton('file', { title: 'Новый файл', onClick: () => promptModal({ title: 'Новый файл', placeholder: 'имя.txt', onOk: async (name) => { try { await api.fileCreate(cwd, name, 'file'); navigate(cwd); } catch (err) { toast(err.message, 'error'); } } }) }),
       iconButton('folderPlus', { title: 'Новая папка', onClick: () => promptModal({ title: 'Новая папка', placeholder: 'папка', onOk: async (name) => { try { await api.fileCreate(cwd, name, 'directory'); navigate(cwd); } catch (err) { toast(err.message, 'error'); } } }) }),
       iconButton('upload', { title: 'Загрузить', onClick: () => fileInput.click() }),
       iconButton('folder', { title: 'Скрытые файлы', onClick: (e) => { showHidden = !showHidden; e.currentTarget.classList.toggle('text-foreground', showHidden); renderTree(); } }),
-      h('div', { class: 'grow' }),
       iconButton('save', { title: 'Сохранить (Ctrl+S)', onClick: saveActive }));
 
     fileInput.addEventListener('change', async () => {
@@ -244,8 +244,8 @@ export const filesPanel = {
     });
 
     // --- splitter ---
-    const treeCol = h('div', { class: 'flex w-64 shrink-0 flex-col gap-1.5' }, toolbar, crumb, tree);
-    const divider = h('div', { class: 'w-1.5 shrink-0 cursor-col-resize rounded bg-transparent hover:bg-primary/30' });
+    const treeCol = h('div', { class: 'flex w-72 shrink-0 flex-col gap-1' }, toolbar, tree);
+    const divider = h('div', { class: 'w-px shrink-0 cursor-col-resize bg-[var(--ink-12)] transition-colors hover:bg-[var(--ink-32)]' });
     divider.addEventListener('mousedown', (down) => {
       down.preventDefault();
       const startX = down.clientX;
@@ -255,7 +255,7 @@ export const filesPanel = {
       document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
     });
 
-    const editorCol = h('div', { class: 'flex min-w-0 flex-1 flex-col gap-1.5' }, tabBar, h('div', { class: 'relative flex min-h-0 flex-1' }, editorHost, previewHost));
+    const editorCol = h('div', { class: 'flex min-w-0 flex-1 flex-col gap-1' }, tabBar, h('div', { class: 'relative flex min-h-0 flex-1' }, editorHost, previewHost));
 
     el.appendChild(panelBody(h('div', { class: 'flex min-h-0 flex-1 gap-2' }, treeCol, divider, editorCol), fileInput));
 

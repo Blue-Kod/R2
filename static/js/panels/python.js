@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, icon, button, spinner, panelBody, toast } from '../ui.js';
+import { h, button, spinner, panelBody, toast } from '../ui.js';
 
 // Код панели переживает перезагрузку страницы и пересоздание панели.
 const STORAGE_KEY = 'r2.python.code';
@@ -53,22 +53,24 @@ export const pythonPanel = {
     try { restored = localStorage.getItem(STORAGE_KEY); } catch { /* приватный режим */ }
 
     const ta = h('textarea', { text: restored ?? DEFAULT_CODE });
-    const editorWrap = h('div', { class: 'min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-black/40' }, ta);
+    // Редактор и вывод — два разных слоя: редактор на фоне панели,
+    // вывод — на своей тёмной поверхности с подписью и линией сверху.
+    const editorWrap = h('div', { class: 'min-h-0 flex-1 overflow-hidden bg-[var(--bg)]' }, ta);
     const out = h('div', {
-      class: 'h-40 shrink-0 overflow-auto rounded-lg border border-border bg-black/40 p-3 font-mono text-[11.5px] leading-[1.5] whitespace-pre-wrap text-foreground/85',
+      class: 'term h-40 shrink-0 overflow-auto whitespace-pre-wrap bg-[var(--bg-2)] px-3 py-2 text-foreground/80',
       'data-selectable': 'true',
     });
-    const savedTag = h('span', { class: 'text-[11px] text-muted-foreground/70', text: '' });
+    const outWrap = h('div', { class: 'flex shrink-0 flex-col border-t border-[var(--ink-20)]' },
+      h('div', { class: 'flex items-center justify-between px-3 pt-2' },
+        h('span', { class: 'lbl', text: 'вывод' })),
+      out);
 
     el.appendChild(panelBody(
       h('div', { class: 'flex items-center gap-2' },
-        icon('code', 'size-4 text-muted-foreground'),
-        h('span', { class: 'text-[13px] font-medium', text: 'Python' }),
-        savedTag,
+        h('span', { class: 'lbl', text: 'код' }),
         h('div', { class: 'grow' }),
-        button({ size: 'sm', label: 'Очистить', variant: 'ghost', onClick: () => { editor.setValue(''); out.textContent = ''; } }),
         button({
-          size: 'sm', iconName: 'check', label: 'Запустить',
+          size: 'sm', variant: 'primary', label: 'Запустить',
           onClick: async (e) => {
             const btn = e.currentTarget;
             btn.disabled = true;
@@ -79,7 +81,7 @@ export const pythonPanel = {
             try {
               const d = await api.pythonExec(editor.getValue());
               const text = (d.stdout || '') + (d.stderr ? `\n--- ОШИБКИ ---\n${d.stderr}` : '');
-              out.textContent = text || '✓ Успешно';
+              out.textContent = text || '✓ ok';
             } catch (err) {
               out.textContent = `Ошибка: ${err.message}`;
               toast(err.message, 'error');
@@ -92,7 +94,7 @@ export const pythonPanel = {
             }
           },
         })),
-      editorWrap, out));
+      editorWrap, outWrap));
 
     const editor = window.CodeMirror.fromTextArea(ta, {
       mode: 'python', theme: 'monokai', lineNumbers: true,
@@ -109,10 +111,8 @@ export const pythonPanel = {
     let saveTimer = 0;
     const persist = () => {
       try { localStorage.setItem(STORAGE_KEY, editor.getValue()); } catch { /* ignore */ }
-      savedTag.textContent = 'сохранено';
     };
     editor.on('change', () => {
-      savedTag.textContent = '…';
       clearTimeout(saveTimer);
       saveTimer = setTimeout(persist, 400);
     });

@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, icon, iconButton, panelBody } from '../ui.js';
+import { h } from '../ui.js';
 
 export const logsPanel = {
   id: 'logs',
@@ -8,7 +8,7 @@ export const logsPanel = {
   group: 'Отладка',
   mount(el) {
     const out = h('pre', {
-      class: 'min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-black/40 p-3 font-mono text-[11.5px] leading-[1.5] whitespace-pre-wrap text-foreground/85',
+      class: 'term m-0 h-full min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-2.5 py-2 text-foreground/85',
       'data-selectable': 'true',
     });
     let alive = true;
@@ -25,13 +25,7 @@ export const logsPanel = {
       } catch { /* ignore */ }
     };
 
-    const head = h('div', { class: 'flex items-center gap-2' },
-      icon('list', 'size-4 text-muted-foreground'),
-      h('span', { class: 'text-[13px] font-medium', text: 'Логи сервера' }),
-      h('div', { class: 'grow' }),
-      iconButton('refresh', { title: 'Обновить', onClick: tick }));
-
-    el.appendChild(panelBody(head, out));
+    el.appendChild(out);
     tick();
     const timer = setInterval(tick, 2000);
     return () => { alive = false; clearInterval(timer); };

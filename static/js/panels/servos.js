@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, iconButton, panelBody, toast, icon } from '../ui.js';
+import { h, iconButton, panelBody, toast } from '../ui.js';
 
 /** Channel descriptors come from the server config (servo.servo_config()). */
 function channelsFromBoot(boot) {
@@ -15,9 +15,9 @@ function channelsFromBoot(boot) {
 
 // Fixed width for up to 4 characters ("270°"), so all rows line up and the
 // sliders end up the same size.
-const VALUE_CLASS = 'w-11 shrink-0 text-right font-mono text-[11px] tabular-nums';
+const VALUE_CLASS = 'num w-10 shrink-0 text-right text-[13px] tracking-normal';
 const SETTLED = 'text-foreground/90';
-const MOVING = 'text-muted-foreground'; // промежуточный угол — чуть темнее
+const MOVING = 'text-foreground/40'; // промежуточный угол — приглушённый
 
 export const servosPanel = {
   id: 'servos',
@@ -27,15 +27,15 @@ export const servosPanel = {
   mount(el, ctx) {
     const channels = channelsFromBoot(ctx.boot);
     const angles = ctx.boot?.servo_angles || {};
-    const list = h('div', { class: 'flex flex-col gap-3 overflow-y-auto pr-1' });
+    const list = h('div', { class: 'flex flex-col overflow-y-auto pr-1' });
     const sliders = new Map();
 
     for (const c of channels) {
       const val = angles[c.id] != null ? angles[c.id] : Math.round((c.min + c.max) / 2);
-      const out = h('span', { class: `${VALUE_CLASS} ${SETTLED}`, text: `${val}°` });
+      const out = h('span', { class: `${VALUE_CLASS} ${SETTLED} w-12 text-right`, text: `${val}°` });
       const range = h('input', {
         type: 'range', min: c.min, max: c.max, value: val,
-        class: 'h-1.5 flex-1 cursor-pointer accent-primary',
+        class: 'rng flex-1',
         title: c.inverted ? `инверсия, offset ${c.offset}°` : (c.offset ? `offset ${c.offset}°` : ''),
       });
       range.addEventListener('pointerdown', () => { range._dragging = true; });
@@ -51,8 +51,8 @@ export const servosPanel = {
       });
       range.addEventListener('pointerup', () => { range._dragging = false; });
       sliders.set(c.id, { range, out });
-      list.appendChild(h('div', { class: 'flex items-center gap-2' },
-        h('label', { class: 'w-20 shrink-0 text-[11.5px] text-muted-foreground', text: c.name }),
+      list.appendChild(h('div', { class: 'flex h-7 items-center gap-2' },
+        h('span', { class: 'mono w-24 shrink-0 truncate text-foreground/70', title: c.name, text: c.name }),
         range, out));
     }
 
@@ -94,7 +94,7 @@ export const servosPanel = {
     let servosEnabled = true;
     const applyPowerState = () => {
       powerBtn.title = servosEnabled ? 'Расслабить сервы' : 'Включить сервы';
-      powerBtn.classList.toggle('text-destructive', !servosEnabled);
+          powerBtn.classList.toggle('text-destructive', !servosEnabled);
     };
     const powerBtn = iconButton('power', {
       title: 'Расслабить сервы',
@@ -116,9 +116,8 @@ export const servosPanel = {
     });
     applyPowerState();
 
-    const head = h('div', { class: 'flex items-center gap-2' },
-      icon('sliders', 'size-4 text-muted-foreground'),
-      h('span', { class: 'text-[13px] font-medium', text: 'Сервоприводы' }),
+    const head = h('div', { class: 'flex h-7 items-center gap-2' },
+      h('span', { class: 'lbl', text: 'каналы' }),
       h('div', { class: 'grow' }),
       powerBtn,
       iconButton('refresh', { title: 'Обновить углы', onClick: refresh }));

@@ -13,7 +13,7 @@ import { h, toast } from './ui.js';
 
 const STORAGE_KEY = 'r2.workspace.layout.v2';
 const PRESET_KEY = 'r2.workspace.preset.v1';
-const HEADER_HEIGHT = 32;
+const HEADER_HEIGHT = 30;
 
 let _instSeq = 0;
 
@@ -31,9 +31,9 @@ export class Workspace {
     this._options = {
       dimensions: {
         headerHeight: HEADER_HEIGHT,
-        borderWidth: 6,
-        defaultMinItemWidth: '160px',
-        defaultMinItemHeight: '120px',
+        borderWidth: 4,
+        defaultMinItemWidth: '64px',
+        defaultMinItemHeight: '48px',
       },
       header: {
         show: 'top',
@@ -115,6 +115,36 @@ export class Workspace {
     }
 
     this.layout.on('stateChanged', () => this._schedulePersist());
+
+    // --- Привязка размеров к сетке 8px -------------------------------------
+    // Golden Layout считает размер окна из координат указателя, поэтому
+    // достаточно квантовать clientX/clientY во время перетаскивания сплиттера:
+    // границы окон встают на общую сетку, соседние выравниваются между собой.
+    const GRID = 8;
+    const quantize = (e) => {
+      const qx = Math.round(e.clientX / GRID) * GRID;
+      const qy = Math.round(e.clientY / GRID) * GRID;
+      const dx = qx - e.clientX;
+      const dy = qy - e.clientY;
+      for (const [k, v] of [['clientX', qx], ['clientY', qy],
+                            ['pageX', e.pageX + dx], ['pageY', e.pageY + dy],
+                            ['screenX', e.screenX + dx], ['screenY', e.screenY + dy],
+                            ['x', qx], ['y', qy]]) {
+        try { Object.defineProperty(e, k, { value: v, configurable: true }); } catch { /* пропускаем */ }
+      }
+    };
+    let dragging = false;
+    const onDown = (e) => { dragging = !!e.target.closest?.('.lm_splitter'); };
+    const onMove = (e) => { if (dragging) quantize(e); };
+    const onUp = () => { dragging = false; };
+    for (const target of [this.root, document]) {
+      target.addEventListener('pointerdown', onDown, true);
+      target.addEventListener('pointermove', onMove, true);
+      target.addEventListener('mousemove', onMove, true);   // GL слушает mousemove
+      target.addEventListener('pointerup', onUp, true);
+      target.addEventListener('mouseup', onUp, true);
+    }
+    window.__r2 = this;   // отладочный доступ к раскладке (не участвует в UI)
 
     const baseConfig = this._layoutConfig(this.buildConfig(this._presets[startPreset].root));
     let config = baseConfig;
@@ -244,12 +274,35 @@ export class Workspace {
     this.layout = null;
   }
 
+  // Ни одно окно не должно быть уже 40px — иначе раскладка «слиплась».
+  static _looksBroken(node) {
+    if (!node || typeof node !== 'object') return true;
+    if (node.type === 'component') return false;
+    const kids = node.content || node.contentItems || [];
+    if (!kids.length) return true;
+    for (const kid of kids) {
+      const size = Number(kid.size ?? 0);
+      if (!Number.isFinite(size) || size < 6) return true;   // окно сжато в ничто
+      if (Dock._looksBroken(kid)) return true;
+    }
+    return false;
+  }
+
   _loadSaved() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      return parsed?.root ? parsed : null;
+      if (!parsed?.root) return null;
+      // Раскладка могла испортиться (баг, эксперимент, ручной drag в ноль).
+      // Проверяем, что ни одно окно не сжато меньше осмысленного минимума;
+      // иначе отбрасываем сохранение и грузим пресет по умолчанию.
+      if (Dock._looksBroken(parsed.root)) {
+        console.warn('[dock] сохранённая раскладка выглядит сломанной — беру пресет');
+        try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+        return null;
+      }
+      return parsed;
     } catch {
       return null;
     }

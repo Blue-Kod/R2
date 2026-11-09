@@ -29,35 +29,31 @@ let playhead = null;
 let drag = null;
 
 // ---------- header ----------
-const exportLib = button({ label: '→ library', iconName: 'save', onClick: () => exportAll('library') });
-const exportDs = button({ label: '→ dataset', iconName: 'database', onClick: () => exportAll('dataset') });
-const header = h('header', { class: 'flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5' },
-  h('a', { href: '/', class: 'flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground', title: 'В workspace' },
-    h('span', { text: '←' }), h('span', { text: 'workspace' })),
-  h('div', { class: 'flex items-baseline gap-2' },
-    h('span', { class: 'text-sm font-semibold tracking-tight', text: 'Студия датасета' }),
-    h('span', { class: 'text-[11px] text-muted-foreground', text: 'вырезание · деление · разметка задач' })),
-  h('div', { class: 'ml-auto flex items-center gap-2' }, exportLib, exportDs));
+const exportLib = button({ variant: 'ghost', size: 'sm', label: 'library', onClick: () => exportAll('library') });
+const exportDs = button({ variant: 'ghost', size: 'sm', label: 'dataset', onClick: () => exportAll('dataset') });
+const header = h('header', { class: 'flex h-9 shrink-0 items-center gap-4 border-b border-[var(--ink-12)] px-3' },
+  h('a', { href: '/', class: 'lbl press text-foreground/50 transition-colors hover:text-foreground', title: 'В workspace', text: '← workspace' }),
+  h('span', { class: 'brand', text: 'Студия' }),
+  h('div', { class: 'ml-auto flex items-center gap-4' }, exportLib, exportDs));
 
 // ---------- sidebar ----------
 const libTab = h('button', { class: '', text: 'Library', onclick: () => setStore('library') });
 const dsTab = h('button', { class: '', text: 'Dataset', onclick: () => setStore('dataset') });
-const tabs = h('div', { class: 'flex gap-1 rounded-lg border border-border p-0.5' }, libTab, dsTab);
+const tabs = h('div', { class: 'flex gap-1.5' }, libTab, dsTab);
 const epList = h('div', { class: 'flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto' });
-const sidebar = h('aside', { class: 'flex w-56 shrink-0 flex-col gap-2 border-r border-border p-3' },
-  tabs, label('Эпизоды'), epList);
+const sidebar = h('aside', { class: 'flex w-56 shrink-0 flex-col gap-2 border-r border-[var(--ink-12)] p-2' },
+  tabs, label('эпизоды'), epList);
 
 // ---------- player ----------
 const previewImg = h('img', { class: 'max-h-full max-w-full select-none object-contain', alt: '', ondragstart: () => false });
 const bboxRect = h('div', { class: 'pointer-events-none absolute z-10 border-2', style: { display: 'none', borderColor: '#ff3b30' } });
 const previewWrap = h('div', { class: 'relative inline-block max-h-full max-w-full' }, previewImg, bboxRect);
-const eyeL = h('button', { class: 'rounded-md px-2 py-0.5 text-[11px]', text: 'L', onclick: () => setEye('left') });
-const eyeR = h('button', { class: 'rounded-md px-2 py-0.5 text-[11px]', text: 'R', onclick: () => setEye('right') });
-const tcChip = h('div', { class: 'font-mono text-[12px] tabular-nums text-foreground', text: '00:00.00' });
-const player = h('div', { class: 'relative flex min-h-0 flex-1 items-center justify-center bg-black' },
+const eyeL = h('button', { class: 'sg', text: 'L', onclick: () => setEye('left') });
+const eyeR = h('button', { class: 'sg', text: 'R', onclick: () => setEye('right') });
+const tcChip = h('div', { class: 'tc text-foreground', text: '00:00.00' });
+const player = h('div', { class: 'relative flex min-h-0 flex-1 items-center justify-center bg-[var(--bg-2)]' },
   previewWrap,
-  h('div', { class: 'absolute bottom-3 left-3 flex items-center gap-2 rounded-lg border border-border bg-popover/80 px-2 py-1 backdrop-blur' },
-    eyeL, eyeR, h('span', { class: 'mx-1 h-3 w-px bg-border' }), tcChip));
+  h('div', { class: 'seg absolute bottom-2 left-2' }, eyeL, eyeR, tcChip));
 
 // ---------- bbox цели (рисуем на первом кадре) ----------
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -83,8 +79,8 @@ function setBboxMode(on) {
   bboxMode = on;
   if (on && epMeta) seek(0);  // bbox хранится на кадре 0 — рисуем его там
   previewWrap.style.cursor = on ? 'crosshair' : '';
-  const on_ = 'rounded-md px-2 py-0.5 text-[11px] bg-primary/30 text-foreground';
-  const off_ = 'rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground';
+  const on_ = 'bg-foreground text-background';
+  const off_ = '';
   bboxBtn.className = on ? on_ : off_;
 }
 
@@ -138,27 +134,27 @@ const scrub = h('input', {
   class: 'w-full accent-[var(--primary)]',
   oninput: (e) => seek(Number(e.target.value)),
 });
-const playBtn = button({ label: '▶', title: 'Play/Pause (Space)', onClick: () => togglePlay() });
+const playBtn = button({ variant: 'primary', label: '▶', title: 'Play/Pause (Space)', onClick: () => togglePlay() });
 const taskInput = h('input', {
-  type: 'text', placeholder: 'task (напр. grab apple)', class: `${inputClass} min-w-[140px] flex-1`,
+  type: 'text', placeholder: 'task', class: `${inputClass} min-w-[140px] flex-1`,
   oninput: () => applyTaskFromField(),
 });
-const pendingInfo = h('span', { class: 'font-mono text-[11px] text-muted-foreground' });
+const pendingInfo = h('span', { class: 'text-[11px] text-muted-foreground' });
 
-const toolbar = h('div', { class: 'flex shrink-0 flex-wrap items-center gap-2 border-t border-border px-3 py-2' },
+const toolbar = h('div', { class: 'flex shrink-0 flex-wrap items-center gap-1.5 border-t border-[var(--ink-12)] px-2 py-1.5' },
   button({ label: '−10', onClick: () => seek(frame - 10) }),
   button({ label: '−1', onClick: () => seek(frame - 1) }),
   playBtn,
   button({ label: '+1', onClick: () => seek(frame + 1) }),
   button({ label: '+10', onClick: () => seek(frame + 10) }),
   h('div', { class: 'min-w-[140px] flex-1' }, scrub),
-  h('span', { class: 'mx-1 h-4 w-px bg-border' }),
+  h('span', { class: 'mx-1 h-4 w-px bg-[var(--ink-12)]' }),
   button({ label: 'IN', title: 'Начало сегмента (I)', onClick: () => mark('start') }),
   button({ label: 'OUT', title: 'Конец сегмента (O)', onClick: () => mark('end') }),
   button({ label: '+ Сегмент', iconName: 'folderPlus', onClick: () => addSegment() }),
-  button({ label: '✂', title: 'Разделить в playhead', onClick: () => splitAtPlayhead() }),
-  button({ label: '🗑', title: 'Удалить выделенные (Del)', onClick: () => deleteSelected() }),
-  h('span', { class: 'mx-1 h-4 w-px bg-border' }),
+  button({ label: 'RES', title: 'Разделить в playhead (разрез)', onClick: () => splitAtPlayhead() }),
+  button({ label: 'DEL', title: 'Удалить выделенные (Del)', onClick: () => deleteSelected() }),
+  h('span', { class: 'mx-1 h-4 w-px bg-[var(--ink-12)]' }),
   bboxBtn, bboxSave, bboxClear,
   h('div', { class: 'min-w-[140px] flex-[2]' }, taskInput),
   pendingInfo);
@@ -166,13 +162,13 @@ const toolbar = h('div', { class: 'flex shrink-0 flex-wrap items-center gap-2 bo
 // ---------- timeline ----------
 const ruler = h('div', { class: 'relative h-5 select-none' });
 const servoCanvas = h('canvas', { class: 'absolute inset-0 h-full w-full' });
-const servoLane = h('div', { class: 'relative h-[72px] overflow-hidden rounded-md border border-border bg-card/30' }, servoCanvas);
-const frameLane = h('div', { class: 'relative h-12 overflow-hidden rounded-md border border-border bg-black/40' });
-const taskLane = h('div', { class: 'relative h-9 overflow-hidden rounded-md border border-border bg-card/30' });
+const servoLane = h('div', { class: 'lane h-[72px]' }, servoCanvas);
+const frameLane = h('div', { class: 'lane h-12' });
+const taskLane = h('div', { class: 'lane h-9' });
 const overlay = h('div', { class: 'pointer-events-none absolute inset-0' });
-const lanes = h('div', { class: 'relative flex touch-none select-none flex-col gap-1' }, servoLane, frameLane, taskLane, overlay);
+const lanes = h('div', { class: 'relative flex touch-none select-none flex-col' }, servoLane, frameLane, taskLane, overlay);
 const legend = h('div', { class: 'flex flex-wrap gap-1 pt-1.5' });
-const timeline = h('div', { class: 'shrink-0 border-t border-border px-3 pb-3 pt-1' }, ruler, lanes, legend);
+const timeline = h('div', { class: 'shrink-0 border-t border-[var(--ink-12)] px-2 pb-2 pt-1' }, ruler, lanes, legend);
 
 const stage = h('main', { class: 'flex min-h-0 flex-1 flex-col' }, player, toolbar);
 
@@ -215,8 +211,8 @@ function setStore(next) {
 }
 
 function syncTabs() {
-  const active = 'rounded-md px-2.5 py-1 text-[12px] bg-primary/20 text-foreground';
-  const idle = 'rounded-md px-2.5 py-1 text-[12px] text-muted-foreground hover:text-foreground';
+  const active = 'tab on';
+  const idle = 'tab';
   libTab.className = store === 'library' ? active : idle;
   dsTab.className = store === 'dataset' ? active : idle;
 }
@@ -224,18 +220,18 @@ function syncTabs() {
 function renderEpisodes() {
   epList.innerHTML = '';
   if (!episodes.length) {
-    epList.appendChild(emptyState(store === 'dataset' ? 'Dataset пуст' : 'Нет эпизодов'));
+    epList.appendChild(emptyState(store === 'dataset' ? 'пусто' : '—'));
     return;
   }
   for (const ep of [...episodes].reverse()) {
     const active = epMeta && epMeta.episode_index === ep.episode_index;
     epList.appendChild(h('button', {
-      class: `press flex flex-col gap-0.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${active ? 'border-primary/40 bg-primary/10' : 'border-border bg-card/50 hover:bg-muted'}`,
+      class: `eprow ${active ? 'on' : ''}`,
       onclick: () => selectEpisode(ep.episode_index),
     },
-      h('span', { class: 'font-mono text-[11px] text-primary', text: `#${ep.episode_index}` }),
-      h('span', { class: 'min-w-0 truncate text-[12px]', text: ep.task || '—' }),
-      h('span', { class: 'font-mono text-[10px] text-muted-foreground', text: `${ep.rows} кадров` })));
+      h('span', { class: 'mono text-foreground/50 tabular-nums', text: `#${ep.episode_index}` }),
+      h('span', { class: 'min-w-0 truncate text-[12.5px]', text: ep.task || '—' }),
+      h('span', { class: 'tabular-nums text-foreground/35 tracking-normal', text: `${ep.rows}` })));
   }
 }
 
@@ -306,8 +302,8 @@ window.addEventListener('resize', () => renderBbox());
 
 function setEye(e) {
   eye = e;
-  eyeL.className = `rounded-md px-2 py-0.5 text-[11px] ${eye === 'left' ? 'bg-primary/30 text-foreground' : 'text-muted-foreground'}`;
-  eyeR.className = `rounded-md px-2 py-0.5 text-[11px] ${eye === 'right' ? 'bg-primary/30 text-foreground' : 'text-muted-foreground'}`;
+  eyeL.className = `lbl press rounded px-2 py-1 ${eye === 'left' ? 'bg-foreground text-background' : ''}`;
+  eyeR.className = `lbl press rounded px-2 py-1 ${eye === 'right' ? 'bg-foreground text-background' : ''}`;
   if (epMeta) previewImg.src = api.studioFrameUrl(store, epMeta.episode_index, frame, eye);
   renderBbox();
 }
@@ -344,7 +340,7 @@ function renderRuler() {
   const step = Math.max(1, Math.round(stepSec * fps));
   for (let f = 0; f < rows; f += step) {
     ruler.appendChild(h('span', {
-      class: 'absolute top-0 font-mono text-[9px] text-muted-foreground',
+      class: 'absolute top-0 text-[9px] text-muted-foreground',
       style: { left: pct(f) }, text: formatTC(f / fps),
     }));
   }
@@ -412,7 +408,7 @@ function renderLegend() {
   stateData.channels.forEach(({ ch, name }) => {
     const off = hidden.has(ch);
     legend.appendChild(h('button', {
-      class: `press flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${off ? 'border-border text-muted-foreground/50' : 'border-border text-muted-foreground hover:text-foreground'}`,
+      class: `r2-btn press ${off ? 'opacity-45' : ''}`,
       title: 'Показать/скрыть',
       onclick: () => { off ? hidden.delete(ch) : hidden.add(ch); renderLegend(); renderServo(); },
     },
@@ -434,7 +430,7 @@ function renderTask() {
     const c = segColor(i);
     const block = h('div', {
       dataset: { seg: '1' },
-      class: `absolute top-0.5 bottom-0.5 flex items-center overflow-hidden rounded-md border px-1.5 ${selected.has(i) ? 'ring-2 ring-foreground' : ''}`,
+      class: `absolute top-0.5 bottom-0.5 flex items-center overflow-hidden rounded-full border px-3 ${selected.has(i) ? 'ring-2 ring-foreground' : ''}`,
       style: { left: pct(s.start), width: pct(Math.max(1, s.end - s.start + 1)), background: c.bg, borderColor: c.border },
       title: `#${i + 1}: ${s.task || '—'}`,
       ondblclick: (e) => { e.stopPropagation(); editTaskInline(i, block); },
@@ -451,7 +447,7 @@ function renderTask() {
 
 function editTaskInline(i, block) {
   const inp = h('input', { type: 'text', value: segments[i].task,
-    class: 'absolute inset-0 h-full w-full rounded-md border border-ring bg-popover px-1.5 text-[11px] text-foreground outline-none' });
+    class: 'absolute inset-0 h-full w-full rounded-full border border-ring bg-popover px-2 text-[11px] text-foreground outline-none' });
   block.textContent = '';
   block.appendChild(inp);
   inp.focus();

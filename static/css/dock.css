@@ -1,103 +1,99 @@
-/* Golden Layout theme — restyled to the R2 (Negentropy) dark language.
- * Base layout rules live in vendor/goldenlayout/goldenlayout-base.css; this
- * file only paints. Loaded after r2.css so the CSS variables are available.
+/* Golden Layout — окна с тонкой рамкой (референсы: контур + чуть светлее фон).
+ * Базовые размеры живут в vendor/goldenlayout/goldenlayout-base.css;
+ * здесь только краска и общая с ASBDS геометрия.
  */
 
-.lm_root {
-    font-family: var(--font-sans, system-ui, sans-serif);
-    font-size: 12px;
-}
+.lm_root { font-family: var(--font); font-size: 12px; }
+.lm_stack { background: transparent; }
 
-/* --- Stack content surface --- */
-.lm_stack {
-    background: transparent;
-}
+/* --- Окно панели --------------------------------------------------------- */
 .lm_content {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    color: var(--foreground);
+    background: var(--bg-2);
+    border: 1px solid var(--ink-12);
+    border-radius: var(--r);
+    color: var(--fg);
+    overflow: hidden;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 14px 34px rgba(0,0,0,.5);
 }
-.lm_stack > .lm_items {
-    border-radius: var(--radius-lg);
-}
+.lm_stack > .lm_items { overflow: hidden; border-radius: var(--r); }
 
-/* --- Header / tabs --- */
+/* --- Табы: .tab из ASBDS (пилюля, активная — белая плашка) --------------- */
 .lm_header {
-    height: 32px;
+    /* Высоту 30px задаёт Golden Layout инлайном. Сверху между окнами уже есть
+       зазор-сплиттер, поэтому у шапки поле только снизу — иначе над вкладкой
+       визуально вдвое больше воздуха, чем под ней. */
+    padding: 0 var(--sp-2) var(--sp-1);
     background: transparent;
     border: 0;
 }
-.lm_header .lm_tabs {
-    height: 32px;
-    align-items: stretch;
-}
+.lm_header .lm_tabs { height: 26px; align-items: center; gap: var(--sp-1); padding: 0; }
+
 .lm_header .lm_tab {
     display: inline-flex;
     align-items: center;
-    height: 32px;
+    height: 22px;
+    line-height: 1;
     margin: 0;
-    padding: 0 26px 0 12px;
-    border: 0;
-    border-right: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 12px;
+    padding: 0 20px 0 10px;
+    border: 1px solid var(--ink-12);
+    border-radius: 999px;
+    background: none;
+    color: color-mix(in srgb, var(--fg) 52%, transparent);
+    font-family: var(--font);
+    font-size: 0.6875rem;
     font-weight: 500;
     line-height: 1;
-    transition: color 150ms var(--ease-out), background-color 150ms var(--ease-out);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    transition: color 0.3s var(--ease), background 0.3s var(--ease);
 }
-.lm_header .lm_tab:hover {
-    color: var(--foreground);
-    background: oklch(1 0 0 / 4%);
+.lm_header .lm_tab:hover,
+.lm_header .lm_tab:focus,
+.lm_header .lm_tab:focus-visible {
+    outline: none;
+    box-shadow: none;
+    border-color: var(--ink-32);
+    color: var(--fg);
 }
 .lm_header .lm_tab.lm_active {
-    color: var(--foreground);
-    background: var(--background);
+    background: var(--fg);
+    border-color: var(--fg);
+    color: var(--bg);
 }
-.lm_header .lm_tab .lm_title {
-    max-width: 220px;
-    padding: 0;
-}
+.lm_header .lm_tab .lm_title { max-width: 220px; padding: 0; }
+
+/* Крестик: тонкий × в строку заголовка. */
 .lm_header .lm_tab .lm_close_tab,
 .lm_header .lm_tab .lm_maximise {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
-    top: 7px;
+    width: 12px;
+    height: 12px;
+    top: 6px;
     right: 4px;
-    border-radius: var(--radius-sm);
-    color: var(--muted-foreground);
-    opacity: 0;
-    transition: opacity 120ms var(--ease-out), background-color 120ms var(--ease-out), color 120ms var(--ease-out);
-}
-.lm_header .lm_tab:hover .lm_close_tab,
-.lm_header .lm_tab.lm_active .lm_close_tab,
-.lm_header .lm_tab.lm_active .lm_maximise {
-    opacity: 1;
-}
-.lm_header .lm_tab .lm_close_tab:hover,
-.lm_header .lm_tab .lm_maximise:hover {
-    color: var(--foreground);
-    background: oklch(1 0 0 / 10%);
+    border-radius: 50%;
+    color: currentColor;
+    opacity: 0.35;
+    transition: opacity 0.2s var(--ease);
 }
 .lm_header .lm_tab .lm_close_tab::before {
-    content: "\00d7";
-    font-size: 15px;
-    line-height: 1;
+    content: "";
+    width: 6px;
+    height: 6px;
+    background:
+        linear-gradient(currentColor, currentColor) center / 100% 1px no-repeat,
+        linear-gradient(currentColor, currentColor) center / 1px 100% no-repeat;
+    transform: rotate(45deg);
 }
-.lm_header .lm_tab .lm_maximise::before {
-    content: "\2921";
-    font-size: 12px;
-    line-height: 1;
-}
+.lm_header .lm_tab .lm_close_tab::after { display: none; }
+.lm_header .lm_tab.lm_active .lm_close_tab,
+.lm_header .lm_tab:hover .lm_close_tab { opacity: 1; }
 
-/* Stack-level controls (dropdown, maximise, close) in the header corner. */
+/* --- Кнопки правления ---------------------------------------------------- */
 .lm_header .lm_controls {
     top: 0;
-    height: 32px;
+    height: 30px;
     align-items: center;
     gap: 2px;
     padding-right: 4px;
@@ -106,92 +102,236 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-sm);
-    color: var(--muted-foreground);
-    transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+    width: 20px;
+    height: 20px;
+    border-radius: 2px;
+    color: var(--ink-50);
+    transition: color 0.3s var(--ease), background 0.3s var(--ease);
 }
-.lm_header .lm_controls > *:hover {
-    color: var(--foreground);
-    background: oklch(1 0 0 / 10%);
-}
-.lm_header .lm_controls .lm_maximise::before {
-    content: "\2921";
-    font-size: 13px;
-}
-.lm_header .lm_controls .lm_close::before {
-    content: "\00d7";
-    font-size: 16px;
-}
-.lm_header .lm_controls .lm_tabdropdown::before {
-    content: "\2261";
-    border: 0;
-    color: inherit;
-    font-size: 13px;
-}
+.lm_header .lm_controls > *:hover { color: var(--fg); background: var(--ink-08); }
 
-/* Dropdown list of overflowed tabs. */
 .lm_header .lm_tabdropdown_list {
-    top: 32px;
-    background: var(--popover);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: 0 8px 24px oklch(0 0 0 / 0.4);
-    padding: 4px;
+    top: 30px;
+    background: var(--bg-2);
+    border: 1px solid var(--ink-12);
+    border-radius: var(--r);
+    padding: 2px;
     overflow: hidden;
 }
 .lm_header .lm_tabdropdown_list .lm_tab {
-    height: 26px;
+    height: 24px;
     border: 0;
-    border-radius: var(--radius-sm);
-    color: var(--muted-foreground);
+    border-radius: 999px;
+    color: var(--ink-50);
     padding-right: 10px;
 }
-.lm_header .lm_tabdropdown_list .lm_tab:hover {
-    color: var(--foreground);
-    background: oklch(1 0 0 / 8%);
+.lm_header .lm_tabdropdown_list .lm_tab:hover { color: var(--fg); background: var(--ink-08); }
+
+/* --- Разделители ---------------------------------------------------------
+   В Golden Layout классы «наоборот»: .lm_vertical — ГОРИЗОНТАЛЬНАЯ полоса
+   (тянем вверх/вниз), .lm_horizontal — ВЕРТИКАЛЬНАЯ (тянем влево/вправо).
+   Размер элемента задаёт GL инлайном (4px), поэтому хит-зону расширяем
+   псевдоэлементом, а видимую линию рисуем по центру в правильном направлении. */
+.lm_splitter { background: transparent; z-index: 6; }
+.lm_splitter::before { content: ""; position: absolute; inset: -3px; }
+.lm_splitter::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    /* В покое линии нет: рамки панелей сами образуют стык.
+       Ближе к курсору линия подсвечивается — тот же «фонарик», что у рамок. */
+    background: radial-gradient(circle 220px at var(--mx, -400px) var(--my, -400px),
+        rgba(241, 239, 234, 0.25), rgba(241, 239, 234, 0.1) 45%, transparent 72%);
+    transition: background .3s var(--ease), box-shadow .3s var(--ease);
+}
+.lm_splitter.lm_vertical { cursor: row-resize; }
+.lm_splitter.lm_horizontal { cursor: col-resize; }
+.lm_splitter.lm_vertical::after { width: 100%; height: 1px; }
+.lm_splitter.lm_horizontal::after { width: 1px; height: 100%; }
+.lm_splitter:hover::after,
+.lm_splitter.lm_dragging::after {
+    background: color-mix(in srgb, var(--fg) 45%, transparent);
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--fg) 18%, transparent);
 }
 
-/* --- Siders / split handles --- */
-.lm_splitter {
-    background: transparent;
-    transition: background-color 120ms var(--ease-out);
-}
-.lm_splitter:hover,
-.lm_splitter.lm_dragging {
-    background: var(--primary);
-    opacity: 0.25;
-}
-.lm_splitter.lm_vertical {
-    height: 6px;
-}
-.lm_splitter.lm_horizontal {
-    width: 6px;
+.lm_dragProxy .lm_content { border-color: var(--ink-32); }
+.lm_dropTargetIndicator { outline: 1px dashed var(--ink-32); outline-offset: -1px; }
+.lm_dropTargetIndicator .lm_inner { background: var(--fg); opacity: 0.04; }
+
+/* Вариант для файлов: тот же контур, но вдвое тусклее. */
+.ez-line.ez-line--dim::after {
+    background: radial-gradient(circle 220px at var(--mx, -400px) var(--my, -400px),
+        rgba(241, 239, 234, 0.14), rgba(241, 239, 234, 0.05) 45%, transparent 72%);
 }
 
-/* --- Drag proxy & drop indicator --- */
-.lm_dragProxy .lm_content {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 12px 32px oklch(0 0 0 / 0.5);
-    opacity: 0.9;
-}
-.lm_dropTargetIndicator {
-    outline: 1px dashed var(--primary);
-    outline-offset: -1px;
-    border-radius: var(--radius-md);
-    transition: all 150ms var(--ease-out);
-}
-.lm_dropTargetIndicator .lm_inner {
-    background: var(--primary);
-    opacity: 0.08;
-    border-radius: var(--radius-md);
+/* --- «Фонарик» по линиям ---------------------------------------------------
+   Курсор подсвечивает не всю рамку, а её участок рядом с собой: радиальный
+   градиент обрезан маской до 1px контура элемента. --mx/--my — позиция
+   курсора внутри элемента, --near (0..1) — близость, их ставит initProximity(). */
+.ez-line { position: relative; }
+.ez-line::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(circle 220px at var(--mx, -400px) var(--my, -400px),
+        rgba(241, 239, 234, 0.27), rgba(241, 239, 234, 0.10) 45%, transparent 72%);
+    opacity: var(--near, 0);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+    transition: opacity .35s var(--ease);
 }
 
-/* --- Popout / maximise placeholder --- */
-.lm_maximised {
-    z-index: 40;
-    border-radius: var(--radius-lg);
-    overflow: hidden;
+/* Слайдеры: дорожка подсвечивается там, где курсор, ручка получает ободок. */
+input[type='range'] {
+    background-image: radial-gradient(circle 220px at var(--mx, -400px) var(--my, -400px),
+        rgba(241, 239, 234, 0.21), rgba(241, 239, 234, 0.08) 45%, transparent 72%) !important;
+    background-blend-mode: screen;
 }
+input[type='range']::-webkit-slider-thumb {
+    box-shadow: 0 0 calc(10px * var(--near, 0)) rgba(241, 239, 234, calc(0.18 * var(--near, 0))),
+                0 0 0 6px color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+/* --- Живой интерфейс -------------------------------------------------------
+   Волна от точки касания (кнопки, вкладки, сегменты) и волна по дорожке
+   слайдера из текущего положения бегунка. Разметку не меняем: волна —
+   абсолютный span, дорожка — слои background-image с --p/--w/--wa. */
+button, .r2-btn, .sg, .lm_tab, .tile { position: relative; overflow: hidden; }
+
+.ui-wave {
+    position: absolute;
+    left: 0; top: 0;
+    width: var(--sz, 120px); height: var(--sz, 120px);
+    margin: calc(var(--sz, 120px) / -2) 0 0 calc(var(--sz, 120px) / -2);
+    border-radius: 50%;
+    pointer-events: none;
+    background: radial-gradient(circle, rgba(241, 239, 234, .16), rgba(241, 239, 234, .05) 55%, transparent 72%);
+    animation: ui-wave .58s var(--ease) forwards;
+    z-index: 0;
+}
+@keyframes ui-wave { from { transform: scale(.04); opacity: 1; } to { transform: scale(1); opacity: 0; } }
+
+/* Дорожка слайдера: волна расходится от бегунка к обоим концам. */
+input[type='range'] {
+    background-image:
+        linear-gradient(90deg,
+            transparent calc(var(--p, 50%) - var(--w, 0%)),
+            rgba(241, 239, 234, var(--wa, 0)) calc(var(--p, 50%) - var(--w, 0%) * .35),
+            rgba(241, 239, 234, var(--wa, 0)) calc(var(--p, 50%) + var(--w, 0%) * .35),
+            transparent calc(var(--p, 50%) + var(--w, 0%))),
+        radial-gradient(circle 220px at var(--mx, -400px) var(--my, -400px),
+            rgba(241, 239, 234, .18), transparent 72%) !important;
+    background-blend-mode: screen;
+}
+
+/* Сильные скругления: пилюли у контролов, крупные радиусы у поверхностей. */
+.lm_content, .lm_stack > .lm_items { border-radius: 14px; }
+.lm_header .lm_tab { border-radius: 999px; }
+.seg, .seg .sg, .seg-pill { border-radius: 999px; }
+.r2-btn { border-radius: 999px; height: 28px; padding: 0 var(--sp-3); }
+.r2-btn--icon { border-radius: 50%; }
+input, select { border-radius: 999px; height: 36px; padding: 0 var(--sp-3); }
+textarea { border-radius: 16px; }
+.r2-switch .track { border-radius: 999px; }
+.r2-switch .track::after { border-radius: 50%; }
+.CodeMirror-hints { border-radius: 16px; }
+.CodeMirror-hint { border-radius: 10px; }
+.card, [role='dialog'] { border-radius: 22px; }
+
+/* Линии на месте: у кнопок видимая рамка. */
+.r2-btn { border: 0; box-shadow: inset 0 0 0 1px var(--ink-12); }
+.r2-btn:hover { box-shadow: inset 0 0 0 1px var(--ink-32); }
+.r2-btn--quiet { box-shadow: none; }
+.r2-btn--danger { box-shadow: inset 0 0 0 1px rgba(226, 96, 80, .45); }
+
+/* Строки списков мягко сдвигаются под курсором — как в ASBDS. */
+.trow, .eprow { transition: background-color .3s var(--ease), padding-left .3s var(--ease), color .3s var(--ease); }
+.eprow:hover { padding-left: 6px; }
+
+/* Радио/чекбокс внутри .seg не должны занимать место: браузерный input
+   добавлял ~13px перед первой буквой и растягивал активную пилюлю. */
+.seg input[type='radio'],
+.seg input[type='checkbox'] {
+    position: absolute !important;
+    width: 0 !important; height: 0 !important;
+    margin: 0 !important; padding: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    appearance: none;
+}
+
+/* --- Курсор: сжатие и «клик» ---------------------------------------------- */
+.cur .c1, .cur .c2 {
+    transition: width .2s var(--ease), height .2s var(--ease), margin .2s var(--ease),
+                opacity .16s var(--ease), border-color .2s var(--ease);
+}
+/* Пока кнопка мыши зажата — точка в центре чуть крупнее. */
+.cur.is-down .c1 { width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; }
+.cur.is-down .c2 { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; opacity: .85; }
+.cur.is-click .c2 { width: 0; height: 0; margin: 0; opacity: 0; }
+.cur.is-click .c1 { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; }
+
+/* --- Прямоугольная рамка окна под фонариком -------------------------------
+   У окна скруглённые углы (14px), а снаружи, по габариту .lm_item, живёт
+   строгая прямоугольная рамка. Видна только рядом с курсором — тот же
+   принцип, что у .ez-line, но с radius 0 и по внешнему контуру. */
+.lm_item { position: relative; }
+.ez-frame::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: 0;
+    pointer-events: none;
+    background: radial-gradient(circle 240px at var(--mx, -400px) var(--my, -400px),
+        rgba(241, 239, 234, 0.38), rgba(241, 239, 234, 0.12) 45%, transparent 72%);
+    opacity: var(--near, 0);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+    transition: opacity .35s var(--ease);
+    z-index: 3;
+}
+
+/* Шапка не должна переноситься: высота фиксирована, перенос выглядел как
+   «шапка выросла». Часы — табличные цифры, иначе ширина скачет от времени. */
+.app-head { flex-wrap: nowrap !important; overflow: hidden; }
+.app-clock { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Слайдер как водная гладь: два расходящихся кольца от бегунка. */
+input[type='range'] {
+    background-image:
+        linear-gradient(90deg,
+            transparent calc(var(--p, 50%) - var(--w2, 0%)),
+            rgba(241, 239, 234, var(--wa2, 0)) calc(var(--p, 50%) - var(--w2, 0%) * .7),
+            transparent calc(var(--p, 50%) - var(--w2, 0%) * .55),
+            transparent calc(var(--p, 50%) + var(--w2, 0%) * .55),
+            rgba(241, 239, 234, var(--wa2, 0)) calc(var(--p, 50%) + var(--w2, 0%) * .7),
+            transparent calc(var(--p, 50%) + var(--w2, 0%))),
+        linear-gradient(90deg,
+            transparent calc(var(--p, 50%) - var(--w, 0%)),
+            rgba(241, 239, 234, var(--wa, 0)) calc(var(--p, 50%) - var(--w, 0%) * .3),
+            rgba(241, 239, 234, var(--wa, 0)) calc(var(--p, 50%) + var(--w, 0%) * .3),
+            transparent calc(var(--p, 50%) + var(--w, 0%))),
+        radial-gradient(circle 220px at var(--mx, -400px) var(--my, -400px),
+            rgba(241, 239, 234, .14), transparent 72%) !important;
+    background-blend-mode: screen;
+}
+
+/* Клик: точка возвращается быстро и с анимацией, без «залипания». */
+.cur .c1 { transition: width .12s var(--ease), height .12s var(--ease), margin .12s var(--ease); }
+.cur.is-click .c1 { width: 10px; height: 10px; margin: -5px 0 0 -5px; }
+
+/* Полосы прокрутки скрыты везде: прокрутка работает, визуального шума нет. */
+* { scrollbar-width: none; -ms-overflow-style: none; }
+*::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* Никакой анимации width/height у .lm_item: Golden Layout измеряет элементы
+   во время раскладки, и переход отдавал бы ему промежуточные размеры. */
