@@ -23,8 +23,8 @@ if (!reduceMotion.matches && !coarse.matches) {
         position: fixed; left: 0; top: 0; width: ${SIZE}px; height: ${SIZE}px;
         border-radius: 50%; pointer-events: none; z-index: 9997;
         opacity: 0; will-change: transform;
-        -webkit-backdrop-filter: blur(7px) saturate(0.75) brightness(1.12) contrast(1.05);
-        backdrop-filter: blur(7px) saturate(0.75) brightness(1.12) contrast(1.05);
+        -webkit-backdrop-filter: blur(5px);
+        backdrop-filter: blur(5px);
         box-shadow:
           inset 0 1px 0 rgba(241, 239, 234, 0.14),
           inset 0 0 0 1px rgba(241, 239, 234, 0.10),

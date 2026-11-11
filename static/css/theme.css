@@ -4,8 +4,8 @@
    Файл нелейерный — значит сильнее слоёв Tailwind и @layer components. */
 
 html[data-theme="light"] {
-    --bg: #f2f0eb;
-    --bg-2: #e8e5de;
+    --bg: #f0f0f0;
+    --bg-2: #e4e4e4;
     --fg: #0d0d0d;
     color-scheme: light;
 }
