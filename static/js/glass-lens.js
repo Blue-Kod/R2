@@ -10,7 +10,7 @@
     if (!api || !api.toCanvas) return;
     window.__r2GlassCapture = true;
     window.__glassToCanvas = async (el, o = {}) => api.toCanvas(el, {
-      scale: o.pixelRatio || 1,
+      scale: (o.pixelRatio || 1) * (window.__glassScale || 1),
       width: o.width,
       height: o.height,
       backgroundColor: o.backgroundColor || 'transparent',
@@ -71,6 +71,7 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
 
     let deepEl = null;
     let deepCanvas = null;
+    let mediaOnly = false;
     let deepBusy = false;
     let deepAt = 0;
     let lastDeepAt = 0;
@@ -137,7 +138,7 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
 
       const chain = document.elementsFromPoint(cur.x, cur.y).reverse(); // снаружи внутрь
       const minArea = (SAMPLE * SAMPLE) / 2;   // слишком мелкий элемент не нужен
-      const maxArea = 420 * 420;               // крупный = дорогой снимок (lm_items)
+      const maxArea = 280 * 280;               // крупный = дорогой снимок (lm_items)
       let best = null;
       let bestArea = Infinity;
       let covers = null;
@@ -154,7 +155,7 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
         if (area < minArea || area > maxArea) continue;
         // Тяжёлый узел = дорогой снимок (lm_items давал 557мс). Лучше плоский
         // фон в линзе, чем пропущенный кадр.
-        if (nodesIn(el) > 250) continue;
+        if (nodesIn(el) > 80) continue;
         if (area < bestArea) { bestArea = area; best = el; }
       }
       findRes = best || covers;
@@ -164,6 +165,8 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
     // Частота пересъёмок: в панели DOM меняется 30 раз в секунду, снимок
     // на каждую мутацию (20-150мс) съедал кадры.
     const MIN_INTERVAL = 250;
+
+    let lastShotSig = '';
 
     async function updateDeep(force) {
       if (!inst) return;
@@ -175,16 +178,40 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
       if (deepBusy) { deepQueued = true; return; }
       const el = findDeep();
       if (!el) return;
-      if (!force && el === deepEl && deepCanvas && performance.now() - deepAt < 250) return;
+      // Тот же элемент и снимок свежий — кадр не тратим.
+      if (el === deepEl && deepCanvas && performance.now() - deepAt < 400) return;
       deepBusy = true;
       deepEl = el;
+      const med = mediaIn(el);
+      const heavyMedia = med.some((m) => {
+        if (m.tagName === 'VIDEO') return true;
+        // Канвас внутри (xterm, камера) snapdom не рендерит и тратит сотни мс
+        const r = m.getBoundingClientRect();
+        const b = el.getBoundingClientRect();
+        return r.width * r.height > (b.width * b.height) * 0.15;
+      });
+      if (heavyMedia) {
+        // Внутри — видео/оверлей-канвас: snapdom их не отдаёт, а попытка
+        // стоит до 400мс. Рисуем только живые пиксели поверх фона.
+        deepCanvas = null;
+        mediaOnly = true;
+        deepAt = performance.now();
+        markDirty();
+        deepBusy = false;
+        return;
+      }
+      mediaOnly = false;
       try {
+        // Снимок в 0.75 разрешения: линза всё равно увеличивает и преломляет,
+        // разницы не видно, а растеризация дешевле примерно на треть.
+        window.__glassScale = 0.75;
         await inst.capture.captureElement(el, true);
         const rec = inst.capture.cache.get(el);
         deepCanvas = rec ? rec.canvas : null;
         deepAt = performance.now();
         markDirty();
       } catch { /* ignore */ }
+      window.__glassScale = 1;
       deepBusy = false;
       if (deepQueued) { deepQueued = false; setTimeout(() => updateDeep(false), 60); }
     }
@@ -230,6 +257,14 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
     // ── сборка сцены ─────────────────────────────────────────────────────
     function compose(ctx, sampleRect, rootRect, dpr) {
       try {
+        if (mediaOnly && deepEl) {
+          ctx.save();
+          ctx.fillStyle = bgColorFor(deepEl);
+          ctx.fillRect(0, 0, sampleRect.w, sampleRect.h);
+          ctx.restore();
+          drawMedia(ctx, sampleRect, rootRect, dpr);
+          return true;
+        }
         if (!deepCanvas || !deepEl) {
           ctx.save();
           ctx.fillStyle = bgColorFor(deepEl || document.body);
@@ -341,7 +376,7 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
       // Снимок — только когда курсор остановился: в движении важнее кадры,
       // а стекло доли миллисекунды показывает предыдущую сцену.
       clearTimeout(moveCapTimer);
-      moveCapTimer = setTimeout(() => updateDeep(true), 130);
+      moveCapTimer = setTimeout(() => updateDeep(true), 450);
     }, { passive: true });
 
     // ── ввод текста: не мешаем ───────────────────────────────────────────
