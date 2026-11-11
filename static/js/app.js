@@ -60,7 +60,7 @@ function buildHeader() {
     onclick: () => buildShell(boot),
   }, h('span', { class: 'brand r2-bloom', text: 'R2' }));
 
-  return h('header', { 'data-chrome': '', class: 'head app-head' },
+  const head = h('header', { 'data-chrome': '', class: 'head app-head' },
     logo,
     h('nav', { class: 'nav' },
       action('sight', 'Команды (Ctrl+K)', openPalette),
@@ -72,6 +72,9 @@ function buildHeader() {
       action('power', 'Выключить', doShutdown),
       action('logout', 'Выйти', doLogout)),
     clock);
+  // Переключатель темы — в шапке, перед часами.
+  window.R2Theme?.mount?.(head);
+  return head;
 }
 
 function buildShell(data) {

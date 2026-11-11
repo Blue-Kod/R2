@@ -1,0 +1,84 @@
+/* Светлая тема и переключатель в шапке.
+   Меняются только базовые токены: --ink-* считаются от --fg через color-mix,
+   поэтому вся прозрачная шкала переворачивается сама.
+   Файл нелейерный — значит сильнее слоёв Tailwind и @layer components. */
+
+html[data-theme="light"] {
+    --bg: #f2f0eb;
+    --bg-2: #e8e5de;
+    --fg: #0d0d0d;
+    color-scheme: light;
+}
+
+html[data-theme="light"] body { background: var(--bg); color: var(--fg); }
+html[data-theme="light"] body::after { opacity: .04; mix-blend-mode: multiply; }
+
+/* Golden Layout: контуры окон и вкладки берут токены, но тени были под тёмную */
+html[data-theme="light"] .lm_item,
+html[data-theme="light"] .lm_content { box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
+html[data-theme="light"] .lm_splitter::after { background: rgba(0, 0, 0, .12); }
+
+/* Терминал/код: инвертировать палитру целиком не нужно, но фон подстраиваем */
+html[data-theme="light"] .xterm { background: var(--bg-2) !important; }
+html[data-theme="light"] .CodeMirror { background: var(--bg-2) !important; color: var(--fg) !important; }
+
+/* ── переключатель темы: ползунок с солнцем и луной, без текста ──────── */
+.tsw {
+    --sw-w: 56px;
+    --sw-h: 28px;
+    --sw-knob: 22px;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    width: var(--sw-w);
+    height: var(--sw-h);
+    padding: 0 5px;
+    flex: 0 0 auto;
+    border: 1px solid var(--ink-20);
+    border-radius: 999px;
+    background: var(--ink-08);
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color .3s var(--ease), background .3s var(--ease);
+}
+.tsw:hover { border-color: var(--ink-32); }
+.tsw:focus-visible { outline: 1px solid var(--fg); outline-offset: 4px; }
+.tsw i {
+    position: relative;
+    z-index: 2;
+    width: 14px;
+    height: 14px;
+    display: grid;
+    place-items: center;
+    color: var(--ink-32);
+    transition: color .32s var(--ease), transform .32s var(--ease);
+}
+.tsw i svg { width: 14px; height: 14px; display: block; }
+.tsw-k {
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    left: 3px;
+    width: var(--sw-knob);
+    height: var(--sw-knob);
+    margin-top: calc(var(--sw-knob) / -2);
+    border-radius: 50%;
+    background: var(--fg);
+    transition: transform .38s var(--ease), background .3s var(--ease);
+}
+html[data-theme="dark"] .tsw-k,
+html:not([data-theme="light"]) .tsw-k {
+    transform: translateX(calc(var(--sw-w) - var(--sw-knob) - 8px));
+}
+html[data-theme="dark"] .tsw .tsw-moon,
+html:not([data-theme="light"]) .tsw .tsw-moon { color: var(--bg); }
+html[data-theme="light"] .tsw .tsw-sun { color: var(--bg); }
+html[data-theme="dark"] .tsw .tsw-sun,
+html:not([data-theme="light"]) .tsw .tsw-sun { transform: rotate(-18deg) scale(.92); }
+html[data-theme="light"] .tsw .tsw-moon { transform: rotate(18deg) scale(.92); }
+
+@media (prefers-reduced-motion: reduce) {
+    .tsw, .tsw-k, .tsw i { transition: none; }
+}
