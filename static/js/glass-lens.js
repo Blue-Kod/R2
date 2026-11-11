@@ -73,6 +73,8 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
     let deepCanvas = null;
     let deepBusy = false;
     let deepAt = 0;
+    let lastDeepAt = 0;
+    let deepQueued = false;
 
     let scrolling = false;
     let scrollIdle = 0;
@@ -114,25 +116,42 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
     }
 
     // ── выбор элемента под линзой ────────────────────────────────────────
+    // Кэш результата: в панели Golden Layout цепочка длинная, а
+    // getBoundingClientRect на каждый элемент = принудительный layout (300мс в профиле).
+    let findAt = 0;
+    let findKey = '';
+    let findRes = null;
+
     function findDeep() {
+      const key = Math.round(cur.x / 8) + ':' + Math.round(cur.y / 8);
+      if (key === findKey && performance.now() - findAt < 120) return findRes;
+      findKey = key;
+      findAt = performance.now();
+
       const chain = document.elementsFromPoint(cur.x, cur.y).reverse();
+      const half = SAMPLE / 2;
       let deep = null;
+      let checked = 0;
       for (const el of chain) {
+        if (checked >= 10) break;
         if (!el.getBoundingClientRect || el === lensEl || SKIP.has(el.tagName)) continue;
-        const cs = getComputedStyle(el);
-        if (cs.position === 'fixed' || cs.visibility === 'hidden' || cs.display === 'none') continue;
-        if (parseFloat(cs.opacity) === 0) continue;
         const r = el.getBoundingClientRect();
-        const half = SAMPLE / 2;
+        if (r.width < half * 2 || r.height < half * 2) continue;   // мало по размеру — раньше ректа
+        checked += 1;
         const covers = r.left <= cur.x - half + 1 && r.right >= cur.x + half - 1
           && r.top <= cur.y - half + 1 && r.bottom >= cur.y + half - 1;
         if (covers) deep = el;
       }
+      findRes = deep;
       return deep;
     }
 
     async function updateDeep(force) {
-      if (!inst || deepBusy) return;
+      if (!inst) return;
+      const now = performance.now();
+      if (!force && now - lastDeepAt < 250) { deepQueued = true; return; }
+      lastDeepAt = now;
+      if (deepBusy) { deepQueued = true; return; }
       const el = findDeep();
       if (!el) return;
       if (!force && el === deepEl && deepCanvas && performance.now() - deepAt < 250) return;
@@ -146,6 +165,35 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
         markDirty();
       } catch { /* ignore */ }
       deepBusy = false;
+      if (deepQueued) { deepQueued = false; setTimeout(() => updateDeep(false), 60); }
+    }
+
+    // Канвас/video/img snapdom не рендерит (foreignObject), поэтому такие
+    // элементы рисуем напрямую — живые пиксели, без белых дыр.
+    function drawMedia(ctx, sampleRect, rootRect, dpr) {
+      if (!deepEl) return false;
+      const nodes = [];
+      if (/^(IMG|VIDEO|CANVAS)$/.test(deepEl.tagName)) nodes.push(deepEl);
+      for (const m of deepEl.querySelectorAll('img, video, canvas')) nodes.push(m);
+      let drew = false;
+      for (const m of nodes) {
+        const r = m.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        const x = Math.round((r.left - rootRect.left) * dpr) - sampleRect.x;
+        const y = Math.round((r.top - rootRect.top) * dpr) - sampleRect.y;
+        const w = Math.round(r.width * dpr);
+        const h = Math.round(r.height * dpr);
+        if (x > sampleRect.w || y > sampleRect.h || x + w < 0 || y + h < 0) continue;
+        try {
+          if (m.tagName === 'CANVAS') {
+            if (m.width > 0 && m.height > 0) { ctx.drawImage(m, x, y, w, h); drew = true; }
+          } else {
+            ctx.drawImage(m, x, y, w, h);
+            drew = true;
+          }
+        } catch { /* ignore */ }
+      }
+      return drew;
     }
 
     // ── сборка сцены ─────────────────────────────────────────────────────
@@ -165,7 +213,12 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
         const r = deepEl.getBoundingClientRect();
         const x = Math.round((r.left - rootRect.left) * dpr) - sampleRect.x;
         const y = Math.round((r.top - rootRect.top) * dpr) - sampleRect.y;
+        const hasMedia = /^(IMG|VIDEO|CANVAS)$/.test(deepEl.tagName)
+          || deepEl.querySelector('img, video, canvas') !== null;
+        // Если под линзой медиа — снимок DOM рисуем, но сверху кладём живые
+        // пиксели: в foreignObject их нет, и без этого получалось белое пятно.
         ctx.drawImage(deepCanvas, x, y, Math.round(r.width * dpr), Math.round(r.height * dpr));
+        if (hasMedia) drawMedia(ctx, sampleRect, rootRect, dpr);
       } catch {
         try {
           ctx.save();
@@ -273,7 +326,7 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
     // мутации DOM (классы, src, текст)
     let domQueued = false;
     new MutationObserver((list) => {
-      for (const m of list) {
+      for (const m of list.slice(0, 3)) {
         const t = m.target.nodeType === 1 ? m.target : m.target.parentElement;
         if (!t || (lensEl && lensEl.contains(t))) continue;
         const b = t.getBoundingClientRect();

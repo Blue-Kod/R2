@@ -1890,6 +1890,7 @@ var LiquidGlass = class _LiquidGlass {
         }
       }
     });
+    this._setupDirectRenderer();
     for (const el of this.glassSet) {
       this._glassSubtreeObserver.observe(el, {
         childList: true,
