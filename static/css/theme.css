@@ -22,20 +22,22 @@ html[data-theme="light"] .lm_splitter::after { background: rgba(0, 0, 0, .12); }
 html[data-theme="light"] .xterm { background: var(--bg-2) !important; }
 html[data-theme="light"] .CodeMirror { background: var(--bg-2) !important; color: var(--fg) !important; }
 
-/* ── переключатель темы: ползунок с солнцем и луной, без текста ──────── */
+/* ── переключатель темы: ползунок с солнцем и луной, без текста ────────
+   Полностью в монохромной шкале: только оттенки --ink-*, без чистого чёрного
+   и белого, чтобы не выбиваться из интерфейса. */
 .tsw {
-    --sw-w: 56px;
-    --sw-h: 28px;
-    --sw-knob: 22px;
+    --sw-w: 48px;
+    --sw-h: 24px;
+    --sw-knob: 18px;
     position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: space-between;
     width: var(--sw-w);
     height: var(--sw-h);
-    padding: 0 5px;
+    padding: 0 6px;
     flex: 0 0 auto;
-    border: 1px solid var(--ink-20);
+    border: 1px solid var(--ink-12);
     border-radius: 999px;
     background: var(--ink-08);
     cursor: pointer;
@@ -43,19 +45,19 @@ html[data-theme="light"] .CodeMirror { background: var(--bg-2) !important; color
     appearance: none;
     transition: border-color .3s var(--ease), background .3s var(--ease);
 }
-.tsw:hover { border-color: var(--ink-32); }
-.tsw:focus-visible { outline: 1px solid var(--fg); outline-offset: 4px; }
+.tsw:hover { border-color: var(--ink-20); }
+.tsw:focus-visible { outline: 1px solid var(--ink-32); outline-offset: 4px; }
 .tsw i {
     position: relative;
     z-index: 2;
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     display: grid;
     place-items: center;
-    color: var(--ink-32);
+    color: var(--ink-20);
     transition: color .32s var(--ease), transform .32s var(--ease);
 }
-.tsw i svg { width: 14px; height: 14px; display: block; }
+.tsw i svg { width: 12px; height: 12px; display: block; }
 .tsw-k {
     position: absolute;
     z-index: 1;
@@ -65,20 +67,24 @@ html[data-theme="light"] .CodeMirror { background: var(--bg-2) !important; color
     height: var(--sw-knob);
     margin-top: calc(var(--sw-knob) / -2);
     border-radius: 50%;
-    background: var(--fg);
+    background: var(--ink-12);
     transition: transform .38s var(--ease), background .3s var(--ease);
 }
 html[data-theme="dark"] .tsw-k,
 html:not([data-theme="light"]) .tsw-k {
-    transform: translateX(calc(var(--sw-w) - var(--sw-knob) - 8px));
+    transform: translateX(calc(var(--sw-w) - var(--sw-knob) - 6px));
 }
 html[data-theme="dark"] .tsw .tsw-moon,
-html:not([data-theme="light"]) .tsw .tsw-moon { color: var(--bg); }
-html[data-theme="light"] .tsw .tsw-sun { color: var(--bg); }
+html:not([data-theme="light"]) .tsw .tsw-moon { color: var(--fg); }
+html[data-theme="light"] .tsw .tsw-sun { color: var(--fg); }
 html[data-theme="dark"] .tsw .tsw-sun,
-html:not([data-theme="light"]) .tsw .tsw-sun { transform: rotate(-18deg) scale(.92); }
-html[data-theme="light"] .tsw .tsw-moon { transform: rotate(18deg) scale(.92); }
+html:not([data-theme="light"]) .tsw .tsw-sun { transform: rotate(-18deg) scale(.9); }
+html[data-theme="light"] .tsw .tsw-moon { transform: rotate(18deg) scale(.9); }
 
 @media (prefers-reduced-motion: reduce) {
     .tsw, .tsw-k, .tsw i { transition: none; }
 }
+
+/* Курсорная точка из asbds.css белая — в светлой теме делаем её тёмной. */
+html[data-theme="light"] .cur .c1 { background: var(--fg); }
+html[data-theme="light"] .cur .c2 { border-color: color-mix(in srgb, var(--fg) 45%, transparent); }
