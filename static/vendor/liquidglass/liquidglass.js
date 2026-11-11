@@ -2408,6 +2408,11 @@ var LiquidGlass = class _LiquidGlass {
     this._glassLastSize.set(el, { w: elW, h: elH });
   }
   _checkGlassSizeChanges() {
+    // offsetWidth/offsetHeight форсируют layout. В Golden Layout панели
+    // перекладываются постоянно, и проверка на каждом кадре съедала 230мс.
+    const now = performance.now();
+    if (this._lastSizeCheck && now - this._lastSizeCheck < 300) return false;
+    this._lastSizeCheck = now;
     let changed = false;
     for (const el of this.glassSet) {
       const w = el.offsetWidth;

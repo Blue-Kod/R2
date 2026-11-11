@@ -118,6 +118,13 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
     // ── выбор элемента под линзой ────────────────────────────────────────
     // Кэш результата: в панели Golden Layout цепочка длинная, а
     // getBoundingClientRect на каждый элемент = принудительный layout (300мс в профиле).
+    const nodeCount = new WeakMap();
+    function nodesIn(el) {
+      let n = nodeCount.get(el);
+      if (n === undefined) { n = el.querySelectorAll('*').length + 1; nodeCount.set(el, n); }
+      return n;
+    }
+
     let findAt = 0;
     let findKey = '';
     let findRes = null;
@@ -128,28 +135,42 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
       findKey = key;
       findAt = performance.now();
 
-      const chain = document.elementsFromPoint(cur.x, cur.y).reverse();
+      const chain = document.elementsFromPoint(cur.x, cur.y).reverse(); // снаружи внутрь
+      const minArea = (SAMPLE * SAMPLE) / 2;   // слишком мелкий элемент не нужен
+      const maxArea = 420 * 420;               // крупный = дорогой снимок (lm_items)
+      let best = null;
+      let bestArea = Infinity;
+      let covers = null;
       const half = SAMPLE / 2;
-      let deep = null;
-      let checked = 0;
+
       for (const el of chain) {
-        if (checked >= 10) break;
         if (!el.getBoundingClientRect || el === lensEl || SKIP.has(el.tagName)) continue;
         const r = el.getBoundingClientRect();
-        if (r.width < half * 2 || r.height < half * 2) continue;   // мало по размеру — раньше ректа
-        checked += 1;
-        const covers = r.left <= cur.x - half + 1 && r.right >= cur.x + half - 1
-          && r.top <= cur.y - half + 1 && r.bottom >= cur.y + half - 1;
-        if (covers) deep = el;
+        if (r.width < 24 || r.height < 24) continue;
+        const area = r.width * r.height;
+        // «покрывающий» — запасной вариант, если ничего подходящего по размеру
+        if (r.left <= cur.x - half + 1 && r.right >= cur.x + half - 1
+          && r.top <= cur.y - half + 1 && r.bottom >= cur.y + half - 1) covers = el;
+        if (area < minArea || area > maxArea) continue;
+        // Тяжёлый узел = дорогой снимок (lm_items давал 557мс). Лучше плоский
+        // фон в линзе, чем пропущенный кадр.
+        if (nodesIn(el) > 250) continue;
+        if (area < bestArea) { bestArea = area; best = el; }
       }
-      findRes = deep;
-      return deep;
+      findRes = best || covers;
+      return findRes;
     }
+
+    // Частота пересъёмок: в панели DOM меняется 30 раз в секунду, снимок
+    // на каждую мутацию (20-150мс) съедал кадры.
+    const MIN_INTERVAL = 250;
 
     async function updateDeep(force) {
       if (!inst) return;
       const now = performance.now();
-      if (!force && now - lastDeepAt < 250) { deepQueued = true; return; }
+      // В движении не снимаем вообще: только фон и живые медиа.
+      if (!force && now - lastMoveAt < 140) { deepQueued = true; return; }
+      if (now - lastDeepAt < MIN_INTERVAL) { deepQueued = true; return; }
       lastDeepAt = now;
       if (deepBusy) { deepQueued = true; return; }
       const el = findDeep();
@@ -170,11 +191,21 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
 
     // Канвас/video/img snapdom не рендерит (foreignObject), поэтому такие
     // элементы рисуем напрямую — живые пиксели, без белых дыр.
+    const mediaCache = new WeakMap();
+    function mediaIn(el) {
+      const now = performance.now();
+      const rec = mediaCache.get(el);
+      if (rec && now - rec.at < 500) return rec.list;
+      const list = /^(IMG|VIDEO|CANVAS)$/.test(el.tagName)
+        ? [el]
+        : [...el.querySelectorAll('img, video, canvas')].slice(0, 12);
+      mediaCache.set(el, { at: now, list });
+      return list;
+    }
+
     function drawMedia(ctx, sampleRect, rootRect, dpr) {
       if (!deepEl) return false;
-      const nodes = [];
-      if (/^(IMG|VIDEO|CANVAS)$/.test(deepEl.tagName)) nodes.push(deepEl);
-      for (const m of deepEl.querySelectorAll('img, video, canvas')) nodes.push(m);
+      const nodes = mediaIn(deepEl);
       let drew = false;
       for (const m of nodes) {
         const r = m.getBoundingClientRect();
@@ -269,6 +300,7 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
 
     // ── движение: пружина ────────────────────────────────────────────────
     let lastT = performance.now();
+    let lastRenderAt = 0;
     (function tick(now) {
       const dt = Math.min(0.033, Math.max(0.001, (now - lastT) / 1000));
       lastT = now;
@@ -281,16 +313,35 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
         cur.x += cur.vx * dt;
         cur.y += cur.vy * dt;
         placeLens(cur.x, cur.y);
-        if (Math.abs(state.x - cur.x) > 0.4 || Math.abs(state.y - cur.y) > 0.4) markDirty();
+        // При быстром движении стекло «растворяется»: рендер 76px-шейдера
+        // каждый кадр отбирает кадры у панели (видео + терминал). Как только
+        // курсор замедлился — стекло проявляется и обновляется.
+        const speed = Math.min(1, dt > 0 ? Math.hypot(cur.vx, cur.vy) / 1000 : 0);
+        const visible = speed < 0.35;
+        if (lensEl) {
+          const want = visible ? '1' : '0';
+          if (lensEl.dataset.vis !== want) {
+            lensEl.dataset.vis = want;
+            lensEl.style.transition = 'opacity 120ms ease';
+            lensEl.style.opacity = want;
+          }
+        }
+        if (visible && (Math.abs(state.x - cur.x) > 0.4 || Math.abs(state.y - cur.y) > 0.4)
+          && now - lastRenderAt >= 70) { lastRenderAt = now; markDirty(); }
       }
       requestAnimationFrame(tick);
     })(performance.now());
 
+    let moveCapTimer = 0;
     addEventListener('pointermove', (e) => {
       lastMoveAt = performance.now();
       state.x = e.clientX;
       state.y = e.clientY;
       if (!building && !lensEl) build();
+      // Снимок — только когда курсор остановился: в движении важнее кадры,
+      // а стекло доли миллисекунды показывает предыдущую сцену.
+      clearTimeout(moveCapTimer);
+      moveCapTimer = setTimeout(() => updateDeep(true), 130);
     }, { passive: true });
 
     // ── ввод текста: не мешаем ───────────────────────────────────────────
@@ -320,7 +371,7 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
       const sig = styleSig();
       if (!sig || sig === hoverSig) return;
       hoverSig = sig;
-      updateDeep(true);
+      updateDeep(false);
     }, 200);
 
     // мутации DOM (классы, src, текст)
@@ -329,12 +380,12 @@ if (!reduceMotion.matches && !coarse.matches && window.LiquidGlass) {
       for (const m of list.slice(0, 3)) {
         const t = m.target.nodeType === 1 ? m.target : m.target.parentElement;
         if (!t || (lensEl && lensEl.contains(t))) continue;
-        const b = t.getBoundingClientRect();
-        if (b.right < cur.x - 60 || b.left > cur.x + 60) continue;
-        if (b.bottom < cur.y - 60 || b.top > cur.y + 60) continue;
+        // Без чтения геометрии: getBoundingClientRect в MutationObserver — это
+        // принудительный layout на каждую мутацию (328мс в профиле панели).
+        // Частоту всё равно ограничивает троттлинг пересъёмки.
         if (scrolling || typing() || domQueued) continue;
         domQueued = true;
-        requestAnimationFrame(() => { domQueued = false; updateDeep(true); });
+        requestAnimationFrame(() => { domQueued = false; updateDeep(false); });
         return;
       }
     }).observe(document.body, {
