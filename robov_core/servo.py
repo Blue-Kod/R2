@@ -38,9 +38,11 @@ PULSE_MIN_COUNTS_50HZ, PULSE_MAX_COUNTS_50HZ = 102, 550
 PULSE_MIN_US = PULSE_MIN_COUNTS_50HZ * PULSE_US_PER_COUNT_50HZ
 PULSE_MAX_US = PULSE_MAX_COUNTS_50HZ * PULSE_US_PER_COUNT_50HZ
 
-# Поза покоя и включения: виртуальный 0 (физ. 0/0/270/270).
-REST_POSE: Dict[int, int] = {0: 0}
-START_POSE: Dict[int, int] = {0: 0}
+# Поза покоя и включения: 3° — чуть внутри нижнего упора.
+# Ровно 0° — механический конец хода: сервы упираются и гудят, а ток
+# просаживает питание (робот уходил в ребут). 0..90 остаются доступны.
+REST_POSE: Dict[int, int] = {0: 3}
+START_POSE: Dict[int, int] = {0: 3}
 
 DEFAULT_OFFSETS: Dict[int, float] = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}
 DEFAULT_INVERTED: Set[int] = {2, 3}
