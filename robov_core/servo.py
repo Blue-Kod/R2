@@ -65,10 +65,15 @@ CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config.json"
 PWM_FREQ_HZ: float = 196.8
 
 MOVE_TICK: float = 0.01        # период управления, с
-# 90 вирт.°/с = 270 физ.°/с — предел, на котором сервы ещё не воют.
+# 90 вирт.°/с = ~270 физ.°/с. Разгон/торможение — с ограничением рывка
+# (jerk): без него конец хода ощущается резким ударом.
 MOVE_MAX_SPEED: float = 90.0   # град/с (виртуальных)
-MOVE_ACCEL: float = 600.0      # град/с² (виртуальных)
-MOVE_DEADBAND: float = 0.2     # мёртвая зона у цели, град
+MOVE_ACCEL: float = 200.0      # град/с² (виртуальных)
+MOVE_JERK: float = 2000.0      # град/с³ (виртуальных): плавный старт/финиш
+# Тормозной профиль считаем от половины доступного ускорения: дискретный
+# тик 10 мс иначе не успевает погасить скорость и в конце будет рывок.
+MOVE_BRAKE_FRAC: float = 0.5
+MOVE_DEADBAND: float = 0.01    # мёртвая зона у цели, град
 
 
 def virtual_to_pulse_us(virtual: float, offset: float = 0.0,
@@ -134,6 +139,7 @@ def servo_config() -> Dict[str, object]:
             "tick": MOVE_TICK,
             "max_speed": MOVE_MAX_SPEED,
             "accel": MOVE_ACCEL,
+            "jerk": MOVE_JERK,
             "deadband": MOVE_DEADBAND,
         },
     }
@@ -180,6 +186,11 @@ class ServoController:
         # Mover: одна логическая ось.
         self._move_targets: Dict[int, Optional[int]] = {}
         self._move_velocities: Dict[int, float] = {}
+        self._move_accels: Dict[int, float] = {}
+        # Длина одиночного переезда (для коротких ходов) и время последней
+        # цели: поток целей от телеопа не режем, одиночные — планируем.
+        self._move_spans: Dict[int, float] = {}
+        self._last_target_time: Dict[int, float] = {}
         self._move_positions: Dict[int, float] = {}
         self._mover_cond = threading.Condition()
         self._mover_thread: Optional[threading.Thread] = None
@@ -441,11 +452,16 @@ class ServoController:
 
         command_min, command_max = self.command_limits[channel]
         target_command = int(max(command_min, min(command_max, angle)))
+        now = time.monotonic()
 
         if not smooth:
             with self.lock:
                 self.current_angles[channel] = target_command
                 self._move_positions.pop(channel, None)
+                self._move_velocities.pop(channel, None)
+                self._move_accels.pop(channel, None)
+                self._move_spans.pop(channel, None)
+                self._last_target_time[channel] = now
             with self._mover_cond:
                 self._move_targets.pop(channel, None)
             return self._set_servo_immediate(channel, target_command)
@@ -455,7 +471,16 @@ class ServoController:
             if channel not in self._move_positions:
                 self._move_positions[channel] = float(
                     self.current_angles.get(channel, target_command))
+            start = self._move_positions[channel]
             self.current_angles[channel] = target_command
+            # Одиночный переезд (панель): запоминаем длину хода, чтобы на
+            # коротких 5–10° трапеция успела плавно разогнаться и затормозить.
+            # Поток целей (телеоп/IK) — это не одиночный ход, не ограничиваем.
+            if now - self._last_target_time.get(channel, 0.0) > 0.25:
+                self._move_spans[channel] = abs(float(target_command) - start)
+            else:
+                self._move_spans.pop(channel, None)
+            self._last_target_time[channel] = now
         with self._mover_cond:
             self._move_targets[channel] = target_command
             self._mover_cond.notify_all()
@@ -513,6 +538,10 @@ class ServoController:
                     print(f"[Servo] mover: канал {channel}: {exc}", flush=True)
                     with self._mover_cond:
                         self._move_targets.pop(channel, None)
+                    with self.lock:
+                        self._move_velocities.pop(channel, None)
+                        self._move_accels.pop(channel, None)
+                        self._move_spans.pop(channel, None)
             time.sleep(tick)
 
     def _step_channel(self, channel: int, tick: float) -> None:
@@ -525,6 +554,7 @@ class ServoController:
             current = self._move_positions.get(
                 channel, float(self.current_angles.get(channel, target)))
             velocity = self._move_velocities.get(channel, 0.0)
+            accel_state = self._move_accels.get(channel, 0.0)
 
         distance = float(target) - current
         if abs(distance) <= MOVE_DEADBAND:
@@ -532,6 +562,8 @@ class ServoController:
             with self.lock:
                 self._move_positions[channel] = float(target)
                 self._move_velocities[channel] = 0.0
+                self._move_accels[channel] = 0.0
+                self._move_spans.pop(channel, None)
             with self._mover_cond:
                 self._move_targets.pop(channel, None)
             return
@@ -539,18 +571,37 @@ class ServoController:
         limit = self.speed_limits.get(channel)
         v_max = min(MOVE_MAX_SPEED, limit if limit else MOVE_MAX_SPEED)
         accel = MOVE_ACCEL if not limit else min(MOVE_ACCEL, max(4.0 * limit, 60.0))
-        v_brake = math.sqrt(2.0 * accel * abs(distance))
+        # Тормозим от половины ускорения: запас на дискретный тик и рывок.
+        v_brake = math.sqrt(2.0 * accel * MOVE_BRAKE_FRAC * abs(distance))
         v_target = min(v_max, v_brake)
+        # Короткий одиночный ход: пик не выше, чем позволяет разогнаться и
+        # затормозить на этой длине (треугольный профиль).
+        span = self._move_spans.get(channel)
+        if span:
+            v_target = min(v_target,
+                           math.sqrt(accel * MOVE_BRAKE_FRAC * span))
         v_desired = v_target if distance > 0 else -v_target
 
-        dv = v_desired - velocity
-        dv = max(-accel * tick, min(accel * tick, dv))
-        velocity += dv
+        # Ограничиваем не только ускорение, но и его производную (jerk):
+        # старт и финиш получаются плавными, без удара в конце.
+        a_desired = (v_desired - velocity) / tick
+        a_desired = max(-accel, min(accel, a_desired))
+        da = a_desired - accel_state
+        da = max(-MOVE_JERK * tick, min(MOVE_JERK * tick, da))
+        accel_state += da
+        velocity += accel_state * tick
+        # Не даём инерции разгона перелететь профиль: иначе на коротких
+        # ходах скорость успевает уйти выше тормозной и в конце рывок.
+        # При смене направления (знаки разные) не режем — там работает accel.
+        if v_desired * velocity >= 0.0 and abs(velocity) > abs(v_desired):
+            velocity = v_desired
+            accel_state = 0.0
         step = velocity * tick
 
         if abs(step) >= abs(distance):
             position = float(target)
             velocity = 0.0
+            accel_state = 0.0
         else:
             position = float(current) + step
             position = float(max(command_min, min(command_max, position)))
@@ -559,6 +610,7 @@ class ServoController:
         with self.lock:
             self._move_positions[channel] = position
             self._move_velocities[channel] = velocity
+            self._move_accels[channel] = accel_state
 
     def _set_servo_immediate(self, channel: int, virtual_angle: float) -> bool:
         if channel not in self.channel_configs:
@@ -583,6 +635,10 @@ class ServoController:
         self._mover_stop.set()
         with self._mover_cond:
             self._mover_cond.notify_all()
+        with self.lock:
+            self._move_velocities.clear()
+            self._move_accels.clear()
+            self._move_spans.clear()
         time.sleep(0.05)
         if not self.is_connected():
             self._reinit_pwm(min_interval=0.0, restore=False)
