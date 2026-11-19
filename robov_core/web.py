@@ -256,26 +256,11 @@ def create_app() -> Flask:
         if frozen:
             return jsonify(result)
 
-        neck = data.get("neck")
-        tilt = data.get("tilt")
-        if neck is not None:
-            set_servo_command(0, int(round(neck)))
-        if tilt is not None:
-            set_servo_command(3, int(round(tilt)))
-
-        targets = data.get("targets") or {}
-        for side, left in (("right", False), ("left", True)):
-            target = targets.get(side)
-            if target and all(isinstance(target.get(k), (int, float))
-                              for k in ("x", "y", "z")):
-                result[side] = move_ik_detail(
-                    target["x"], target["y"], target["z"], left=left)
-
-        grip = data.get("grip") or {}
-        for side, channel in (("right", 8), ("left", 9)):
-            value = grip.get(side)
-            if value is not None:
-                set_servo_command(channel, int(round(value)))
+        # Новая кинематика ещё не описана: телеоп — шаблон.
+        # Страница /webxr может присылать старый формат (neck/tilt/targets/grip),
+        # он игнорируется, пока не появится новая геометрия.
+        result["template"] = True
+        result["message"] = "телеоп — шаблон: кинематика переделывается"
         return jsonify(result)
 
     # --- Data collection (R2/library) ---

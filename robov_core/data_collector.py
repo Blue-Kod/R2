@@ -8,10 +8,9 @@
 Схема колонок (по договорённости для VLA):
 - observation.images.left/right — struct {bytes: binary, path: string}
   (объект {'bytes': ..., 'path': ''}, как в LeRobot).
-- observation.state  — float32[10] на кадр: [neck, tilt, R_sz, R_sx, R_eb,
-  L_sz, L_sx, L_eb, grip_R, grip_L] в градусах (логические команды, те же,
-  что в servo.current_angles); грипперы — нормализованные 0..1.
-- action            — float32[10]: по контракту action[row t] == state[row t+1];
+- observation.state  — float32[1] на кадр: [shoulder] в градусах
+  (логическая команда плеча 0..90, та же, что в servo.current_angles).
+- action            — float32[1]: по контракту action[row t] == state[row t+1];
   последний кадр эпизода — его собственный state (dummy, теряется при маске).
 - task              — str, описание задачи (постоянно для эпизода).
 - timestamp         — float32, монотонные секунды от начала эпизода.
@@ -26,7 +25,7 @@ import threading
 import time as _time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -43,26 +42,14 @@ BATCH_SIZE = 100          # строк в одном row-group (граница �
 IMG_WH = (640, 360)       # разрешение ректифицированных JPEG
 JPEG_QUALITY = 75         # качество JPEG с камер
 COMPRESSION = None        # parquet без сжатия: JPEG уже сжат, zstd тратит CPU впустую
-STATE_DIM = 12
+STATE_DIM = 1
 
-# Порядок каналов в state/action: [neck, tilt, правая рука (sz,sx,eb),
-# левая рука (sz,sx,eb), гриппер правый, гриппер левый, колёса (прав, лев)].
+# Только новая механика: одна ось плеча (4 сервы через редуктор 3:1).
 STATE_CHANNELS: List[Tuple[int, str]] = [
-    (0,  "neck"),                 # шея
-    (3,  "tilt"),                 # наклон
-    (4,  "right_shoulder_z"),     # правое плечо (поворот)
-    (1,  "right_shoulder_x"),     # правое плечо (вверх)
-    (6,  "right_elbow"),          # правый локоть
-    (5,  "left_shoulder_z"),      # левое плечо (поворот)
-    (2,  "left_shoulder_x"),      # левое плечо (вверх)
-    (7,  "left_elbow"),           # левый локоть
-    (8,  "grip_right"),           # правый схват (0..1)
-    (9,  "grip_left"),            # левый схват (0..1)
-    (10, "wheel_right"),          # правое колесо (0..180)
-    (11, "wheel_left"),           # левое колесо (0..180)
+    (0, "shoulder"),              # плечо (0..90)
 ]
-# Каналы грипперов нормализуются 0..1; остальные хранятся в градусах.
-GRIPPER_CHANNELS = {8, 9}
+# Нормализация 0..1 не нужна: все каналы хранятся в градусах.
+GRIPPER_CHANNELS: Set[int] = set()
 
 # bbox цели (x1,y1,x2,y2) нормированный, ставится в студии; по умолчанию NaN.
 NAN4 = [float("nan")] * 4

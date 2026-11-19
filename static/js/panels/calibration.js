@@ -3,7 +3,8 @@ import { h, button, panelBody, toast } from '../ui.js';
 
 /** Channel descriptors from the server config (servo.servo_config()). */
 function channels(boot) {
-  return (boot?.servo?.channels || []).map((c) => ({ id: c.id, name: c.name }));
+  const list = boot?.servo?.calibration_channels || boot?.servo?.channels || [];
+  return list.map((c) => ({ id: c.id, name: c.name }));
 }
 
 export const calibrationPanel = {
@@ -84,7 +85,7 @@ export const calibrationPanel = {
         // Fall back to defaults from the config snapshot.
         offsets = {};
         inverted = new Set();
-        for (const c of ctx.boot?.servo?.channels || []) {
+        for (const c of ctx.boot?.servo?.calibration_channels || []) {
           offsets[c.id] = Number(c.offset) || 0;
           if (c.inverted) inverted.add(c.id);
         }

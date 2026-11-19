@@ -1,182 +1,55 @@
-"""FK/IK для рук R2 — чистая серийная цепь X–Z–X (идеальная геометрия).
+"""ШАБЛОН кинематики R2.
 
-=====================================================================
-ФИЗИЧЕСКАЯ СТРУКТУРА РУКИ (подтверждено владельцем, сент 2026)
-=====================================================================
+Новая механика пока описана только для оси плеча (4 сервы через редуктор
+3:1, см. ``servo.py``). Остальная геометрия (звенья, оси, IK, камера) ещё не
+задана, поэтому здесь оставлены интерфейсы, которые вызывают
+``high_level`` и веб-панели, с безопасными заглушками.
 
-Правая рука — последовательная серийная цепь из трёх вращательных
-соединений (по аналогии с UR-манипулятором):
-
-    база ──[ч1]──/плечо L1=330мм/──[ч4]──/локоть→точка захвата L2=330мм/──[ч6]── губки
-
-      ч1 : shoulder_x  — ОСЬ X в системе координат базы.
-      ч4 : shoulder_z  — ось вращения НЕ жёстко Z: это следующее (серверное)
-          соединение после ч1, его фактическая ось в пространстве зависит
-          от поворота ч1. В базовой позе ось ч4 смотрит по Z, но при повороте
-          ч1 в 225° (90 от базового угла) эта же ось разворачивается в сторону оси Y (по правилам
-          серийной кинематики: матрица поворота ч1 умножается на остаток цепи).
-          В локальной цепочке это соединение — 'z' (цепь ['x','z','x'], см. ниже).
-      ч6 : elbow_x     — ОСЬ X, тоже в локальной системе (следует за ч1, ч4).
-
-    База правой руки:  X = +115 мм (вправо от центра туловища).
-    База левой руки:   X = -115 мм (зеркально). ЛЕВАЯ РУКА ПОКА НЕ СТОИТ.
-
-Соединения по номеру канала (логические команды серво, см. servo.py):
-    правая:  shoulder_x=ч1, shoulder_z=ч4, elbow_x=ч6
-    левая:   shoulder_x=ч2, shoulder_z=ч5, elbow_x=ч7
-    (у правой/левой по своим каналам — зеркальная конструкция).
-
-ВАЖНО про порядок: в каналах чтобы ч4 был "как второй сустав", а не
-независимый — это серийная цепь x-z-x, а НЕ три независимые оси.
-Цепь (внешние координаты, мм): база [±115,0,0] → 'x' → [0,-330,0] →
-'z' → [0,-220,0] → 'x'. Углы суставов цепи — (sx, sz, eb).
-
-ПРАВИЛО ЗЕРКАЛА (левая рука): база -115, а угол shoulder_z для левой
-берётся с противоположным знаком (R_z(a) при зеркале diag(-1,1,1)
-преобразуется в R_z(-a)); ч1/ч6 (оси X) знак НЕ меняют.
-
-=====================================================================
-УГЛЫ / ДИАПАЗОНЫ / НАПРАВЛЕНИЯ
-=====================================================================
-
-theta = (t_sz, t_sx, t_eb) — физические углы звеньев, градусы, порядок
-ГЕОМЕТРИЧЕСКИЙ (sz, sx, eb); цепь использует порядок (sx, sz, eb).
-
-Диапазоны команд каналов (из servo.DEFAULT_COMMAND_LIMITS):
-    ч1/ч2/ч4/ч5        : 0..270° (0.102..0.540 мс пульс)
-    ч6/ч7 (локоть)     : 0..180° (0.102..0.540 мс пульс)
-    Физически серво ч4 (правое shoulder_z) ИНВЕРТИРОВАНО на уровне PWM
-    (INVERTED_CHANNELS={2,4,8} в servo.py), но arm_kinematics работает
-    с логическими командами — инверсию применяет ServoController.
-
-Маппинг theta <-> логические команды (у левой shoulder_z зеркальный):
-    правая:  sz = cmd4 - 45;   sx = cmd1 - 135;   eb = 180 - cmd6
-    левая:   sz = 45 - cmd5;   sx = cmd2 - 135;   eb = 180 - cmd7
-    (локоть и левое shoulder_z: cmd = rest - theta; остальное cmd = rest + theta).
-
-Направления (в системе координат камера: X вправо, Y вверх, Z вперёд):
-    shoulder_z (ч4) : поворот кисти вбок относительно корпуса.
-    shoulder_x (ч1) : наклон руки вперёд/назад (от -падения).
-    elbow_x    (ч6) : сгиб локтя (0 = выпрямлено, 180 = согнуто).
-
-ВНИМАНИЕ: это ИДЕАЛЬНАЯ геометрическая модель (серийная цепь X–Z–X
-по описанию выше), БЕЗ эмпирической калибровки под замеры. Она НЕ
-сходится с приведёнными ниже якорными замерами (расхождение до ~800 мм)
-из-за монтажных смещений осей серво на железе. Соответствие роботу
-достигается оффсетами каналов после постановки руки.
-Реальные направления уточняются по arm_test.py.
-
-=====================================================================
-ЯКОРНЫЕ ТОЧКИ (measurements, см. коммит до переделки и arm_test.py)
-=====================================================================
-Измерено на ПРАВОЙ руке (логические команды ч1,ч4,ч6 -> EE в мм
-в системе камеры):
-
-  natural (ниже горизонтали, ч4<=135):
-    (169,66,137)  -> (0,-300,400)
-    (184,92,62)   -> (250,0,400)
-    (184,118,62)  -> (400,0,300)
-
-  crane (верхняя полусфера, ч4>135):
-    (102,226,58)  -> (120,30,300)
-    (135,226,58)  -> (120,200,240)
-    (150,226,58)  -> (120,280,150)
-    (178,226,58)  -> (120,290,0)
-    (247,246,137) -> (99,-42,-511)
-    (102,235,58)  -> (115,30,280)
-
-ЛЕВАЯ РУКА ПОКА НЕ УСТАНОВЛЕНА: зеркально база -115 и t_sz с минусом.
-=====================================================================
+Когда появится новая кинематика — заполнить ``fk``/``ik_solve``/``limits``
+и размеры звеньев; остальной код менять не придётся.
 """
 
-import math
-from functools import lru_cache
-from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from robov_core.servo import DEFAULT_COMMAND_LIMITS, REST_POSE, START_POSE
-
-
-BASE_X = 115.0
-L1 = 330.0
-L2 = 330.0
+BASE_X = 0.0
+L1 = 0.0
+L2 = 0.0
 
 HEAD = np.array([0.0, 100.0, 0.0])
-# Замер владельца: камера стоит на (0, +100, +60) мм от центра вращения головы,
-# то есть объектив на 60 мм впереди центра. HEAD — та же точка вращения.
 HEAD_LENS_Z = 60.0
-NECK_CHANNEL = 0       # «Шея»: +команда — влево (см. templates/webxr.html)
-TILT_CHANNEL = 3       # «Наклон»: меньше 90 — вверх
-HEAD_REST = 90.0       # команда «смотрит прямо»
-TORSO_HW = 70.0
-TORSO_HD = 45.0
-TORSO_HH = 95.0
-HEAD_R = 45.0
+HEAD_REST = 0.0
+NECK_CHANNEL = None
+TILT_CHANNEL = None
 
-JOINT_NAMES = ("shoulder_z", "shoulder_x", "elbow_x")
-ARM_CHANNELS = {
-    "right": {"shoulder_z": 4, "shoulder_x": 1, "elbow_x": 6},
-    "left": {"shoulder_z": 5, "shoulder_x": 2, "elbow_x": 7},
-}
-
-# --- Защита головы/камеры ---------------------------------------------------
-# Шар, в который не входит ни одно звено руки и ни одна точка кисти.
-HEAD_SAFE_C = np.array([0.0, 100.0, 30.0])   # мм: голова + объектив
-HEAD_SAFE_R = 120.0                          # мм: с запасом на звено и люфт
+HEAD_SAFE_C = np.array([0.0, 100.0, 30.0])
+HEAD_SAFE_R = 0.0
 
 IK_ERR_OK = 3.0
 IK_TOLERANCE_MM = 50.0
+IK_BRANCH = "template"
+IK_BRANCHES = ("template",)
 
-# Линейная калибровка оси X левой руки. Наблюдено на железе, что реальный x
-# связан с поданной в IK целью как  real_x = a*target_x + b  (a=-37/23, b=-300).
-# Чтобы ВВОД совпал с реальным, в модель для левой подаём обратную функцию:
-#   target_x = LEFT_X_A * x + LEFT_X_B,   LEFT_X_A = 1/a, LEFT_X_B = -b/a.
-LEFT_X_A = -23.0 / 37.0          # ≈ -0.62162
-LEFT_X_B = -6900.0 / 37.0        # ≈ -186.486
-
-
-def _left_target_x(x: float) -> float:
-    return LEFT_X_A * float(x) + LEFT_X_B
-
-
-# --- Компенсация кисти -------------------------------------------------------
-# Точка захвата не совпадает с концом цепи (EE): губки висят ниже и смещены
-# вбок, причём у левой и правой руки по-разному (зеркальная сборка, посадка
-# качалки). Замер: расхождение между руками до +-30 мм при одинаковых углах.
-# TOOL_MM — смещение точки захвата от EE в системе КОРПУСА при кисти, смотрящей
-# вниз (в зоне захвата кисть почти не вращается, finger_down 0.68..0.93).
-# Замеряется один раз на робота и лежит в config.json: "tool_mm": {...}
-# По умолчанию точка захвата — между губок, на 30 мм ниже конца цепи.
-# Конец цепи уже совпадает с точкой захвата (L2 = 330 до губок), поэтому
-# смещение нулевое. Раньше здесь было −30 при L2=220: остальные 80 мм «висели»
-# в body-смещении и врали при наклоне кисти — из-за этого IK целился мимо.
-TOOL_MM: Dict[str, np.ndarray] = {
-    "right": np.array([0.0, 0.0, 0.0]),
-    "left": np.array([0.0, 0.0, 0.0]),
+JOINT_NAMES = ("shoulder",)
+ARM_CHANNELS: Dict[str, Dict[str, int]] = {
+    "right": {"shoulder": 0},
+    "left": {},
 }
 
+TOOL_MM: Dict[str, np.ndarray] = {
+    "right": np.zeros(3),
+    "left": np.zeros(3),
+}
 
-def load_tool_offsets(path: Optional[Path] = None) -> None:
-    """Прочитать tool_mm из config.json (если есть)."""
-    import json
-    from pathlib import Path as _Path
+MESSAGE = "кинематика переделывается: IK — шаблон"
 
-    p = path or (_Path(__file__).resolve().parent.parent / "config.json")
-    try:
-        with open(p, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:                                   # noqa: BLE001
-        return
-    for side in ("right", "left"):
-        vector = (data.get("tool_mm") or {}).get(side)
-        if vector and len(vector) == 3:
-            TOOL_MM[side] = np.array([float(v) for v in vector])
+
+def load_tool_offsets(path=None) -> None:
+    return None
 
 
 def set_tool_offset(dx: float, dy: float, dz: float, left: bool = False) -> None:
-    """Задать смещение точки захвата от EE, мм (система корпуса)."""
     TOOL_MM["left" if left else "right"] = np.array([dx, dy, dz], float)
 
 
@@ -184,474 +57,76 @@ def tool_offset(left: bool = False) -> np.ndarray:
     return TOOL_MM["left" if left else "right"]
 
 
-def grasp_point(theta: Sequence[float], left: bool = False) -> np.ndarray:
-    """Где реально губки: EE + смещение кисти, мм (система корпуса)."""
-    return fk(theta, left)["EE"] + tool_offset(left)
-
-
 def ee_for_grasp(grasp_mm: Sequence[float], left: bool = False) -> np.ndarray:
-    """Куда вести EE, чтобы ГУБКИ попали в точку grasp_mm."""
     return np.asarray(grasp_mm, float) - tool_offset(left)
+
+
+def grasp_point(theta: Sequence[float], left: bool = False) -> np.ndarray:
+    return fk(theta, left)["EE"] + tool_offset(left)
 
 
 def camera_to_body(p_mm: Sequence[float], neck: float = HEAD_REST,
                    tilt: float = HEAD_REST) -> np.ndarray:
-    """Точка в системе камеры (X вправо, Y вверх, Z вперёд, мм) -> система корпуса.
-
-    Шея поворачивает всю голову вокруг вертикальной оси, наклон — вокруг
-    горизонтальной; обе оси проходят через центр головы HEAD, объектив — на
-    HEAD_LENS_Z впереди него. Углы — те команды, что отправлены сервам
-    (датчиков нет, других углов не бывает).
-
-    Проверка на железе: навести камеру на неподвижный предмет, покрутить шею
-    на ±20° — координаты точки в системе корпуса должны остаться на месте.
-    """
-    a = np.radians(float(neck) - HEAD_REST)
-    f = np.radians(float(tilt) - HEAD_REST)
-    ca, sa, cf, sf = np.cos(a), np.sin(a), np.cos(f), np.sin(f)
-    ry = np.array([[ca, 0.0, -sa], [0.0, 1.0, 0.0], [sa, 0.0, ca]])   # R_y(-a)
-    rx = np.array([[1.0, 0.0, 0.0], [0.0, cf, -sf], [0.0, sf, cf]])   # R_x(f)
-    local = np.asarray(p_mm, dtype=float) + np.array([0.0, 0.0, HEAD_LENS_Z])
-    return HEAD + (ry @ rx) @ local
-
-
-def _left_report_x(tx: float) -> float:
-    return (float(tx) - LEFT_X_B) / LEFT_X_A
-
-# Сетка поиска IK: (шаг, радиус окна вокруг текущей точки).
-# None-радиус — первая грубая решётка по всему диапазону.
-GRID_STEPS = ((8.0, None), (2.0, 10.0), (0.4, 2.0), (0.08, 0.5))
-
-# Режим стола (поза старта; поиск по столу — вне скоупа, см. план).
-TABLE_TOP_Y = -300.0
-TABLE_X_HALF = 1000.0
-TABLE_Z0 = 0.0
-TABLE_Z1 = 1500.0
-# Коллайдер «стол»: рука (локоть и кисть) никогда не опускается ниже
-# плоскости TABLE_MIN_Y (*Y* — вертикаль модели, +Y вверх; база на y=0,
-# стол на 300 мм ниже плеча). TABLE_MARGIN = 0 — касание поверхности
-# разрешено; TABLE_COLLISION_PENALTY добавляется к ошибке коллизийных
-# клеток сетки, чтобы они проигрывали любой валидной позе.
-TABLE_MARGIN = 0.0
-TABLE_MIN_Y = TABLE_TOP_Y + TABLE_MARGIN
-TABLE_COLLISION_PENALTY = 1e6
-# Кран-предпочтение (всегда в режиме стола): среди поз, достающих одну и ту же цель, выбирается ветка с
-# высоким локтем (elbow_y заметно выше кисти), «кран-ветка», а не
-# провисшая натуральная («через низ»). Байас ДОМИНАНТНЫЙ
-# (TABLE_CRANE_BIAS_MAX = 1e6 > любой ошибки достижения): если кран-ветка
-# существует — выбирается всегда, даже если ей не хватает точности до цели.
-# TABLE_CRANE_LIFT — целевой «лифт» elbow_y − ee_y (мм); за каждый мм
-# недобора добавляется TABLE_CRANE_WEIGHT мм-ошибки (до BIAS_MAX).
-TABLE_CRANE_LIFT = 150.0
-# Предпочитаемая ветка IK: "top" — локоть высоко (кран), "bottom" — низко
-# (натуральная). Меняется на лету из панели (set_branch).
-IK_BRANCH = "top"
-IK_BRANCHES = ("top", "bottom")
-
-
-def set_branch(name: str) -> str:
-    """Выбрать предпочитаемую ветку: "top" (сверху) или "bottom" (снизу)."""
-    global IK_BRANCH
-    name = str(name or "top").lower()
-    if name not in IK_BRANCHES:
-        raise ValueError(f"ветка должна быть одна из {IK_BRANCHES}, а не {name!r}")
-    IK_BRANCH = name
-    return IK_BRANCH
-TABLE_CRANE_WEIGHT = 5.0
-TABLE_CRANE_BIAS_MAX = 1e6
-
-
-def _side(left: bool = False) -> str:
-    return "left" if left else "right"
-
-
-def _channels(left: bool = False) -> Dict[str, int]:
-    return ARM_CHANNELS[_side(left)]
+    """Камера -> корпус. Голова в шаблоне неподвижна (без pan/tilt)."""
+    return HEAD + np.asarray(p_mm, dtype=float) + np.array([0.0, 0.0, HEAD_LENS_Z])
 
 
 def rest_angles(left: bool = False) -> Dict[int, int]:
-    """Логические серво-команды позы «рука вниз» (из REST_POSE)."""
-    return {ch: int(REST_POSE[ch]) for ch in _channels(left).values()}
+    return {} if left else {0: 0}
 
 
 def servo_ranges(left: bool = False) -> Dict[int, Tuple[int, int]]:
-    return {ch: tuple(DEFAULT_COMMAND_LIMITS[ch])
-            for ch in _channels(left).values()}
+    return {} if left else {0: (0, 90)}
 
 
 def limits(left: bool = False) -> Dict[str, Tuple[float, float]]:
-    """Диапазоны theta (sz, sx, eb) для одной руки.
-
-    Вычисляются из командных лимитов и правила маппинга theta↔команды:
-    right sz→cmd=rest+θ, left sz→cmd=rest−θ, elbow→cmd=rest−θ, sx→cmd=rest+θ.
-    """
-    rest = rest_angles(left)
-    ranges = servo_ranges(left)
-    result: Dict[str, Tuple[float, float]] = {}
-    for name, ch in _channels(left).items():
-        lo, hi = ranges[ch]
-        if name == "elbow_x" or (name == "shoulder_z" and left):
-            result[name] = (float(rest[ch] - hi), float(rest[ch] - lo))
-        else:
-            result[name] = (float(lo - rest[ch]), float(hi - rest[ch]))
-    return result
+    return {} if left else {"shoulder": (0.0, 90.0)}
 
 
-def base(left: bool = False) -> np.ndarray:
-    return np.array([-BASE_X if left else BASE_X, 0.0, 0.0])
+def theta_from_commands(commands: Dict[int, float],
+                        left: bool = False) -> Tuple[float, ...]:
+    return () if left else (float(commands.get(0, 0)),)
 
 
-def theta_from_commands(commands: Dict[int, float], left: bool = False) -> Tuple[float, float, float]:
-    """Логические команды -> геометрический theta (sz, sx, eb) в градусах."""
-    rest = rest_angles(left)
-    ch = _channels(left)
-    theta = []
-    for name in JOINT_NAMES:
-        cmd = commands.get(ch[name], rest[ch[name]])
-        if name == "elbow_x" or (name == "shoulder_z" and left):
-            theta.append(float(rest[ch[name]] - cmd))
-        else:
-            theta.append(float(cmd - rest[ch[name]]))
-    return tuple(theta)
-
-
-def to_servo_commands(theta: Sequence[float], left: bool = False) -> Dict[int, int]:
-    """Геометрический theta (sz, sx, eb) -> логические команды серво (int)."""
-    rest = rest_angles(left)
-    ranges = servo_ranges(left)
-    result = {}
-    for name, value in zip(JOINT_NAMES, theta):
-        ch = _channels(left)[name]
-        lo, hi = ranges[ch]
-        if name == "elbow_x" or (name == "shoulder_z" and left):
-            command = rest[ch] - float(value)
-        else:
-            command = rest[ch] + float(value)
-        result[ch] = int(round(max(lo, min(hi, command))))
-    return result
+def to_servo_commands(theta: Sequence[float],
+                      left: bool = False) -> Dict[int, int]:
+    if left or not theta:
+        return {}
+    return {0: int(round(min(90.0, max(0.0, float(theta[0])))))}
 
 
 def fk(theta: Sequence[float], left: bool = False) -> Dict[str, np.ndarray]:
-    """Forward kinematics идеальной серийной цепи X–Z–X.
-
-    theta геометрический = (sz, sx, eb). Цепь:
-        R = Rx(sx)·Rz(sz)·Rx(eb),
-        E   = base + L1 · R|шарнир sz.. ·(0,-1,0),
-        EE  = E   + L2 · R · (0,-1,0).
-    Закрытая форма (s1=sin sz и т.д.; для левой — зеркало по X):
-        upper = (s1, -cs·cz, -ss·cz)
-        lower = (s1·ce, -cs·cz·ce + ss·se, -ss·cz·ce - cs·se)
-    Возвращает {"S": плечо, "E": локоть, "EE": кисть} в мм (система камеры).
-    """
-    t_sz, t_sx, t_eb = (float(v) for v in theta)
-    sz, sx, eb = (math.radians(v) for v in (t_sz, t_sx, t_eb))
-    s1, c1 = math.sin(sz), math.cos(sz)
-    s2, c2 = math.sin(sx), math.cos(sx)
-    s3, c3 = math.sin(eb), math.cos(eb)
-    if left:
-        s1 = -s1
-
-    upper = np.array([s1, -c2 * c1, -s2 * c1])
-    lower = np.array([s1 * c3, -c2 * c1 * c3 + s2 * s3, -s2 * c1 * c3 - c2 * s3])
-    shoulder = base(left)
-    elbow = shoulder + L1 * upper
-    ee = elbow + L2 * lower
-    return {"S": shoulder, "E": elbow, "EE": ee}
-
-
-def _fk_grid_positions(t_sz: Sequence[float], t_sx: Sequence[float],
-                       t_eb: Sequence[float], left: bool = False
-                       ) -> Tuple[np.ndarray, np.ndarray]:
-    """Векторизованная FK по декартовой сетке углов.
-
-    Углы — градусы; сетка полная (каждая комбинация всех трёх осей).
-    Возвращает (EE, локоть) — позиции (…,3) кисти и локтя (для коллайдера).
-    """
-    T1, T2, T3 = np.meshgrid(np.asarray(t_sz), np.asarray(t_sx),
-                             np.asarray(t_eb), indexing="ij")
-    c1 = np.cos(np.radians(T1))
-    s1 = np.sin(np.radians(T1))
-    c2 = np.cos(np.radians(T2))
-    s2 = np.sin(np.radians(T2))
-    c3 = np.cos(np.radians(T3))
-    s3 = np.sin(np.radians(T3))
-    if left:
-        s1 = -s1
-
-    bx = -BASE_X if left else BASE_X
-    upper = np.stack([s1, -c2 * c1, -s2 * c1], axis=-1)
-    lower = np.stack([s1 * c3, -c2 * c1 * c3 + s2 * s3,
-                      -s2 * c1 * c3 - c2 * s3], axis=-1)
-    shoulder = np.array([bx, 0.0, 0.0])
-    elbow = shoulder + L1 * upper
-    ee = elbow + L2 * lower
-    return ee, elbow
-
-
-def _seg_dist(p, a, b):
-    """Векторно: расстояние от точки p до отрезка a-b (a,b: (...,3))."""
-    ab = np.asarray(b) - np.asarray(a)
-    ap = np.asarray(p) - np.asarray(a)
-    denom = np.sum(ab * ab, axis=-1)
-    t = np.clip(np.sum(ap * ab, axis=-1) / np.where(denom > 1e-9, denom, 1.0),
-                0.0, 1.0)
-    return np.linalg.norm(np.asarray(a) + ab * t[..., None] - p, axis=-1)
-
-
-def head_clearance_grid(elbow, ee, left: bool = False):
-    """Мин. расстояние (мм) от центра головы до звеньев руки, для сетки поз."""
-    shoulder = np.broadcast_to(base(left), np.shape(elbow))
-    d1 = _seg_dist(HEAD_SAFE_C, shoulder, elbow)
-    d2 = _seg_dist(HEAD_SAFE_C, elbow, ee)
-    d3 = np.linalg.norm(np.asarray(ee) - HEAD_SAFE_C, axis=-1)
-    return np.minimum(np.minimum(d1, d2), d3)
+    """Заглушка: реальные точки появятся вместе с новой геометрией."""
+    return {"S": np.zeros(3), "E": np.zeros(3), "EE": np.zeros(3)}
 
 
 def head_clearance(theta: Sequence[float], left: bool = False) -> float:
-    """Мин. расстояние (мм) от центра головы до звеньев руки в этой позе."""
-    f = fk(theta, left)
-    return float(head_clearance_grid(f["E"][None, :], f["EE"][None, :], left)[0])
-
-
-def _collides(theta: Sequence[float], left: bool = False) -> bool:
-    """Попала ли какая-либо часть руки ниже плоскости стола."""
-    f = fk(theta, left)
-    return bool(f["E"][1] < TABLE_MIN_Y or f["EE"][1] < TABLE_MIN_Y)
-
-
-def _crane_lift_bias(elbow_y, ee_y):
-    """Добавочная стоимость за «низкий» локоть (кран-предпочтение).
-
-    Работает с массивами (сетки) и скалярами; 0, когда лифт
-    elbow_y − ee_y уже достиг целевого TABLE_CRANE_LIFT.
-    """
-    return np.minimum(TABLE_CRANE_BIAS_MAX, TABLE_CRANE_WEIGHT * np.maximum(
-        0.0, TABLE_CRANE_LIFT - (np.asarray(elbow_y, dtype=float)
-                                 - np.asarray(ee_y, dtype=float))))
-
-
-def _ranges(step: float, window: Optional[float], left: bool = False,
-            center: Optional[Sequence[float]] = None
-            ) -> Tuple[np.ndarray, ...]:
-    lim = limits(left)
-    out = []
-    for name, current in zip(JOINT_NAMES, center or (None,) * 3):
-        lo, hi = lim[name]
-        if window is not None and current is not None:
-            lo, hi = max(lo, current - window), min(hi, current + window)
-        grid = np.arange(lo, hi + step * 0.5, step)
-        if grid.size == 0:
-            grid = np.array([lo], dtype=float)
-        out.append(grid)
-    return tuple(out)
-
-
-@lru_cache(maxsize=2)
-def _coarse(left: bool = False):
-    """Грубая решётка IK (8°) и её FK. Не зависит от цели — считаем один раз
-    на сторону и переиспользуем (экономит ~3 мс на каждом вызове ik_solve)."""
-    rng = _ranges(*GRID_STEPS[0], left)
-    pos, elbow = _fk_grid_positions(*rng, left)
-    return rng, pos, elbow
-
-
-def _best_on_grid(ranges: Tuple[np.ndarray, ...], target: np.ndarray,
-                  left: bool = False) -> Tuple[Tuple[float, float, float], float]:
-    positions, elbow = _fk_grid_positions(*ranges, left)
-    error = np.linalg.norm(positions - target, axis=-1)
-    below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
-    error = error + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
-    near_head = head_clearance_grid(elbow, positions, left) < HEAD_SAFE_R
-    error = error + np.where(near_head, TABLE_COLLISION_PENALTY, 0.0)
-    # Кран-байас здесь НЕ применяем: на уточнении он уводил локальный поиск с
-    # точной ветки на «кран» (пример: цель на 19 мм от сетки уточнялась до 74).
-    # Ветку выбирает финальный score, а уточнение должно идти по ошибке.
-    index = int(np.argmin(error))
-    i1, i2, i3 = np.unravel_index(index, error.shape)
-    theta = (float(ranges[0][i1]), float(ranges[1][i2]), float(ranges[2][i3]))
-    return theta, float(error[i1, i2, i3])
-
-
-def _result(theta: Optional[Tuple[float, float, float]], status: str,
-            message: str, left: bool = False, err_mm: Optional[float] = None,
-            wanted: Optional[Sequence[float]] = None) -> dict:
-    result = {"theta": theta, "status": status, "message": message,
-              "err_mm": err_mm, "left": bool(left), "servo": None,
-              "ee": None, "ok": False,
-              "wanted": [float(v) for v in wanted] if wanted is not None else None}
-    if theta is not None:
-        result["servo"] = to_servo_commands(theta, left)
-        ee = fk(theta, left)["EE"]
-        if left:
-            ee = ee.copy()
-            ee[0] = _left_report_x(ee[0])
-        result["ee"] = [float(v) for v in ee]
-    result["ok"] = err_mm is not None and err_mm <= IK_TOLERANCE_MM
-    return result
+    return float("inf")
 
 
 def ik_solve(x: float, y: float, z: float, left: bool = False,
              start: Optional[Sequence[float]] = None) -> dict:
-    """Inverse kinematics идеальной цепи X–Z–X (сетка + уточнение).
-
-    Мультистарт по грубой решётке (8°) -> до count бассейнов, каждый
-    уточняется каскадом окон (2°/0.4°/0.08°). Выбор ветки — по ошибке
-    |ee−цель|, при равенстве — по близости к start (непрерывность движения).
-
-    Возвращает dict вида:
-        {theta, status, message, err_mm, left, servo, ee, ok, wanted}
-    со всеми значениями в нативных типах Python (JSON-совместимо).
-    status: "ok" (err<=IK_ERR_OK), "limits" (err<=IK_TOLERANCE_MM),
-            "unreachable" (дальше лимита; servo всё равно указывает на
-            ближайшую достижимую позу).
-    """
-    z = -z
-    tx = _left_target_x(x) if left else float(x)
-    wanted = np.array([tx, float(y), float(z)], dtype=float)
-    coarse, positions, elbow = _coarse(left)
-    errors = np.linalg.norm(positions - wanted, axis=-1)
-    below = (elbow[..., 1] < TABLE_MIN_Y) | (positions[..., 1] < TABLE_MIN_Y)
-    errors = errors + np.where(below, TABLE_COLLISION_PENALTY, 0.0)
-    near_head = head_clearance_grid(elbow, positions, left) < HEAD_SAFE_R
-    errors = errors + np.where(near_head, TABLE_COLLISION_PENALTY, 0.0)
-    # Стартовые бассейны сеются по ДВУМ ценам: чистой (коллайдер, без крана)
-    # и кран-предпочтительной. Это гарантирует, что в старты попадут и
-    # узкие натуральные бассейны, и кран-бассейны; ветку выбирает финальный
-    # score ниже (кран-байас работает в каскаде и при выборе).
-    errors_crane = errors + _crane_lift_bias(elbow[..., 1], positions[..., 1])
-
-    count = min(5, errors.size)
-    starts = []
-    for scored in (errors_crane, errors):
-        for index in np.argpartition(scored.ravel(), count - 1)[:count]:
-            i1, i2, i3 = np.unravel_index(index, scored.shape)
-            theta = (float(coarse[0][i1]), float(coarse[1][i2]),
-                     float(coarse[2][i3]))
-            if all(max(abs(a - b) for a, b in zip(theta, picked)) > 10.0
-                   for picked in starts):
-                starts.append(theta)
-
-    if start is not None:
-        model = limits(left)
-        clamped_start = tuple(min(max(float(v), model[n][0]), model[n][1])
-                              for n, v in zip(JOINT_NAMES, start))
-        starts.append(clamped_start)
-
-    results = []
-    for theta in starts:
-        current = theta
-        for step, window in GRID_STEPS[1:]:
-            current, _ = _best_on_grid(_ranges(step, window, left, current),
-                                       wanted, left)
-        ee = fk(current, left)["EE"]
-        error = float(np.linalg.norm(ee - wanted))
-        results.append((error, current))
-
-    def score(error, theta):
-        total = error
-        # Кран-предпочтение — только среди ТОЧНЫХ решений (ошибка <= IK_ERR_OK).
-        # Раньше байас был доминирующим всегда, и для целей выше плеча IK отдавал
-        # кран-позу на 271 мм мимо цели: рука не могла подняться над объектом и
-        # заходила сбоку. Точность важнее высоты локтя.
-        if error > IK_ERR_OK:
-            if start is not None:
-                weights = (1.0, 0.5, 0.25)
-                total += min(0.2 * sum(w * (a - b) ** 2 for w, a, b
-                                       in zip(weights, theta, start)), 100.0)
-            return total
-        f = fk(theta, left)
-        # Байас ограничен 30 мм (иначе точная ветка проигрывает неточной) и
-        # зависит от выбранного направления: сверху — высокий локоть, снизу —
-        # низкий.
-        if float(head_clearance_grid(f["E"][None, :], f["EE"][None, :],
-                                     left)[0]) < HEAD_SAFE_R:
-            total += TABLE_COLLISION_PENALTY      # поза лезет в камеру
-        lift = float(f["E"][1] - f["EE"][1])
-        if IK_BRANCH == "bottom":
-            total += min(30.0, 5.0 * max(0.0, lift - TABLE_CRANE_LIFT))
-        else:
-            total += min(30.0, 5.0 * max(0.0, TABLE_CRANE_LIFT - lift))
-        if start is not None:
-            weights = (1.0, 0.5, 0.25)
-            angle_cost = sum(w * (a - b) ** 2
-                             for w, a, b in zip(weights, theta, start))
-            total += min(0.2 * angle_cost, 100.0)
-        return total
-
-    best_error, best_theta = min(results, key=lambda item: score(*item))
-
-    if best_error <= IK_ERR_OK:
-        status = "ok"
-    elif best_error <= IK_TOLERANCE_MM:
-        status = "limits"
-    else:
-        status = "unreachable"
-    message = f"FK-поиск: |ee−цель|={best_error:.1f} мм"
-    if wanted[1] < TABLE_MIN_Y:
-        message = ("Цель ниже стола — кисть зажата к его поверхности "
-                   f"(|ee−цель|={best_error:.1f} мм)")
-    elif _collides(best_theta, left):
-        message += " · рука у самой кромки стола"
-    return _result(best_theta, status, message, left, best_error,
-                   wanted=[float(v) for v in wanted])
+    return {"theta": None, "status": "template", "message": MESSAGE,
+            "err_mm": None, "left": bool(left), "servo": None,
+            "ee": None, "ok": False,
+            "wanted": [float(x), float(y), float(z)]}
 
 
 def browser_config() -> dict:
-    """Конфиг для браузера: только базовые параметры для ориентации,
-    никакой локальной FK-кинематики в браузере больше нет."""
     return {
         "branch": IK_BRANCH,
         "base_x": BASE_X,
         "l1": L1,
         "l2": L2,
-        "channels": {
-            side: {name: ch for name, ch in channels.items()}
-            for side, channels in ARM_CHANNELS.items()
-        },
-        "rest": {str(ch): value for left in (False, True)
-                 for ch, value in rest_angles(left).items()},
-        "torso": {"half_width": TORSO_HW, "half_height": TORSO_HH,
-                  "half_depth": TORSO_HD},
-        "head": {"y": float(HEAD[1]), "radius": HEAD_R},
-        "start": {str(ch): value for ch, value in START_POSE.items()},
+        "channels": {side: dict(chans)
+                     for side, chans in ARM_CHANNELS.items()},
+        "rest": {"0": 0},
+        "torso": {"half_width": 70.0, "half_height": 95.0, "half_depth": 45.0},
+        "head": {"y": float(HEAD[1]), "radius": 45.0},
+        "start": {"0": 0},
+        "template": True,
     }
 
 
-if __name__ == "__main__":
-    # Короткий самотест: round-trip команды<->theta, зеркало, пара FK/IK.
-    print(f"rest right: {rest_angles(False)}  left: {rest_angles(True)}")
-    print("limits right:", limits(False), " left:", limits(True))
-    for cmds, left in (((169, 66, 137), False), ((178, 226, 58), False),
-                       ((60, 100, 150), True)):
-        c1, c4, c6 = cmds
-        if left:
-            commands = {1: 60, 2: c4, 4: 60, 5: c4, 6: c6, 7: c6}
-        else:
-            commands = {1: c1, 4: c4, 6: c6}
-        th = theta_from_commands(commands, left)
-        back = to_servo_commands(th, left)
-        ch = _channels(left)
-        rt_ok = all(abs(back[ch[n]] - commands[ch[n]]) <= 2
-                    for n in JOINT_NAMES)
-        ee = fk(th, left)["EE"]
-        print(f"cmds={cmds} left={int(left)} rr_ok={rt_ok} th=({th[0]:.1f},{th[1]:.1f},{th[2]:.1f}) EE=({ee[0]:.0f},{ee[1]:.0f},{ee[2]:.0f})")
-    right = theta_from_commands({1: 135, 4: 45, 6: 180}, False)
-    m = fk(right, True)["EE"]; r = fk(right, False)["EE"]
-    print(f"mirror: right EE x={r[0]:.1f} vs left=-right? {abs(m[0] + r[0]) < 1e-6 and abs(m[1]-r[1])<1e-6 and abs(m[2]-r[2])<1e-6}")
-    for x, y, z in ((0, -300, 400), (120, 290, 0), (250, 0, 400), (0, -50, 400)):
-        res = ik_solve(x, y, z)
-        print(f"ik_solve({x},{y},{z}) -> {res['status']:9} err={res['err_mm']:5.1f} th={tuple(round(v,2) for v in res['theta'])} servo={res['servo']}")
-
-    print("table collider checks:")
-    for x, y, z, left in ((250, -600, 400, False), (-250, -650, 300, True),
-                          (200, -300, 450, False), (0, -400, 500, False)):
-        res = ik_solve(x, y, z, left=left)
-        f = fk(res["theta"], left)
-        ee_y, el_y = f["EE"][1], f["E"][1]
-        lift = el_y - ee_y
-        clean = ee_y >= TABLE_MIN_Y - 1e-9 and el_y >= TABLE_MIN_Y - 1e-9
-        ch4 = res["servo"][_channels(left)["shoulder_z"]]
-        print(f"  ({x},{y},{z}) l={int(left)} -> ch4={ch4:3} lift={lift:6.1f} "
-              f"ee_y={ee_y:6.1f} el_y={el_y:6.1f} min={TABLE_MIN_Y:6.1f} "
-              f"clean={clean} craned={lift >= TABLE_CRANE_LIFT} "
-              f"st={res['status']:9} {res['message']}")
+def set_branch(name: str) -> str:
+    return IK_BRANCH

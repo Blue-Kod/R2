@@ -346,7 +346,7 @@ def servo_toggle(enable: bool) -> None:
         # (сервы не включатся после выключения).
         servo.enable_all()
         for ch in servo.channel_configs:
-            servo.set_servo(ch, servo.current_angles.get(ch, 90), smooth=False)
+            servo.set_servo(ch, servo.current_angles.get(ch, 0), smooth=False)
     else:
         # relax_all() сам попробует восстановить шину, если она «отвалилась».
         servo.relax_all()
@@ -482,12 +482,7 @@ def _p_to_body(p: Vector3, baseline_m: float) -> Optional[Vector3]:
         return None
     # правый глаз -> середина стереобазы (там ось головы), мм для кинематики
     pc = ((p.x + baseline_m / 2.0) * 1000.0, p.y * 1000.0, p.z * 1000.0)
-    neck = tilt = arm_kinematics.HEAD_REST
-    servo = _servo
-    if servo is not None:
-        neck = float(servo.current_angles.get(arm_kinematics.NECK_CHANNEL, neck))
-        tilt = float(servo.current_angles.get(arm_kinematics.TILT_CHANNEL, tilt))
-    q = arm_kinematics.camera_to_body(pc, neck, tilt)   # мм
+    q = arm_kinematics.camera_to_body(pc)   # мм; голова в шаблоне неподвижна
     return Vector3(float(q[0]) / 1000.0, float(q[1]) / 1000.0,
                    float(q[2]) / 1000.0)
 
@@ -496,8 +491,8 @@ def coords(x: float, y: float, window: int = 2) -> Vector3:
     """3D-точка кадра (x, y от 0 до 1) в системе КОРПУСА: X вправо, Y вверх,
     Z вперёд, МЕТРЫ.
 
-    Сначала точка считается в системе камеры, затем поворачивается на текущие
-    углы шеи (канал 0) и наклона (канал 3) — те команды, что отправлены сервам.
+    Сначала точка считается в системе камеры, затем переносится в корпус.
+    Шеи/наклона в новой механике пока нет — поворот в шаблоне нулевой.
     Начало — центр корпуса, ноль по глубине — ось рук. Единицы — МЕТРЫ (как у
     depth()). z здесь больше depth() на путь от объектива до центра головы
     (HEAD_LENS_Z = 45 мм) и на поворот, если шея/наклон не в нуле. В IK
@@ -555,7 +550,7 @@ HAND_MASK_M = 0.09          # м: точки у своих губок (по ма
 APPROACH_SIDE_M = {False: 0.012, True: -0.012}
 LIFT_AFTER_UP = 0.25        # м: на сколько поднять руку после захвата/укладки
 UP_MARGIN = 0.02            # м: если объект не ниже кисти на этот запас — сначала вверх
-ARM_CHANNELS_POSE = (1, 2, 4, 5, 6, 7)   # каналы рук (без захватов и колёс)
+ARM_CHANNELS_POSE = (0,)   # единственная ось — плечо
 # Высокоуровневые команды движения выполняются строго по одной: второй вызов
 # ждёт, пока первый доведёт руку до конца (иначе IK-цели перебивают друг друга).
 _motion_lock = threading.RLock()
@@ -592,102 +587,21 @@ def release(left: bool = False) -> bool:
     return set_servo_command(GRIP_CHANNEL[bool(left)], GRIP_OPEN)
 
 
-# Именованные позы меняют ТОЛЬКО руки (1, 2, 4, 5, 6, 7). Голова (0, 3),
-# захваты (8, 9) и колёса (10, 11) позой не трогаются: захваты — grab/release,
-# голову — set_servo_command.
+# Именованные позы новой механики: пока одна ось — плечо.
 POSES: Dict[str, Dict[int, int]] = {
-    # руки вниз, локти выпрямлены: нулевая поза модели (servo.REST_POSE)
-    "rest": {ch: int(REST_POSE[ch]) for ch in (1, 2, 4, 5, 6, 7)},
-    # «руки сверху» с живого робота: плечи подняты, локти согнуты
-    "ready_to_grab": {
-        1: 100, 2: 100,        # плечи
-        4: 220, 5: 220,        # поворот плеч
-        6: 50, 7: 50,          # локти
-    },
+    "rest": {0: int(REST_POSE[0])},
 }
-
-
 POSE_DEFAULT = "rest"
-# Плечо (ch1/ch2) на время движения локтей: с ним локтю хватает места.
-ELBOW_CLEAR = 100
-# Поджать локти в упор к плечу перед опусканием (тесное пространство).
-# Команда 10 = 170° модели; 175° в симе уже упирается губкой в плечо.
-ELBOW_TUCK = 10
-# ниже этого угла локтя считаем, что рука в «согнутом» состоянии (ready-подобном)
-FOLDED_THRESHOLD = 115
-# Ближе этого по всем трём каналам — рука уже в позе, команд ей не шлём.
+# Ближе этого к цели — команду не шлём.
 POSE_TOL_DEG = 2.0
-
-
-def _pose_steps(state: Optional[Dict[int, int]], dst_name: str):
-    """Ступени перехода в позу dst_name от фактических углов state.
-
-    state — последние отправленные углы каналов рук (то, где рука реально
-    оказалась: после pick_point это не «поза», а произвольное положение).
-
-    Правила:
-      • перед движением локтей ставим плечо (ch1/ch2) в ELBOW_CLEAR;
-      • если рука была в ready_to_grab, а едем в rest — сначала ПОДЖАТЬ локти,
-        потом опустить плечи и только затем разогнуть;
-      • после движения локтей плечо возвращается в требуемое значение;
-      • если менять нечего — ступеней не будет.
-    """
-    dst = POSES[dst_name]
-    state = dict(state or {})                   # что считаем текущим
-    steps = []
-
-    # Рука, которая уже в целевой позе (в пределах POSE_TOL_DEG по всем трём
-    # каналам), не получает ни одной команды: датчиков нет, лишняя команда —
-    # лишний рывок. Возвращаем ещё и set её каналов.
-    done = set()
-    for chans in arm_kinematics.ARM_CHANNELS.values():
-        if all(ch in state and abs(state[ch] - dst[ch]) <= POSE_TOL_DEG
-               for ch in chans.values()):
-            done.update(chans.values())
-
-    def emit(updates: Dict[int, int]) -> None:
-        delta = {ch: v for ch, v in updates.items()
-                 if ch not in done
-                 and abs(state.get(ch, -10 ** 6) - v) > POSE_TOL_DEG}
-        if delta:
-            state.update(delta)
-            steps.append(delta)
-
-    # «согнута» — любая из рук, которую ещё будем двигать
-    folded = any(state.get(ch, 999) < FOLDED_THRESHOLD
-                 for ch in (6, 7) if ch not in done)
-    if dst_name == "rest" and folded:
-        # из согнутого состояния (ready или «изменённая ready») в rest:
-        emit({6: ELBOW_TUCK, 7: ELBOW_TUCK})         # поджать в тесноте
-        emit({4: dst[4], 5: dst[5]})                 # плечи вниз
-        emit({1: ELBOW_CLEAR, 2: ELBOW_CLEAR})       # плечо под движение локтя
-        emit({6: dst[6], 7: dst[7]})                 # разгиб ПОСЛЕДНИМ
-        emit({1: dst[1], 2: dst[2]})                 # плечо в требуемое
-    else:
-        if any(state.get(ch) != dst[ch] for ch in (6, 7)):
-            emit({1: ELBOW_CLEAR, 2: ELBOW_CLEAR})   # только перед движением локтей
-            emit({6: dst[6], 7: dst[7]})
-        emit({4: dst[4], 5: dst[5]})
-        emit({6: dst[6], 7: dst[7]})
-        emit({1: dst[1], 2: dst[2]})                 # плечо в требуемое
-    return steps, done
 
 
 def pose(name: str = POSE_DEFAULT, speed: Optional[float] = None,
          force: bool = False) -> dict:
-    """Поставить робота в именованную позу и дождаться приезда.
+    """Поставить плечо в именованную позу и дождаться приезда.
 
-    "rest" (по умолчанию) — руки вниз, локти выпрямлены (servo.REST_POSE,
-    нулевая поза модели); "ready_to_grab" — руки сверху (плечи подняты,
-    локти согнуты) — значения сняты с робота. Меняются только каналы рук:
-    голова, захваты и колёса остаются как были.
-    Захваты не трогаются: их ставят grab/release.
-    Рука, которая уже стоит в этой позе (в пределах POSE_TOL_DEG), команд не
-    получает — в результате она в списке skipped.
-    speed — град/с переезда; по умолчанию POSE_SPEED_DEG.
-    force — отправить позу, даже если состояние говорит, что рука уже там.
-    Нужно после перезапуска: `current_angles` там = START_POSE (дефолт
-    загрузки), то есть состояние врёт, а физическое положение неизвестно.
+    "rest" (по умолчанию) — виртуальный 0° (servo.REST_POSE).
+    speed — град/с переезда; force — отправить, даже если угол уже равен.
     """
     commands = POSES.get(name)
     if commands is None:
@@ -702,25 +616,24 @@ def _pose_locked(name: str, commands: Dict[int, int],
                  speed: float = POSE_SPEED_DEG,
                  force: bool = False) -> dict:
     servo = _servo
-    # Отправленные углы — единственное, что мы знаем о руке (датчиков нет).
-    # После pick_point это произвольное положение, поэтому «уже в этой позе»
-    # определяется по углам, а не по имени последней позы.
+    sent: Dict[int, int] = {}
+    if servo is None:
+        return {"ok": False, "pose": name, "servo": sent,
+                "arrived": False, "skipped": []}
     state = (None if force else
-             {ch: int(servo.current_angles.get(ch, 90)) for ch in ARM_CHANNELS_POSE}
-             if servo is not None else None)
-    steps, done = _pose_steps(state, name)    # переходы работают всегда
-    sent = {}
-    arrived = True
-    with _arm_slow(speed):                   # поза ставится без рывка
-        for step in steps:
-            for channel, angle in step.items():
-                if set_servo_command(channel, int(angle)):
-                    sent[channel] = int(angle)
-            arrived = _wait_motion() and arrived   # доводим ступень до конца
-    skipped = [side for side, chans in arm_kinematics.ARM_CHANNELS.items()
-               if all(ch in done for ch in chans.values())]
-    return {"ok": servo is not None, "pose": name, "servo": sent,
-            "arrived": arrived, "skipped": skipped}
+             {ch: int(servo.current_angles.get(ch, 0)) for ch in commands})
+    delta = {ch: v for ch, v in commands.items()
+             if state is None or abs(state.get(ch, -10 ** 6) - v) > POSE_TOL_DEG}
+    if not delta:
+        return {"ok": True, "pose": name, "servo": sent,
+                "arrived": True, "skipped": list(commands)}
+    with _arm_slow(speed):
+        for channel, angle in delta.items():
+            if set_servo_command(channel, int(angle)):
+                sent[channel] = int(angle)
+        arrived = _wait_motion()
+    return {"ok": True, "pose": name, "servo": sent,
+            "arrived": arrived, "skipped": []}
 
 
 def _system_command(command: str) -> dict:
@@ -794,7 +707,7 @@ def _current_point(left: bool = False) -> Optional[Vector3]:
     channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
     try:
         theta = arm_kinematics.theta_from_commands(
-            {ch: float(servo.current_angles.get(ch, 90)) for ch in channels.values()},
+            {ch: float(servo.current_angles.get(ch, 0)) for ch in channels.values()},
             left=left)
         ee = arm_kinematics.fk(theta, left)["EE"]
         return Vector3(float(ee[0]) / 1000.0, float(ee[1]) / 1000.0,
@@ -1384,10 +1297,11 @@ def get_servo_calibration() -> Dict[str, object]:
     """Текущая калибровка (offsets + инвертированные каналы)."""
     servo = _servo
     if servo is None:
-        from robov_core.servo import CHANNELS, DEFAULT_OFFSETS, INVERTED_CHANNELS
+        from robov_core.servo import DEFAULT_OFFSETS, DEFAULT_INVERTED, SERVOS
         return {
-            "offsets": {str(ch): float(DEFAULT_OFFSETS.get(ch, 0.0)) for ch in CHANNELS},
-            "inverted": sorted(INVERTED_CHANNELS),
+            "offsets": {str(ch): float(DEFAULT_OFFSETS.get(ch, 0.0))
+                        for ch in SERVOS},
+            "inverted": sorted(DEFAULT_INVERTED),
             "connected": False,
         }
     data = servo.calibration()
@@ -1423,7 +1337,7 @@ def set_servo_calibration(offsets=None, inverted=None) -> bool:
                 wanted.add(int(item))
             except (TypeError, ValueError):
                 pass
-        for channel in servo.channel_configs:
+        for channel in servo.offsets:
             servo.set_inverted(channel, channel in wanted)
     servo.save_calibration()
     return True
@@ -1434,10 +1348,10 @@ def reset_servo_calibration() -> bool:
     servo = _servo
     if servo is None:
         return False
-    from robov_core.servo import INVERTED_CHANNELS
+    from robov_core.servo import DEFAULT_INVERTED
     servo.reset_offsets_to_default()
-    for channel in servo.channel_configs:
-        servo.set_inverted(channel, channel in INVERTED_CHANNELS)
+    for channel in servo.offsets:
+        servo.set_inverted(channel, channel in DEFAULT_INVERTED)
     servo.save_calibration()
     return True
 
@@ -1483,9 +1397,9 @@ def get_servo_limits() -> Dict[int, List[int]]:
 def set_servo_command(channel: int, angle: int) -> bool:
     """Установить угол серво (логический, как в servo.py/high_level.py).
 
-    Инверсию правых каналов (INVERTED_CHANNELS) применяет
-    ServoController.set_servo внутри. smooth=True — плавное движение
-    с разгоном/торможением через per-channel mover-поток.
+    ``channel`` — логическая ось (сейчас только 0, плечо 0..90). Всю физику
+    (×3, инверсия, импульс) делает ``ServoController.set_servo``.
+    smooth=True — плавное движение с разгоном/торможением через mover.
     """
     servo = _servo
     if servo is None:
@@ -1528,7 +1442,7 @@ def ik_detail(x: float, y: float, z: float, left: bool = False,
         if servo is not None:
             channels = arm_kinematics.ARM_CHANNELS["left" if left else "right"]
             start = arm_kinematics.theta_from_commands(
-                {ch: servo.current_angles.get(ch, 90) for ch in channels.values()},
+                {ch: servo.current_angles.get(ch, 0) for ch in channels.values()},
                 left=left)
     return arm_kinematics.ik_solve(x, y, z, left=left, start=start)
 
@@ -1548,7 +1462,7 @@ def _rate_limit_commands(commands: Dict[int, float]) -> Dict[int, float]:
             prev = _last_cmd_angle.get(ch)
             phys = None
             if servo is not None:
-                phys = float(servo.current_angles.get(ch, 90.0))
+                phys = float(servo.current_angles.get(ch, 0.0))
             if prev is None:
                 # Первая команда канала после старта: едем к цели сразу
                 # (плавность физического движения обеспечивает mover серво),
