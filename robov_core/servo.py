@@ -3,7 +3,8 @@
 """Сервы R2: четыре привода на одной оси плеча через редуктор 3:1.
 
 Логический канал один — ``CHANNELS = (0,)``, диапазон 0..90°.
-Физически каждая серва едет 0..270° (виртуальный угол ×3).
+Физически каждая серва едет 1..269° (на градус не доходя до упоров),
+чтобы не гудеть; логические 0..90 при этом не меняются.
 Каналы PCA9685 0 и 1 — прямо, 2 и 3 — зеркально (инверсия).
 Импульсы 498..2686 мкс (102..550 отсчётов при 50 Гц).
 
@@ -30,6 +31,9 @@ SERVOS: Tuple[int, int, int, int] = (0, 1, 2, 3)
 GEAR: float = 3.0
 VIRTUAL_MIN, VIRTUAL_MAX = 0, 90
 PHYSICAL_MIN, PHYSICAL_MAX = 0.0, 270.0
+# Рабочий ход с запасом 1° от механических упоров: 1..269.
+# Логика/UI по-прежнему 0..90; в упор сервы не упираются и не гудят.
+PHYSICAL_SAFE_MIN, PHYSICAL_SAFE_MAX = 1.0, 269.0
 # Импульсы: 102..550 отсчётов при 50 Гц = 498..2686 мкс.
 # 2500 мкс (512) этим сервам не хватало: доходили только до ~250° из 270°.
 # 540 (2637) дало ~268°, поэтому верх ещё чуть выше.
@@ -71,13 +75,17 @@ def virtual_to_pulse_us(virtual: float, offset: float = 0.0,
                         inverted: bool = False) -> float:
     """Логический угол плеча 0..90 -> импульс сервы, мкс.
 
+    Физически едем 1..269° (на градус не доходя до упоров), поэтому
+    логические 0..90 остаются как есть, но сервы не упираются и не гудят.
     offset — в физических градусах сервы, добавляется после инверсии.
     """
     v = min(VIRTUAL_MAX, max(VIRTUAL_MIN, float(virtual)))
-    physical = GEAR * v
+    physical = PHYSICAL_SAFE_MIN + (
+        PHYSICAL_SAFE_MAX - PHYSICAL_SAFE_MIN) * v / VIRTUAL_MAX
     if inverted:
         physical = PHYSICAL_MAX - physical
-    physical = min(PHYSICAL_MAX, max(PHYSICAL_MIN, physical + float(offset)))
+    physical = min(PHYSICAL_SAFE_MAX,
+                   max(PHYSICAL_SAFE_MIN, physical + float(offset)))
     span = PULSE_MAX_US - PULSE_MIN_US
     return PULSE_MIN_US + span * physical / PHYSICAL_MAX
 
@@ -598,15 +606,18 @@ class ServoController:
 
 
 if __name__ == "__main__":
-    # Самопроверка: 0/45/90 -> 498/1567/2637 мкс и зеркало 2637/1567/498.
-    mid = (PULSE_MIN_US + PULSE_MAX_US) / 2.0
-    checks = ((0.0, PULSE_MIN_US, PULSE_MAX_US),
-              (45.0, mid, mid),
-              (90.0, PULSE_MAX_US, PULSE_MIN_US))
+    # Самопроверка: логика 0/45/90 -> физ. 1/135/269 и зеркало 269/135/1.
+    def us(physical: float) -> float:
+        return (PULSE_MIN_US + (PULSE_MAX_US - PULSE_MIN_US)
+                * physical / PHYSICAL_MAX)
+
+    checks = ((0.0, us(1.0), us(269.0)),
+              (45.0, us(135.0), us(135.0)),
+              (90.0, us(269.0), us(1.0)))
     for v, normal, mirrored in checks:
         a = virtual_to_pulse_us(v, inverted=False)
         b = virtual_to_pulse_us(v, inverted=True)
         assert abs(a - normal) < 1e-6, (v, a, normal)
         assert abs(b - mirrored) < 1e-6, (v, b, mirrored)
-    print(f"servo.py: маппинг 0..90° -> "
-          f"{PULSE_MIN_US:.0f}..{PULSE_MAX_US:.0f} мкс OK")
+    print(f"servo.py: 0..90° -> физ. 1..269° "
+          f"({us(1.0):.0f}..{us(269.0):.0f} мкс) OK")
