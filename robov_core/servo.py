@@ -5,7 +5,7 @@
 Логический канал один — ``CHANNELS = (0,)``, диапазон 0..90°.
 Физически каждая серва едет 0..270° (виртуальный угол ×3).
 Каналы PCA9685 0 и 1 — прямо, 2 и 3 — зеркально (инверсия).
-Импульсы 500..2500 мкс (DSSERVO DS3225, 270°).
+Импульсы 498..2637 мкс (102..540 отсчётов при 50 Гц).
 
 Калибровка — на каждую из четырёх серв: offset в ФИЗИЧЕСКИХ градусах и
 инверсия. config.json хранит offsets 0..3 и список inverted.
@@ -30,7 +30,12 @@ SERVOS: Tuple[int, int, int, int] = (0, 1, 2, 3)
 GEAR: float = 3.0
 VIRTUAL_MIN, VIRTUAL_MAX = 0, 90
 PHYSICAL_MIN, PHYSICAL_MAX = 0.0, 270.0
-PULSE_MIN_US, PULSE_MAX_US = 500.0, 2500.0
+# Импульсы: 102..540 отсчётов при 50 Гц = 498..2637 мкс.
+# 2500 мкс (512) этим сервам не хватало: доходили только до ~250° из 270°.
+PULSE_US_PER_COUNT_50HZ: float = 20000.0 / 4096.0
+PULSE_MIN_COUNTS_50HZ, PULSE_MAX_COUNTS_50HZ = 102, 540
+PULSE_MIN_US = PULSE_MIN_COUNTS_50HZ * PULSE_US_PER_COUNT_50HZ
+PULSE_MAX_US = PULSE_MAX_COUNTS_50HZ * PULSE_US_PER_COUNT_50HZ
 
 # Поза покоя и включения: виртуальный 0 (физ. 0/0/270/270).
 REST_POSE: Dict[int, int] = {0: 0}
@@ -41,7 +46,7 @@ DEFAULT_INVERTED: Set[int] = {2, 3}
 
 # (min_angle, max_angle, min_pulse, max_pulse) — в отсчётах при 50 Гц.
 DEFAULT_CHANNEL_CONFIGS: Dict[int, Tuple[int, int, int, int]] = {
-    0: (0, 90, 102, 512),
+    0: (0, 90, 102, 540),
 }
 DEFAULT_COMMAND_LIMITS: Dict[int, Tuple[int, int]] = {0: (0, 90)}
 # ----------------------------------------------------------------------
@@ -52,7 +57,6 @@ FULL_OFF: int = 0x1000
 CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config.json"
 
 PWM_FREQ_HZ: float = 196.8
-PULSE_US_PER_COUNT_50HZ: float = 20000.0 / 4096.0
 
 MOVE_TICK: float = 0.01        # период управления, с
 # 90 вирт.°/с = 270 физ.°/с — предел, на котором сервы ещё не воют.
@@ -592,13 +596,15 @@ class ServoController:
 
 
 if __name__ == "__main__":
-    # Самопроверка маппинга: 0/45/90 -> 500/1500/2500 и зеркало 2500/1500/500.
-    checks = ((0.0, 500.0, 2500.0),
-              (45.0, 1500.0, 1500.0),
-              (90.0, 2500.0, 500.0))
+    # Самопроверка: 0/45/90 -> 498/1567/2637 мкс и зеркало 2637/1567/498.
+    mid = (PULSE_MIN_US + PULSE_MAX_US) / 2.0
+    checks = ((0.0, PULSE_MIN_US, PULSE_MAX_US),
+              (45.0, mid, mid),
+              (90.0, PULSE_MAX_US, PULSE_MIN_US))
     for v, normal, mirrored in checks:
         a = virtual_to_pulse_us(v, inverted=False)
         b = virtual_to_pulse_us(v, inverted=True)
         assert abs(a - normal) < 1e-6, (v, a, normal)
         assert abs(b - mirrored) < 1e-6, (v, b, mirrored)
-    print("servo.py: маппинг 0..90° -> 500..2500 мкс OK")
+    print(f"servo.py: маппинг 0..90° -> "
+          f"{PULSE_MIN_US:.0f}..{PULSE_MAX_US:.0f} мкс OK")
