@@ -5,7 +5,7 @@
 Логический канал один — ``CHANNELS = (0,)``, диапазон 0..90°.
 Физически каждая серва едет 0..270° (виртуальный угол ×3).
 Каналы PCA9685 0 и 1 — прямо, 2 и 3 — зеркально (инверсия).
-Импульсы 498..2637 мкс (102..540 отсчётов при 50 Гц).
+Импульсы 498..2686 мкс (102..550 отсчётов при 50 Гц).
 
 Калибровка — на каждую из четырёх серв: offset в ФИЗИЧЕСКИХ градусах и
 инверсия. config.json хранит offsets 0..3 и список inverted.
@@ -30,10 +30,11 @@ SERVOS: Tuple[int, int, int, int] = (0, 1, 2, 3)
 GEAR: float = 3.0
 VIRTUAL_MIN, VIRTUAL_MAX = 0, 90
 PHYSICAL_MIN, PHYSICAL_MAX = 0.0, 270.0
-# Импульсы: 102..540 отсчётов при 50 Гц = 498..2637 мкс.
+# Импульсы: 102..550 отсчётов при 50 Гц = 498..2686 мкс.
 # 2500 мкс (512) этим сервам не хватало: доходили только до ~250° из 270°.
+# 540 (2637) дало ~268°, поэтому верх ещё чуть выше.
 PULSE_US_PER_COUNT_50HZ: float = 20000.0 / 4096.0
-PULSE_MIN_COUNTS_50HZ, PULSE_MAX_COUNTS_50HZ = 102, 540
+PULSE_MIN_COUNTS_50HZ, PULSE_MAX_COUNTS_50HZ = 102, 550
 PULSE_MIN_US = PULSE_MIN_COUNTS_50HZ * PULSE_US_PER_COUNT_50HZ
 PULSE_MAX_US = PULSE_MAX_COUNTS_50HZ * PULSE_US_PER_COUNT_50HZ
 
@@ -46,7 +47,7 @@ DEFAULT_INVERTED: Set[int] = {2, 3}
 
 # (min_angle, max_angle, min_pulse, max_pulse) — в отсчётах при 50 Гц.
 DEFAULT_CHANNEL_CONFIGS: Dict[int, Tuple[int, int, int, int]] = {
-    0: (0, 90, 102, 540),
+    0: (0, 90, 102, 550),
 }
 DEFAULT_COMMAND_LIMITS: Dict[int, Tuple[int, int]] = {0: (0, 90)}
 # ----------------------------------------------------------------------
