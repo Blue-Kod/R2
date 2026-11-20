@@ -19,6 +19,13 @@
 @source "../../templates";
 @source "../js";
 
+/* Цифры: обычный sans с одинаковой шириной знаков (DejaVu/Arial есть
+   везде), а не код-моно. Golos Text рисует цифры пропорционально, из-за
+   чего строка «прыгает» при обновлении значений. */
+:root {
+    --font-num: "DejaVu Sans", "Liberation Sans", "Noto Sans", Arial, "Helvetica Neue", sans-serif;
+}
+
 /* Шрифты ASBDS — те же семейства и веса, что грузит оригинал с Google
    (Golos Text 400;500;600, Unbounded 200..600), но self-hosted: робот без сети. */
 @font-face {
@@ -170,20 +177,21 @@ body, h1, h2, h3, h4, strong, b, th, option,
         text-transform: none;
     }
 
-    /* Числа в панелях — обычный текст ASBDS (Golos Text), не витринный Unbounded:
-       на 12–16px широкий дисплейный шрифт читается плохо. Unbounded остаётся
-       у бренда и крупных акцентов. */
+    /* Числа в панелях — обычный sans с табличными цифрами: при обновлении
+       значения строка не меняет ширину. Golos Text оставляем для текста. */
     .num {
-        font-family: var(--font);
+        font-family: var(--font-num);
         font-weight: 500;
         letter-spacing: 0;
         font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
     }
     .stat .num {
         font-size: 1.5rem;
         line-height: 1;
         white-space: nowrap;
-        min-width: 0;
+        min-width: 4ch;
+        text-align: right;
     }
     .stat .lbl { flex: none; }
 
@@ -264,7 +272,7 @@ body, h1, h2, h3, h4, strong, b, th, option,
         background: linear-gradient(180deg, rgba(13, 13, 13, 0.72) 0%, transparent 22%, transparent 70%, rgba(13, 13, 13, 0.78) 100%);
     }
     .cam-hud { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); }
-    .cam-hud .mono { color: var(--fg); opacity: 0.75; }
+    .cam-hud .mono { color: var(--fg); }
     .cam-hud .num { font-size: 0.8125rem; letter-spacing: 0; }
 
     /* Терминал: только строки. Ни заголовка, ни кнопок — их нет в терминале. */

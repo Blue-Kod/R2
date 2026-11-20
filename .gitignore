@@ -24,3 +24,6 @@ __pycache__/
 
 # Persisted Flask session key (stable across restarts)
 /.secret_key
+
+# Orbbec SDK runtime log
+/Log/

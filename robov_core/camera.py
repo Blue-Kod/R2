@@ -12,7 +12,17 @@ import numpy as np
 os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 
+from robov_core.orbbec_camera import (OrbbecCamera, depth_jpeg,
+                                      fill_depth_holes)
+
 MAX_FRAME_SIZE = 4 * 1024 * 1024
+
+# Статус глубины в точке (для depth(..., get_status=True) и /api/depth).
+DEPTH_STATUS_OK = 0           # глубина измерена
+DEPTH_STATUS_NO_DATA = 1      # камеры/карты глубины нет вообще
+DEPTH_STATUS_UNKNOWN = 2      # точка в дыре, глубина неизвестна (оценка по соседям)
+DEPTH_STATUS_UNKNOWN_NEAR = 3 # то же, но оценка попала в ближнюю зону (<800 мм)
+DEPTH_NEAR_MM = 800           # граница «ближней» неизвестной зоны
 
 # Watchdog камеры: если кадров нет дольше STALL_SEC, пробуем восстановить
 # захват (release+reinit), а затем — программный USB-сброс (см. usb_reset).
@@ -49,9 +59,28 @@ class StereoCamera:
         self.eye_w: int = 1280
         self.eye_h: int = 720
         self.show_left: bool = False      # по умолчанию — ПРАВЫЙ глаз
+        self.mode: str = "color"          # что показывает панель: color | depth
         self.fps: float = 30.0
         self._last_frame_time: float = time.time()
         self._frame_count: int = 0
+
+        # Orbbec Astra Mini S: цвет + глубина через SDK (ctypes).
+        # Если устройства нет — работаем по-старому (ffmpeg/OpenCV stereo).
+        self.orbbec: Optional[OrbbecCamera] = None
+        self._source: Optional[str] = None
+        self.orbbec_width: int = 640
+        self.orbbec_height: int = 480
+        self.orbbec_fps: int = 30
+        self._depth_intr = None
+        self._latest_depth: Optional[np.ndarray] = None
+        self._depth_seq: int = 0
+        self._depth_filled: Optional[np.ndarray] = None
+        self._depth_filled_seq: int = -1
+        self._depth_fill_lock = threading.Lock()
+        self._latest_color_jpeg: Optional[bytes] = None
+        self._color_seq: int = 0
+        self._latest_depth_jpeg: Optional[bytes] = None
+        self._depth_jpeg_seq: int = 0
 
         self.capture_width: int = capture_width
         self.capture_height: int = capture_height
@@ -116,6 +145,9 @@ class StereoCamera:
                     self.cam_fov_h = float(fov_h)
             except (TypeError, ValueError):
                 pass
+            self.orbbec_width = int(params.get("orbbec_width", self.orbbec_width))
+            self.orbbec_height = int(params.get("orbbec_height", self.orbbec_height))
+            self.orbbec_fps = int(params.get("orbbec_fps", self.orbbec_fps))
             el = params.get("eye_layout")
             if isinstance(el, dict):
                 try:
@@ -137,6 +169,29 @@ class StereoCamera:
     def initialize_camera(self) -> bool:
         if self._sim_active:
             return True
+        if self.orbbec is not None:
+            return True
+        if self._source in (None, "orbbec"):
+            cam = OrbbecCamera(self.orbbec_width, self.orbbec_height,
+                               self.orbbec_fps)
+            try:
+                if cam.open():
+                    self.orbbec = cam
+                    self.backend = "orbbec"
+                    self._source = "orbbec"
+                    self.actual_width = cam.width
+                    self.actual_height = cam.height
+                    self.img_size = (cam.width, cam.height)
+                    self.cam_fov_h = cam.fov_h
+                    self._depth_intr = cam.intrinsics
+                    with self.lock:
+                        self._last_frame_mono = time.monotonic()
+                    return True
+            except Exception as exc:
+                print(f"[Camera] Orbbec init error: {exc}", flush=True)
+            if self._source == "orbbec":
+                return False
+            self._source = "legacy"
         if self.backend == "ffmpeg" and platform.system() != "Windows":
             try:
                 if self._start_ffmpeg():
@@ -291,6 +346,18 @@ class StereoCamera:
         return None
 
     def release_camera(self) -> None:
+        if self.orbbec is not None:
+            try:
+                self.orbbec.close()
+            except Exception:
+                pass
+            self.orbbec = None
+            self._latest_depth = None
+            self._depth_filled = None
+            self._depth_filled_seq = -1
+            return
+        if self._source == "orbbec":
+            return
         self._stop_ffmpeg()
         if self.cap:
             self.cap.release()
@@ -323,7 +390,19 @@ class StereoCamera:
 
         Один decode на пару вместо двух (сбор данных вызывает это 10 раз/с),
         и оба глаза гарантированно из одного кадра.
+
+        У Orbbec камера одна: отдаём цветной кадр дважды — схема данных
+        (left/right) не меняется, просто глаза одинаковые.
         """
+        if self.orbbec is not None:
+            with self.lock:
+                frame = self._latest_frame
+            if frame is None:
+                return None, None
+            target = size or self.img_size
+            if (frame.shape[1], frame.shape[0]) != target:
+                frame = cv2.resize(frame, target)
+            return frame, frame
         if self.backend == "ffmpeg":
             raw = self._decode_latest()
             if raw is None:
@@ -341,20 +420,79 @@ class StereoCamera:
     def update_params(self, **kwargs) -> None:
         with self.lock:
             for key, value in kwargs.items():
-                if value is not None and hasattr(self, key):
-                    setattr(self, key, value)
+                if value is None or not hasattr(self, key):
+                    continue
+                if key == "mode" and value not in ("color", "depth"):
+                    continue
+                setattr(self, key, value)
 
     def _capture_loop(self) -> None:
         while self._capture_running:
             try:
                 if self._sim_active:
                     self._capture_loop_sim()
+                elif self.orbbec is not None:
+                    self._capture_loop_orbbec()
                 elif self.backend == "ffmpeg":
                     self._capture_loop_ffmpeg()
                 else:
                     self._capture_loop_opencv()
             except Exception:
                 time.sleep(0.01)
+
+    def _capture_loop_orbbec(self) -> None:
+        if self.orbbec is None:
+            if not self.initialize_camera():
+                time.sleep(1.0)
+                return
+        color, depth = self.orbbec.read()
+        if color is None:
+            time.sleep(0.01)
+            return
+        self._publish_orbbec(color, depth)
+
+    def _publish_orbbec(self, color: np.ndarray,
+                        depth: Optional[np.ndarray]) -> None:
+        with self.lock:
+            mode = self.mode
+            need_feed = self._feed_consumers > 0
+            need_stereo = self._stereo_consumers > 0
+            intr = self.orbbec.intrinsics if self.orbbec else None
+        color_jpeg = None
+        depth_jpeg_bytes = None
+        if need_stereo or (need_feed and mode == "color"):
+            color_jpeg = self._encode_jpeg(color)
+        if need_feed and mode == "depth" and depth is not None:
+            filled = self._filled_depth()
+            depth_jpeg_bytes = depth_jpeg(filled if filled is not None else depth)
+        with self.lock:
+            self._latest_frame = color
+            self._latest_depth = depth
+            if intr is not None:
+                self._depth_intr = intr
+            if depth is not None:
+                self._depth_seq += 1
+            if color_jpeg is not None:
+                self._latest_color_jpeg = color_jpeg
+                self._color_seq += 1
+                if need_stereo:
+                    self._latest_stereo_jpeg = color_jpeg
+                    self._stereo_seq += 1
+            if depth_jpeg_bytes is not None:
+                self._latest_depth_jpeg = depth_jpeg_bytes
+                self._depth_jpeg_seq += 1
+            self._last_frame_mono = time.monotonic()
+            self._frame_count += 1
+            now = time.time()
+            if now - self._last_frame_time >= 1.0:
+                self.fps = self._frame_count / (now - self._last_frame_time)
+                self._frame_count = 0
+                self._last_frame_time = now
+
+    @staticmethod
+    def _encode_jpeg(frame: np.ndarray) -> bytes:
+        return cv2.imencode(".jpg", frame,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), 70])[1].tobytes()
 
     def _capture_loop_ffmpeg(self) -> None:
         if self._ffmpeg_proc is None:
@@ -549,6 +687,13 @@ class StereoCamera:
             self._recovering = True
             try:
                 print(f"[Camera] no frames for {stalled:.0f}s — recovering", flush=True)
+                if self.orbbec is not None or self._source == "orbbec":
+                    # SDK: закрыть и открыть заново. USB-реплаг по video-узлу
+                    # здесь не нужен — у OpenNI-устройства его нет.
+                    self.release_camera()
+                    with self.lock:
+                        self._last_frame_mono = time.monotonic()
+                    continue
                 # Сначала пробуем просто переинициализировать захват.
                 self.release_camera()
                 self._ffmpeg_failures = 0
@@ -586,7 +731,95 @@ class StereoCamera:
             return os.path.exists(src)
         return os.path.exists(f"/dev/video{int(src)}")
 
+    def _filled_depth(self) -> Optional[np.ndarray]:
+        """Карта глубины с заполненными дырами, кэш по номеру кадра."""
+        with self.lock:
+            raw = self._latest_depth
+            seq = self._depth_seq
+        if raw is None:
+            return None
+        with self._depth_fill_lock:
+            with self.lock:
+                if (self._depth_filled is not None
+                        and 0 <= seq - self._depth_filled_seq < 2):
+                    return self._depth_filled
+                raw = self._latest_depth
+                seq = self._depth_seq
+            filled = fill_depth_holes(raw)
+            with self.lock:
+                self._depth_filled = filled
+                self._depth_filled_seq = seq
+            return filled
+
+    def probe_depth_mm(self, x: float, y: float, window: int = 2,
+                       get_status: bool = False):
+        """Глубина в точке: (мм, статус) при get_status, иначе только мм.
+
+        Статус: 0 — измерено; 1 — данных нет; 2 — дыра, оценка по соседям;
+        3 — дыра в ближней зоне (< DEPTH_NEAR_MM), оценка по соседям.
+        """
+        def out(mm, status):
+            return (mm, status) if get_status else mm
+
+        if self.orbbec is None:
+            return out(None, DEPTH_STATUS_NO_DATA)
+        with self.lock:
+            raw = self._latest_depth
+        filled = self._filled_depth()
+        if raw is None or filled is None:
+            return out(None, DEPTH_STATUS_NO_DATA)
+        h, w = filled.shape[:2]
+        u = min(max(int(round(x * w)), 0), w - 1)
+        v = min(max(int(round(y * h)), 0), h - 1)
+        if raw[v, u] > 0:
+            exact = raw[max(0, v - 2):v + 3, max(0, u - 2):u + 3]
+            exact = exact[exact > 0]
+            if exact.size:
+                return out(int(round(float(np.median(exact)))),
+                           DEPTH_STATUS_OK)
+        # В дыре (0): значение из заполненной карты — оценка, не измерение.
+        for half in (max(2, 2 * window), 10, 20, max(h, w)):
+            patch = filled[max(0, v - half):v + half + 1,
+                           max(0, u - half):u + half + 1]
+            patch = patch[patch > 0]
+            if patch.size:
+                mm = int(round(float(np.median(patch))))
+                status = (DEPTH_STATUS_UNKNOWN_NEAR if mm <= DEPTH_NEAR_MM
+                          else DEPTH_STATUS_UNKNOWN)
+                return out(mm, status)
+        return out(None, DEPTH_STATUS_NO_DATA)
+
+    def get_depth_data(self, get_status: bool = False):
+        """(глубина мм с заполненными дырами, интринсики, seq[, статусы])."""
+        if self.orbbec is None:
+            return None
+        filled = self._filled_depth()
+        if filled is None:
+            return None
+        with self.lock:
+            if self._depth_intr is None:
+                return None
+            intr = self._depth_intr
+            seq = self._depth_seq
+            raw = self._latest_depth
+        if not get_status:
+            return filled, intr, seq
+        status = np.zeros(filled.shape, np.uint8)
+        if raw is not None:
+            holes = raw == 0
+            status[holes] = np.where(
+                filled[holes] <= DEPTH_NEAR_MM,
+                DEPTH_STATUS_UNKNOWN_NEAR, DEPTH_STATUS_UNKNOWN)
+        if not (filled > 0).any():
+            status[:] = DEPTH_STATUS_NO_DATA
+        return filled, intr, seq, status
+
     def get_latest_frame(self) -> np.ndarray:
+        if self.orbbec is not None:
+            with self.lock:
+                frame = self._latest_frame
+            if frame is not None:
+                return frame
         if self.backend == "ffmpeg":
             raw = self._decode_latest()
             if raw is not None:
@@ -599,6 +832,13 @@ class StereoCamera:
         return frame
 
     def get_latest_jpeg(self) -> Tuple[Optional[bytes], int]:
+        if self.orbbec is not None:
+            with self.lock:
+                if self.mode == "depth":
+                    # +1 — чтобы seq не совпал с цветным потоком при
+                    # переключении (MJPEG следит за одним last_seq)
+                    return self._latest_depth_jpeg, self._depth_jpeg_seq * 2 + 1
+                return self._latest_color_jpeg, self._color_seq * 2
         with self.lock:
             return self._latest_jpeg, self._jpeg_seq
 
@@ -618,6 +858,9 @@ class StereoCamera:
 
     def get_stereo_jpeg(self) -> Tuple[Optional[bytes], int]:
         """Полный стерео-кадр (оба глаза) для VR-семплинга по UV."""
+        if self.orbbec is not None:
+            with self.lock:
+                return self._latest_color_jpeg, self._color_seq * 2
         with self.lock:
             return self._latest_stereo_jpeg, self._stereo_seq
 
@@ -628,6 +871,17 @@ class StereoCamera:
         (eye_layout в cam_params.json) переопределяет значения.
         """
         with self.lock:
+            if self.orbbec is not None:
+                # одна камера: оба глаза смотрят в один и тот же регион
+                return {
+                    "x0": 0,
+                    "x1": 0,
+                    "w": self.actual_width,
+                    "frame_w": self.actual_width,
+                    "frame_h": self.actual_height,
+                    "fov_h": round(self.cam_fov_h, 1),
+                    "calibrated": True,
+                }
             if self._eye_layout_override:
                 x0, x1, W = self._eye_x0, self._eye_x1, self._eye_crop_w
             else:
@@ -649,6 +903,9 @@ class StereoCamera:
         Открыть в браузере, чтобы увидеть, что камера считает левым/правым
         глазом (зелёные рамки + подписи x=...).
         """
+        if self.orbbec is not None:
+            with self.lock:
+                return self._latest_color_jpeg
         if self.backend == "ffmpeg":
             raw = self._decode_latest()
         else:

@@ -100,7 +100,8 @@ export const api = {
     request('POST', '/api/studio/apply', { body: { store, episode, segments, target } }),
 
   cameraParams: () => request('GET', '/api/camera/params'),
-  setCamera: (showLeft) => request('POST', '/api/camera/params', { body: { show_left: showLeft } }),
+  setCamera: (mode) => request('POST', '/api/camera/params', { body: { mode } }),
+  depth: (x, y) => request('GET', `/api/depth?x=${x}&y=${y}`),
 
   update: () => request('POST', '/api/update', { body: {} }),
   reboot: () => request('POST', '/api/reboot', { body: {} }),

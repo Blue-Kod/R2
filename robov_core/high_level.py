@@ -15,7 +15,9 @@ import psutil
 import cv2
 import numpy as np
 
-from robov_core.camera import StereoCamera
+from robov_core.camera import (StereoCamera, DEPTH_STATUS_OK,
+                                DEPTH_STATUS_NO_DATA, DEPTH_STATUS_UNKNOWN,
+                                DEPTH_STATUS_UNKNOWN_NEAR)
 from robov_core.servo import REST_POSE, ServoController
 from robov_core.stereo_depth import StereoDepth, Vector3, split_stereo
 from robov_core import arm_kinematics
@@ -407,16 +409,42 @@ def _stereo_depth() -> StereoDepth:
     return _depth_engine
 
 
+def _orbbec_camera():
+    """Камера Orbbec (или None): у неё нативная глубина и статусы."""
+    cam = _camera
+    if cam is None:
+        return None
+    if (getattr(cam, "orbbec", None) is not None
+            or getattr(cam, "_source", None) == "orbbec"):
+        return cam
+    return None
+
+
+def _native_point_mm(x: float, y: float, mm: int, intr) -> Vector3:
+    """3D-точка Orbbec по глубине мм: X вправо, Y вверх, Z вперёд, метры."""
+    z = mm / 1000.0
+    u, v = x * intr.width, y * intr.height
+    px = (u - intr.cx) / intr.fx * z
+    py = (v - intr.cy) / intr.fy * z
+    return Vector3(float(px), float(-py), float(z))
+
+
 def _stereo_frame() -> Optional[np.ndarray]:
     """Последний стерео-кадр (серый 2560x720), декодированный с кэшем по номеру.
 
     Свежий кадр не ждём: ffmpeg публикует его каждый кадр, самый старый здесь
     отстаёт на 1/13 с. Подписка на стерео нужна только OpenCV-бэкенду, где
     кадр кодируется лишь при наличии потребителя.
+
+    У Orbbec стереопары нет — функции, которым она нужна (маркер, привязка
+    глубины), вернут «нет стерео-кадра»; глубина и coords идут нативным путём.
     """
     global _depth_frame
     cam = _camera
     if cam is None:
+        return None
+    if (getattr(cam, "orbbec", None) is not None
+            or getattr(cam, "_source", None) == "orbbec"):
         return None
     cam.add_consumer(stereo=True)
     try:
@@ -458,22 +486,34 @@ def _shown_eye() -> str:
     return "left" if _camera is not None and _camera.show_left else "right"
 
 
-def depth(x: float, y: float, window: int = 2) -> float:
+def depth(x: float, y: float, window: int = 2, get_status: bool = False):
     """Расстояние до точки кадра, метры. NaN — если данных нет.
 
-    x, y — доли кадра от 0 до 1 (x вправо, y вниз, как пиксели). Считается
-    локально вокруг точки (патч 33x33), поэтому запрос стоит ~20 мс. Глубина —
-    медиана окна, окно расширяется, если в нём нет валидных пикселей.
+    x, y — доли кадра от 0 до 1 (x вправо, y вниз, как пиксели). Для Orbbec
+    берётся нативная карта глубины и её заполненная копия; для старой
+    стереокамеры — локальный SGBM.
 
-    Это глубина по оси ВЫПРЯМЛЕННОГО кадра (метры, от камеры). coords() даёт
-    точку в системе корпуса: у точки далеко от центра её z отличается на
-    несколько процентов — это поворот ректификации, а не ошибка; для IK
-    используйте coords().
+    get_status=True -> (метры, статус):
+      0 — глубина измерена;
+      1 — данных по камере нет вообще;
+      2 — точка в дыре, глубина неизвестна (оценка по соседям);
+      3 — то же, но оценка в ближней зоне (< 800 мм).
     """
+    cam = _orbbec_camera()
+    if cam is not None:
+        mm, status = cam.probe_depth_mm(x, y, window, get_status=True)
+        z = mm / 1000.0 if mm is not None else float("nan")
+        return (z, status) if get_status else z
+    if _camera is None:
+        return (float("nan"), DEPTH_STATUS_NO_DATA) if get_status \
+            else float("nan")
     eng, left, right, px, py = _depth_sample(x, y)
     if left is None:
-        return float("nan")
-    return eng.depth_point(left, right, px, py, eye=_shown_eye(), window=window)
+        return (float("nan"), DEPTH_STATUS_UNKNOWN) if get_status \
+            else float("nan")
+    z = eng.depth_point(left, right, px, py, eye=_shown_eye(), window=window)
+    status = DEPTH_STATUS_OK if np.isfinite(z) else DEPTH_STATUS_UNKNOWN
+    return (z, status) if get_status else z
 
 
 def _p_to_body(p: Vector3, baseline_m: float) -> Optional[Vector3]:
@@ -487,9 +527,11 @@ def _p_to_body(p: Vector3, baseline_m: float) -> Optional[Vector3]:
                    float(q[2]) / 1000.0)
 
 
-def coords(x: float, y: float, window: int = 2) -> Vector3:
+def coords(x: float, y: float, window: int = 2, get_status: bool = False):
     """3D-точка кадра (x, y от 0 до 1) в системе КОРПУСА: X вправо, Y вверх,
     Z вперёд, МЕТРЫ.
+
+    get_status=True -> (Vector3, статус), статусы те же, что у depth().
 
     Сначала точка считается в системе камеры, затем переносится в корпус.
     Шеи/наклона в новой механике пока нет — поворот в шаблоне нулевой.
@@ -499,13 +541,30 @@ def coords(x: float, y: float, window: int = 2) -> Vector3:
     (ik_detail/move_ik_detail) внутри переводятся в миллиметры — там так
     заданы звенья.
     """
+    nan3 = Vector3(float("nan"), float("nan"), float("nan"))
+    cam = _orbbec_camera()
+    if cam is not None:
+        mm, status = cam.probe_depth_mm(x, y, window, get_status=True)
+        if mm is None:
+            return (nan3, status) if get_status else nan3
+        data = cam.get_depth_data()
+        if data is None:
+            bad = DEPTH_STATUS_NO_DATA
+            return (nan3, bad) if get_status else nan3
+        p = _native_point_mm(x, y, mm, data[1])
+        body = _p_to_body(p, 0.0)
+        result = body if body is not None else nan3
+        return (result, status) if get_status else result
+    if _camera is None:
+        return (nan3, DEPTH_STATUS_NO_DATA) if get_status else nan3
     eng, left, right, px, py = _depth_sample(x, y)
     if left is None:
-        return Vector3(float("nan"), float("nan"), float("nan"))
+        return (nan3, DEPTH_STATUS_UNKNOWN) if get_status else nan3
     p = eng.point_at(left, right, px, py, eye=_shown_eye(), window=window)
     body = _p_to_body(p, eng.baseline)
-    return body if body is not None else Vector3(float("nan"), float("nan"),
-                                                 float("nan"))
+    result = body if body is not None else nan3
+    status = DEPTH_STATUS_OK if body is not None else DEPTH_STATUS_UNKNOWN
+    return (result, status) if get_status else result
 
 
 # --- Захват и движение в точку кадра ---------------------------------------

@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import subprocess
 import sys
@@ -216,6 +217,7 @@ def create_app() -> Flask:
         if camera:
             with camera.lock:
                 camera_params = {
+                    "mode": getattr(camera, 'mode', 'color'),
                     "show_left": getattr(camera, 'show_left', True),
                     "fps": round(getattr(camera, 'fps', 0.0), 1),
                     "img_size": getattr(camera, 'img_size', [640, 360]),
@@ -240,6 +242,7 @@ def create_app() -> Flask:
         if camera:
             with camera.lock:
                 camera_params = {
+                    "mode": getattr(camera, 'mode', 'color'),
                     "show_left": getattr(camera, 'show_left', True),
                     "img_size": getattr(camera, 'img_size', [640, 360]),
                 }
@@ -667,16 +670,18 @@ def create_app() -> Flask:
         if not camera:
             # No camera: keep the endpoints usable for the UI (empty layout).
             if request.method == "GET":
-                return jsonify({"show_left": False, "layout": None})
+                return jsonify({"mode": "color", "show_left": False, "layout": None})
             return jsonify({"status": "ok"})
         if request.method == "GET":
             return jsonify({
+                "mode": camera.mode,
                 "show_left": camera.show_left,
                 "layout": camera.layout(),
             })
         data = request.get_json(silent=True) or {}
         camera.update_params(
             show_left=data.get("show_left"),
+            mode=data.get("mode"),
         )
         return jsonify({"status": "ok"})
 
@@ -690,6 +695,24 @@ def create_app() -> Flask:
         if jpeg is None:
             return jsonify({"error": "no frame"}), 500
         return Response(jpeg, mimetype="image/jpeg")
+
+    @app.route("/api/depth")
+    @require_auth
+    def api_depth():
+        """Расстояние в точке кадра (доли 0..1) в мм — для курсора на глубине."""
+        try:
+            x = float(request.args.get("x", ""))
+            y = float(request.args.get("y", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "нужны x и y (0..1)"}), 400
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            return jsonify({"error": "x и y должны быть 0..1"}), 400
+        try:
+            z, status = high_level.depth(x, y, get_status=True)
+        except Exception as exc:                      # noqa: BLE001
+            return jsonify({"mm": None, "status": 1, "error": str(exc)})
+        mm = int(round(z * 1000.0)) if math.isfinite(z) else None
+        return jsonify({"mm": mm, "status": status})
 
     # --- Servo ---
 

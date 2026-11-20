@@ -8,5 +8,8 @@
         1280,
         720
     ],
-    "cam_fov_h": 120
+    "cam_fov_h": 120,
+    "orbbec_width": 640,
+    "orbbec_height": 480,
+    "orbbec_fps": 30
 }
